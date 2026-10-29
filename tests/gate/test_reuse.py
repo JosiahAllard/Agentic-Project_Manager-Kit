@@ -586,6 +586,15 @@ class SameTree(ReuseCase):
         self.assert_unused(out, lander, tip, 'the record ended %s, not within "landing".'
                            'reuse_max_age_h (24)' % old)
 
+    def test_a_record_a_load_node_ran_serves_nothing(self):
+        # gate_ok.import_record: a node's record lands its tip, but no step is served from it
+        _, tip = self.full_tip()
+        self.retouch(tip, ran_on={'node': 'box1', 'host_key': 'SHA256:' + 'k' * 43,
+                                  'job': 'j-20261028T120000Z-abcdef'}, input_keys=None)
+        lander, out = self.land(BRANCH, tip)
+        self.assert_unused(out, lander, tip, 'the record ran on a load node (box1)')
+        self.assert_ran(lander.gate_logs, 'unit')
+
     def test_a_record_of_another_base_serves_nothing(self):
         _, tip = self.full_tip()
         self.retouch(tip, base='c' * 40)

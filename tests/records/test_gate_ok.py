@@ -391,5 +391,104 @@ class HashTest(unittest.TestCase):
         self.assertNotEqual(gate_ok.config_hash([1, 2]), gate_ok.config_hash([2, 1]))
 
 
+
+RAN_ON = {'node': 'box1', 'host_key': 'SHA256:' + 'k' * 43, 'job': 'j-20261028T120000Z-abcdef'}
+KEYS_SET = {'schema': 1, 'steps': {'unit': {'argv': 'a' * 64}}}
+
+
+class ImportTest(GateOkCase):
+    """import_record: a record a load node's gate.py --full wrote, taken into this machine's
+    record folder only when everything verify() checks holds against main's gate config at the
+    commit, it is a --full pass of this repository, and ran_on is main's own."""
+
+    def node_record(self, rev=None, **kw):
+        """The record a node's gate builds for `rev`, never written here."""
+        rev = rev or self.head
+        kw.setdefault('config_rev', rev)
+        kw.setdefault('full', True)
+        kw.setdefault('input_keys', KEYS_SET)
+        return gate_ok.build(self.repo.root, rev, kw.pop('gate', GATE), KIT,
+                             kw.pop('repo', 'kit-test'), '2026-10-06T10:00:00Z', STEPS, **kw)
+
+    def take(self, rec, commit=None, ran_on=RAN_ON, config_at=lambda rev: GATE, repo='kit-test'):
+        return gate_ok.import_record(self.repo.root, rec, commit or self.head, ran_on, config_at,
+                                     repo)
+
+    def test_a_node_record_is_taken_with_ran_on_and_no_input_keys_and_then_verifies(self):
+        rec = self.node_record()
+        path, out = self.take(rec)
+        self.assertEqual(rec['input_keys'], KEYS_SET)             # the node's dict is untouched
+        self.assertNotIn('ran_on', rec)
+        self.assertEqual(out, dict(rec, input_keys=None, ran_on=RAN_ON))
+        with open(path, encoding='utf-8') as f:
+            self.assertEqual(json.load(f), out)
+        self.assertEqual(gate_ok.verify(self.repo.root, self.head, GATE), (out, None))
+        self.assertEqual(gate_ok.verify(self.repo.root, self.head,
+                                        config_at=lambda rev: GATE), (out, None))
+        self.assertEqual(gate_ok.verify_full(self.repo.root, self.head), (out, None))
+
+    def test_it_replaces_a_local_record_of_the_commit(self):
+        self.passed()
+        _, out = self.take(self.node_record())
+        self.assertEqual(gate_ok.verify(self.repo.root, self.head)[0]['ran_on'], RAN_ON)
+
+    def refused(self, want, rec=None, **kw):
+        with self.assertRaises(gate_ok.RecordError) as cm:
+            self.take(self.node_record() if rec is None else rec, **kw)
+        self.assertIn(want, str(cm.exception))
+        self.assertIsNone(gate_ok.verify(self.repo.root, self.head)[0])   # nothing written
+
+    def test_what_main_cannot_take_is_refused_and_nothing_is_written(self):
+        good = self.node_record()
+        self.refused('no gate-OK record', rec=[good])
+        self.refused('full commit hash', commit='main')
+        for ran_on in (None, {}, dict(RAN_ON, node=''), dict(RAN_ON, job=7),
+                       dict(RAN_ON, extra='x'), {'node': 'box1', 'job': 'j'}):
+            with self.subTest(ran_on=ran_on):
+                self.refused('ran_on is {node, host_key, job}', ran_on=ran_on)
+        self.refused('checked against the gate config', config_at=None)
+        self.refused('another gate config than its config_rev',
+                     config_at=lambda rev: dict(GATE, fail=['FAILED', 'ERROR']))
+        self.refused('names no config_rev', rec=self.node_record(config_rev=None))
+        self.refused('not from a --full gate', rec=self.node_record(full=False))
+        self.refused('not from a --full gate', rec=dict(good, mode='select'))
+        self.refused("of repository 'other', not 'kit-test'", rec=self.node_record(repo='other'))
+        self.refused('names tree', rec=dict(good, tree='f' * 40))
+        self.refused("says 'FAIL'", rec=dict(good, verdict='FAIL'))
+        self.refused('lacks steps', rec={k: v for k, v in good.items() if k != 'steps'})
+
+    def test_a_config_that_cannot_be_read_at_the_commit_refuses(self):
+        def unreadable(rev):
+            raise gate_ok.RecordError('the gate config at %s cannot be read' % rev[:10])
+        self.refused('cannot be read', config_at=unreadable)
+
+    def test_a_record_of_another_commit_or_config_rev_refuses(self):
+        first = self.head
+        self.repo.write('x.txt', 'x\n')
+        self.head = self.repo.commit('more', 'x.txt')
+        self.refused('names commit %s' % first, rec=self.node_record(first, config_rev=first))
+        self.refused('names config_rev %s, not the commit itself' % first,
+                     rec=self.node_record(config_rev=first))
+
+
+class VerifyUnchangedTest(GateOkCase):
+    """verify() after the import_record refactor: a record this machine's gate wrote reads back
+    exactly as written, and verify writes nothing."""
+
+    def test_an_existing_record_verifies_unchanged(self):
+        path, rec = self.passed(full=True, config_rev=self.head, input_keys=KEYS_SET)
+        with open(path, 'rb') as f:
+            before = f.read()
+        for got in (gate_ok.verify(self.repo.root, self.head),
+                    gate_ok.verify(self.repo.root, self.head, GATE),
+                    gate_ok.verify(self.repo.root, self.head, config_at=lambda rev: GATE),
+                    gate_ok.verify_full(self.repo.root, self.head)):
+            self.assertEqual(got, (rec, None))
+            self.assertEqual(got[0], json.loads(before.decode('utf-8')))
+            self.assertNotIn('ran_on', got[0])
+        with open(path, 'rb') as f:
+            self.assertEqual(f.read(), before)
+
+
 if __name__ == '__main__':
     unittest.main()

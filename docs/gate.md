@@ -168,6 +168,8 @@ With no step selected, or every selected step skipped, it is REFUSED (exit 4), e
 
 `input_keys` (an added key, `gate_ok.ADDED_KEYS`) is `{"schema": 1, "steps": {<step>: {<part>: <sha256>}}}`, or null: a branch gate's key for each step a landing may serve from this record when main moved on (`reuse.record_keys`; Gate reuse, "The input tree"). `gate_ok.build` refuses any other shape. A landing's own record holds none.
 
+`ran_on` is only on a record a load node's `gate.py --full` wrote and main took in (`gate_ok.import_record`: every `verify` check with main's own config at the commit, which must be its `config_rev`, a `--full` pass of the same repository): `{"node", "host_key", "job"}` from main's registry, with `input_keys` set to null; `verify` neither requires nor checks it (docs/load-nodes.md "Gating a branch on a node").
+
 `config_rev` (an added key, `gate_ok.ADDED_KEYS`) is the commit the gate config was read from: HEAD for a branch gate, the base for a landing (Landing, step 4). `gate_ok.verify(root, commit, config_at=...)` requires it to be in the commit's history and compares the record's `gate_config` with the config that commit holds; `kitlib.gate.runner.verify_record(root, commit)` does that with `.kit.json` read by `kitlib.config.load_at`. `verify(root, commit[, gate_config])` without `config_at` is unchanged.
 
 ## Result record
@@ -432,6 +434,7 @@ A reused step's `requires` probe is not run either (`runner._to_run` leaves the 
 **The same tree** (`reuse.same_tree`). A branch's `gate.py --full` stores nothing in the cache, so without this a landing whose merge holds the very tree the tip passed `--full` on would run every step again. In a one-branch landing that `reuse.landing_why` lets reuse (so never a strict one, nor a batch), the tip's gate-OK record serves an asking step the cache does not serve when all of these hold:
 
 - the record is a `--full` one of the tip (`gate_ok.verify_full`, `mode` `full`), and its tree is the merge's tree;
+- the record has no `ran_on`: a record a load node's gate wrote lets its tip land but serves no step, since those steps ran on another machine;
 - the merge's parents are exactly the base and the tip, and the record's `base` is the landing's base;
 - its `gate_config` is the landing's, its `kit` (commit, interpreter, clean) is the kit gating the landing, and it ended within `"landing".reuse_max_age_h` hours;
 - the step is no check step, has no `merged_args` (its landing argv never ran at the tip), and passed in that record.

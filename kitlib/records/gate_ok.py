@@ -59,6 +59,14 @@ unless the caller asks for what they carry):
                 has one, or the gate wrote none: --only, a partial or docs-only gate, a work tree
                 not clean at its start)
 
+One more key, only on a record a load node's gate wrote (import_record; docs/load-nodes.md
+"Gating a branch on a node"); a record without it ran on this machine. verify() neither requires
+nor checks it:
+
+  ran_on        {"node": its registry name, "host_key": the SHA256 fingerprint of the host key
+                main pinned for it, "job": the node job id}, written by main from its own
+                registry, never taken from the node
+
 verify() re-derives everything git can answer: the record's file name, `commit`, `tree` and
 `author` must match the repository now, and `gate_config` must match the caller's config when it
 passes one. With `config_at` (rev -> that commit's gate config) it instead requires `config_rev`,
@@ -81,6 +89,7 @@ KEYS = ('schema', 'verdict', 'commit', 'tree', 'base', 'gate_config', 'kit', 'au
         'started_utc', 'ended_utc', 'steps')
 ADDED_KEYS = ('config_rev', 'source', 'full', 'mode', 'input_keys')
 MODES = ('full', 'select', 'docs')
+RAN_ON_KEYS = ('node', 'host_key', 'job')
 RETRIES = 5
 RETRY_SLEEP = 0.2
 
@@ -403,38 +412,80 @@ def verify(root, commit, gate_config=None, config_at=None):
     rec, why = read(root, commit)
     if rec is None:
         return None, ('no gate-OK record for %s' % commit) if why == 'none' else why
+    why = _check(root, commit, rec, gate_config, config_at)
+    return (None, why) if why is not None else (rec, None)
+
+
+def _check(root, commit, rec, gate_config=None, config_at=None):
+    """Why the record `rec` (a dict) filed under the full hash `commit` is not one git still
+    agrees with, or None: verify()'s checks, shared with import_record()."""
     missing = [k for k in KEYS if k not in rec]
     if missing:
-        return None, 'the record for %s lacks %s' % (commit, ', '.join(missing))
+        return 'the record for %s lacks %s' % (commit, ', '.join(missing))
     if rec['schema'] != SCHEMA:
-        return None, 'the record for %s is schema %r, not %d' % (commit, rec['schema'], SCHEMA)
+        return 'the record for %s is schema %r, not %d' % (commit, rec['schema'], SCHEMA)
     if rec['verdict'] != VERDICT:
-        return None, 'the record for %s says %r, not OK' % (commit, rec['verdict'])
+        return 'the record for %s says %r, not OK' % (commit, rec['verdict'])
     if rec['commit'] != commit:
-        return None, 'the record filed under %s names commit %s' % (commit, rec['commit'])
+        return 'the record filed under %s names commit %s' % (commit, rec['commit'])
     try:
         _, tree, author = _facts(root, commit)
     except RecordError as e:
-        return None, str(e)
+        return str(e)
     if rec['tree'] != tree:
-        return None, 'the record for %s names tree %s; git says %s' % (commit, rec['tree'], tree)
+        return 'the record for %s names tree %s; git says %s' % (commit, rec['tree'], tree)
     if rec['author'] != author:
-        return None, 'the record for %s names author %r; git says %r' % (commit, rec['author'], author)
+        return 'the record for %s names author %r; git says %r' % (commit, rec['author'], author)
     if gate_config is not None and rec['gate_config'] != config_hash(gate_config):
-        return None, 'the record for %s was made with another gate config' % commit
+        return 'the record for %s was made with another gate config' % commit
     if config_at is not None:
         rev = rec.get('config_rev')
         if not refs.is_sha(rev):
-            return None, 'the record for %s names no config_rev (%r)' % (commit, rev)
+            return 'the record for %s names no config_rev (%r)' % (commit, rev)
         inside, why = refs.is_ancestor(rev, commit, root)
         if inside is not True:
-            return None, 'the record for %s names config_rev %s, which is not in its history%s' % (
+            return 'the record for %s names config_rev %s, which is not in its history%s' % (
                 commit, rev, ': %s' % why if why else '')
         try:
             cfg = config_at(rev)
         except RecordError as e:
-            return None, str(e)
+            return str(e)
         if rec['gate_config'] != config_hash(cfg):
-            return None, ('the record for %s was made with another gate config than its '
-                          'config_rev %s holds' % (commit, rev[:10]))
-    return rec, None
+            return ('the record for %s was made with another gate config than its '
+                    'config_rev %s holds' % (commit, rev[:10]))
+    return None
+
+
+def import_record(root, rec, commit, ran_on, config_at, repo_name):
+    """Take `rec`, the record a load node's `gate.py --full` wrote for the full hash `commit`
+    (the commit main pushed it), into this machine's record folder: `(path, record)` or
+    RecordError naming why not. Checked here, never taken from the node: everything verify()
+    checks with `config_at` (the hash of the gate config main's own kit reads at `config_rev`,
+    which is `commit` itself, as for any branch gate), that it is a --full pass (full_of, mode
+    "full") and that `repo` is `repo_name`. `ran_on` ({"node", "host_key", "job"}, from main's
+    registry) is added; `input_keys` is set to null, so a landing serves no step from a run on
+    another machine. A local record of the same commit is replaced, as a later pass replaces it."""
+    if not isinstance(rec, dict):
+        raise RecordError('the node sent no gate-OK record')
+    if not refs.is_sha(commit):
+        raise RecordError('a gate-OK record is imported for a full commit hash, not %r' % (commit,))
+    if not isinstance(ran_on, dict) or set(ran_on) != set(RAN_ON_KEYS) or not all(
+            isinstance(ran_on[k], str) and ran_on[k] for k in RAN_ON_KEYS):
+        raise RecordError('ran_on is {%s}, each a string' % ', '.join(RAN_ON_KEYS))
+    if config_at is None:
+        raise RecordError('an imported record is checked against the gate config at its config_rev')
+    why = _check(root, commit, rec, config_at=config_at)
+    if why is not None:
+        raise RecordError(why)
+    if rec.get('config_rev') != commit:
+        raise RecordError('the record for %s names config_rev %s, not the commit itself'
+                          % (commit, rec.get('config_rev')))
+    if not full_of(rec) or mode_of(rec) != 'full':
+        raise RecordError('the record for %s is not from a --full gate' % commit)
+    if rec.get('repo') != repo_name:
+        raise RecordError('the record for %s is of repository %r, not %r'
+                          % (commit, rec.get('repo'), repo_name))
+    out = dict(rec)
+    out['input_keys'] = None
+    out['ran_on'] = dict(ran_on)
+    return write(root, out), out

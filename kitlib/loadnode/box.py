@@ -13,6 +13,11 @@ Everything lives under one folder, the base (default `~/pmkit-node` of the node 
     jobs/<job>/stop.json        main asked it to stop
     jobs/<job>/result.json      {exit, how, rid, sha, ended}: the job has ended
     jobs/<job>/wt/              the detached worktree at the pushed commit
+    jobs/<job>/repo.git/        a gate job's own bare repository: the mirror's objects (its
+                                alternates), the job's base as <remote>/<main> and <main>, and
+                                gate/<repo>/ its linked worktree, so no two gates share a ref
+    jobs/<job>/gate/<repo>/     a gate job's worktree at the pushed commit, named for the
+                                repository as the gate names its record's repo by its folder
 
 The words (SSH_ORIGINAL_COMMAND, matched exactly; a verb's parameters are one JSON line on stdin,
 at most SPEC_CAP bytes, checked here before anything is done):
@@ -25,18 +30,27 @@ at most SPEC_CAP bytes, checked here before anything is done):
                                  the job runner detached (kitlib.lock.detach); old ended jobs are
                                  swept first; refused before the job's folder is made, it deletes
                                  the pushed ref
+    gate   {gate spec}           start a gate job as start does (check_gate_spec): the pushed ref
+                                 is the sha and refs/node/<job>-base the base; gate/<repo>/ is a
+                                 linked worktree of the job's own repo.git; the runner runs the
+                                 node kit's own `tools/gate.py -C <it> --full` (no command main
+                                 sends), which books the node's machine lock itself, then puts
+                                 the gate-OK record it wrote for the sha (gate_ok.verify_full) in
+                                 result.json
     follow {job, offset}         frames (kitlib.loadnode.frames): L log bytes from offset, K while
                                  nothing is new, then R the result and E
     fetch  {job}                 M the manifest of the spec's artifact globs (regular files inside
                                  the worktree, no link on the way), F their bytes, E
-    clean  {job}                 remove an ended job: worktree, ref and folder
+    clean  {job}                 remove an ended job: worktree, refs and folder
     stop   {job}                 ask the job's machine lock run to stop (kitlib.lock.run
                                  request_stop), else end the runner with SIGTERM
 
-The job runner (`loadnode.py job <job>`, started only by `start`, never over ssh) runs the spec's
-command through kitlib.lock.run.run_command under the node's own machine lock, its output to the
-log, and writes result.json. A refusal is one JSON line {"ok": false, "error": ...} (framed verbs:
-an X frame); the error never repeats what was sent. Nothing here prints to a user.
+The job runner (`loadnode.py job <job>`, started only by `start` and `gate`, never over ssh) runs
+the spec's command through kitlib.lock.run.run_command under the node's own machine lock (a gate
+job: the node's gate.py, run_gate), its output to the log, and writes result.json. A start sweeps
+old ended jobs, and the refs/node/ refs no job folder owns (a push whose start never came) once
+the time in their job id is SWEEP_S old. A refusal is one JSON line {"ok": false, "error": ...}
+(framed verbs: an X frame); the error never repeats what was sent. Nothing here prints to a user.
 """
 import contextlib
 import datetime
@@ -60,8 +74,14 @@ JOB_RE = re.compile(r'j-\d{8}T\d{6}Z-[0-9a-f]{6}')
 SHA_RE = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
 KIND_RE = re.compile(r'[a-z0-9][a-z0-9_-]{0,39}')
 RECEIVE_RE = re.compile(r"git-receive-pack 'pmkit-node/mirrors/(%s)\.git'" % registry.REPO_RE)
-VERBS = ('status', 'start', 'follow', 'fetch', 'clean', 'stop')
-RUN_VERBS = VERBS[1:]
+GATE_VERB = 'gate'
+RUN_VERBS = ('start', 'follow', 'fetch', 'clean', 'stop')     # what node.py run needs of a node
+VERBS = ('status', 'start', GATE_VERB, 'follow', 'fetch', 'clean', 'stop')
+REMOTE_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,39}')
+BRANCH_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,99}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,99}){0,4}')
+BASE_SUFFIX = '-base'           # refs/node/<job>-base: a gate job's base commit
+KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+GATE_STOP_S = 60                # a stopped gate gets this long after its Ctrl+C before a kill
 
 SPEC_CAP = 64 * 1024            # bytes of one parameters line
 MAX_ARGS, ARG_CAP = 256, 8192
@@ -175,6 +195,49 @@ def check_spec(d):
     return out
 
 
+def branch_ok(name):
+    """True for a main branch name a gate spec may carry: parts of letters, digits, '.', '_' and
+    '-' with '/' between, no '..' and no '.lock' end (git would refuse those)."""
+    return (isinstance(name, str) and bool(BRANCH_RE.fullmatch(name)) and '..' not in name
+            and not name.endswith('.lock'))
+
+
+def check_gate_spec(d):
+    """The checked gate spec in `d` (a dict): a new dict of the known keys, with `gate` True.
+    There is no command: the node runs its own gate.py. SpecError naming the first wrong key."""
+    out = {'job': _job(d.get('job'))}
+    if not registry.repo_ok(d.get('repo')):
+        raise SpecError('repo is not a repo name')
+    if not registry.repo_ok(d.get('slug')):
+        raise SpecError('slug is not a slug')
+    for k in ('sha', 'base'):
+        if not isinstance(d.get(k), str) or not SHA_RE.fullmatch(d[k]):
+            raise SpecError('%s is not a full commit id' % k)
+    remote = d.get('remote')
+    if not isinstance(remote, str) or (remote and not REMOTE_RE.fullmatch(remote)):
+        raise SpecError('remote is not a remote name')
+    if not branch_ok(d.get('main')):
+        raise SpecError('main is not a branch name')
+    mj = d.get('max_jobs')
+    if type(mj) is not int or not 1 <= mj <= 1024:
+        raise SpecError('max_jobs is not a whole number from 1 to 1024')
+    note = d.get('note')
+    if note is not None and (not isinstance(note, str) or len(note) > NOTE_CAP):
+        raise SpecError('note is not a short string')
+    out.update(repo=d['repo'], slug=d['slug'], sha=d['sha'], base=d['base'], remote=remote,
+               main=d['main'], max_jobs=mj, note=note, gate=True)
+    return out
+
+
+def _job_time(job):
+    """The epoch seconds of the UTC time in a job id (new_job_id), or None."""
+    try:
+        return datetime.datetime.strptime(job[2:17], '%Y%m%dT%H%M%S').replace(
+            tzinfo=datetime.timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
 # -- the box -------------------------------------------------------------------------------------
 
 def _git_default(args, cwd=None):
@@ -273,6 +336,13 @@ class Box(object):
     def _p(self, job, name):
         return os.path.join(self.job_dir(job), name)
 
+    def tree(self, spec):
+        """The job's worktree: wt/, or a gate job's gate/<repo>/ (the gate takes its record's repo
+        name from the folder when the repository's config names none)."""
+        if spec.get('gate') is True:
+            return os.path.join(self.job_dir(spec['job']), 'gate', spec['repo'])
+        return self._p(spec['job'], 'wt')
+
     # state
     def is_live(self, job):
         """True while `job` has no result and its runner is alive."""
@@ -313,20 +383,73 @@ class Box(object):
     # start
     def start(self, spec, env=None):
         """The reply to `start` for the checked spec (check_spec)."""
+        return self._begin(spec, env, self._worktree)
+
+    def gate(self, spec, env=None):
+        """The reply to `gate` for the checked gate spec (check_gate_spec): start's, with the
+        base ref checked too and the worktree a linked one of the job's own repo.git."""
+        return self._begin(spec, env, self._gate_tree)
+
+    def _rev(self, m, ref):
+        """The commit `ref` names in the repository `m`, or None."""
+        rc, out, _err = self.git(['--git-dir', m, 'rev-parse', '--verify', '--quiet',
+                                  '%s^{commit}' % ref], self.base)
+        return None if rc else out.decode('ascii', 'replace').strip()
+
+    def _worktree(self, spec, m, wt):
+        """Make `wt`, the mirror's detached worktree at the spec's sha: (rc, git's error)."""
+        rc, _o, err = self.git(['--git-dir', m, 'worktree', 'add', '--detach', '--quiet', wt,
+                                spec['sha']], self.base)
+        return rc, err
+
+    def _gate_tree(self, spec, m, wt):
+        """Make the job's own bare repo.git (the mirror's objects through its alternates, no
+        hooks, the base as refs/remotes/<remote>/<main> and refs/heads/<main>, so the gate's
+        default base is the one main sent) and `wt` its linked worktree at the sha: (rc, why)."""
+        r = self._p(spec['job'], 'repo.git')
+        rc, _o, err = self.git(['init', '--bare', '--quiet', r], self.base)
+        if rc:
+            return rc, err
+        try:
+            info = os.path.join(r, 'objects', 'info')
+            os.makedirs(info, exist_ok=True)
+            with open(os.path.join(info, 'alternates'), 'w', encoding='utf-8', newline='\n') as f:
+                f.write(os.path.join(os.path.abspath(m), 'objects') + '\n')
+        except OSError as e:
+            return 1, 'its alternates could not be written (%s)' % type(e).__name__
+        refs = ['refs/heads/' + spec['main']]
+        if spec['remote']:
+            refs.append('refs/remotes/%s/%s' % (spec['remote'], spec['main']))
+        steps = [['--git-dir', r, 'config', 'core.hooksPath',
+                  os.path.join(self.base, 'hooks-empty')]]
+        steps += [['--git-dir', r, 'update-ref', ref, spec['base']] for ref in refs]
+        steps.append(['--git-dir', r, 'worktree', 'add', '--detach', '--quiet', wt, spec['sha']])
+        for args in steps:
+            rc, _o, err = self.git(args, self.base)
+            if rc:
+                return rc, err
+        return 0, ''
+
+    def _begin(self, spec, env, make_tree):
+        """start and gate: check the pushed refs, count the live jobs under jobs.lock, make the
+        job's folder and worktree (make_tree) and start its runner detached."""
         job, m = spec['job'], self.mirror(spec['repo'])
         if not os.path.isdir(m):
             return {'ok': False, 'error': 'no mirror of %s here: push first' % spec['repo']}
-        rc, out, _err = self.git(['--git-dir', m, 'rev-parse', '--verify', '--quiet',
-                                  'refs/node/%s^{commit}' % job], self.base)
-        if rc or out.decode('ascii', 'replace').strip() != spec['sha']:
+        wrong = None
+        if self._rev(m, 'refs/node/' + job) != spec['sha']:
+            wrong = 'refs/node/%s is not the commit asked for' % job
+        elif spec.get('gate') and self._rev(m, 'refs/node/' + job + BASE_SUFFIX) != spec['base']:
+            wrong = 'refs/node/%s%s is not the base asked for' % (job, BASE_SUFFIX)
+        if wrong:
             with _flock(os.path.join(self.base, 'jobs.lock')):
-                self._drop_ref(job, m)
-            return {'ok': False, 'error': 'refs/node/%s is not the commit asked for' % job}
+                self._drop_ref(job, m, spec.get('gate'))
+            return {'ok': False, 'error': wrong}
         with _flock(os.path.join(self.base, 'jobs.lock')):
             self.sweep()
             live = self.live_count()
             if live >= spec['max_jobs']:
-                self._drop_ref(job, m)
+                self._drop_ref(job, m, spec.get('gate'))
                 return {'ok': False, 'busy': True, 'jobs': live,
                         'error': 'the node runs %d job%s already, its most' % (live, '' if live == 1 else 's')}
             d = self.job_dir(job)
@@ -334,9 +457,8 @@ class Box(object):
                 return {'ok': False, 'error': 'job %s exists already' % job}
             os.makedirs(d)
             _write_json(self._p(job, 'spec.json'), spec)
-            wt = self._p(job, 'wt')
-            rc, _o, err = self.git(['--git-dir', m, 'worktree', 'add', '--detach', '--quiet', wt,
-                                    spec['sha']], self.base)
+            wt = self.tree(spec)
+            rc, err = make_tree(spec, m, wt)
             if rc:
                 self._result(job, None, 'not started', spec['sha'], 'git worktree add failed')
                 return {'ok': False, 'error': 'the worktree could not be made: %s' % (err or '').strip()[-200:]}
@@ -350,17 +472,27 @@ class Box(object):
             _write_json(self._p(job, 'pid.json'), {'pid': pid, 'at': _iso()})
         return {'ok': True, 'job': job, 'pid': pid}
 
-    def _drop_ref(self, job, m):
-        """Delete refs/node/<job> pushed for a start refused before the job's folder was made:
-        sweep() and clean() go by folders, so nothing else would. The caller holds jobs.lock; a
-        job whose folder exists keeps its ref (clean removes it)."""
+    def _drop_ref(self, job, m, gate=False):
+        """Delete refs/node/<job> (and a gate's <job>-base) pushed for a start refused before
+        the job's folder was made: clean() goes by folders, so only sweep_refs, a week on, would.
+        The caller holds jobs.lock; a job whose folder exists keeps its refs (clean removes
+        them)."""
         if not os.path.lexists(self.job_dir(job)):
-            self.git(['--git-dir', m, 'update-ref', '-d', 'refs/node/' + job], self.base)
+            self._delete_refs(job, m, gate)
 
-    def drop_refused(self, d):
-        """After check_spec refused the start params `d` (a dict): drop the ref main pushed for
-        them, when their job id and repo name are sound, the mirror is there and the job has no
-        folder. An OSError on the way is ignored: the refusal is the reply."""
+    def _delete_refs(self, job, m, gate=False):
+        """Delete refs/node/<job>, and for a gate job refs/node/<job>-base, from the mirror `m`
+        (a local update-ref: receive.denyDeletes binds pushes only)."""
+        self.git(['--git-dir', m, 'update-ref', '-d', 'refs/node/' + job], self.base)
+        if gate:
+            self.git(['--git-dir', m, 'update-ref', '-d', 'refs/node/' + job + BASE_SUFFIX],
+                     self.base)
+
+    def drop_refused(self, d, gate=False):
+        """After check_spec (or check_gate_spec, `gate`) refused the start params `d` (a dict):
+        drop the refs main pushed for them, when their job id and repo name are sound, the mirror
+        is there and the job has no folder. An OSError on the way is ignored: the refusal is the
+        reply."""
         job, repo = d.get('job'), d.get('repo')
         if not (isinstance(job, str) and JOB_RE.fullmatch(job) and registry.repo_ok(repo)):
             return
@@ -369,16 +501,18 @@ class Box(object):
             return
         try:
             with _flock(os.path.join(self.base, 'jobs.lock')):
-                self._drop_ref(job, m)
+                self._drop_ref(job, m, gate)
         except OSError:
             pass
 
-    def _result(self, job, code, how, sha, why=None):
-        _write_json(self._p(job, 'result.json'), {'exit': code, 'how': how, 'sha': sha,
-                                                  'why': why, 'ended': _iso()})
+    def _result(self, job, code, how, sha, why=None, extra=None):
+        d = {'exit': code, 'how': how, 'sha': sha, 'why': why, 'ended': _iso()}
+        d.update(extra or {})
+        _write_json(self._p(job, 'result.json'), d)
 
     def sweep(self, age_s=SWEEP_S):
-        """Remove jobs that ended (or whose runner is gone) longer than `age_s` ago."""
+        """Remove jobs that ended (or whose runner is gone) longer than `age_s` ago, then the
+        refs no job folder owns (sweep_refs)."""
         now = self.clock()
         for job in self.jobs():
             res = self._p(job, 'result.json')
@@ -388,6 +522,35 @@ class Box(object):
                 continue
             if now - at > age_s and not self.is_live(job):
                 self.clean(job)
+        self.sweep_refs(age_s)
+
+    def sweep_refs(self, age_s=SWEEP_S):
+        """Delete each mirror's refs/node/<job> (and <job>-base) that no job folder owns once the
+        time in its job id is `age_s` old: a push whose start never came (main died, or ssh
+        failed before the start went out). sweep() and clean() go by job folders, so nothing
+        else would; the age leaves a start still on its way its ref. The caller holds jobs.lock."""
+        now = self.clock()
+        try:
+            names = sorted(os.listdir(os.path.join(self.base, 'mirrors')))
+        except OSError:
+            return
+        for name in names:
+            m = os.path.join(self.base, 'mirrors', name)
+            if not name.endswith('.git') or not os.path.isdir(m):
+                continue
+            rc, out, _err = self.git(['--git-dir', m, 'for-each-ref', '--format=%(refname)',
+                                      'refs/node/'], self.base)
+            if rc:
+                continue
+            for ref in out.decode('utf-8', 'replace').split():
+                job = ref[len('refs/node/'):]
+                if job.endswith(BASE_SUFFIX):
+                    job = job[:-len(BASE_SUFFIX)]
+                if not JOB_RE.fullmatch(job) or os.path.lexists(self.job_dir(job)):
+                    continue
+                at = _job_time(job)
+                if at is not None and now - at > age_s:
+                    self.git(['--git-dir', m, 'update-ref', '-d', ref], self.base)
 
     # follow
     def follow(self, job, offset, write, sleep=time.sleep, clock=time.monotonic, poll_s=POLL_S,
@@ -495,7 +658,8 @@ class Box(object):
 
     # clean
     def clean(self, job):
-        """Remove an ended job: its worktree, its ref and its folder."""
+        """Remove an ended job: its worktree, its refs and its folder (a gate job's repo.git
+        with it)."""
         d = self.job_dir(job)
         if not os.path.isdir(d):
             return {'ok': True, 'gone': True}
@@ -503,12 +667,13 @@ class Box(object):
             return {'ok': False, 'error': 'job %s is still running: stop it first' % job}
         spec = _read_json(self._p(job, 'spec.json')) or {}
         m = self.mirror(spec['repo']) if registry.repo_ok(spec.get('repo')) else None
-        if m and os.path.isdir(m):
+        gate = spec.get('gate') is True     # its tree is repo.git's, which goes with the folder
+        if m and os.path.isdir(m) and not gate:
             self.git(['--git-dir', m, 'worktree', 'remove', '--force', self._p(job, 'wt')], self.base)
         shutil.rmtree(d, ignore_errors=True)
         if m and os.path.isdir(m):
             self.git(['--git-dir', m, 'worktree', 'prune'], self.base)
-            self.git(['--git-dir', m, 'update-ref', '-d', 'refs/node/' + job], self.base)
+            self._delete_refs(job, m, gate)
         return {'ok': True, 'gone': not os.path.exists(d)}
 
     # stop
@@ -534,12 +699,16 @@ class Box(object):
         return {'ok': True, 'asked': 'its runner, by SIGTERM'}
 
     # the job runner
-    def run_job(self, job, run_command=None, new_rid=None, store_factory=None, chdir=os.chdir):
+    def run_job(self, job, run_command=None, new_rid=None, store_factory=None, chdir=os.chdir,
+                verify=None):
         """Run `job`'s command under the machine lock: the exit code it ended with. Its log is
-        the job's `log` (the caller has pointed fds 1 and 2 at it)."""
+        the job's `log` (the caller has pointed fds 1 and 2 at it). A gate job goes to run_gate,
+        with `verify`."""
         spec = _read_json(self._p(job, 'spec.json'))
         if spec is None:
             return EXIT_USAGE
+        if spec.get('gate') is True:
+            return self.run_gate(job, spec, verify=verify)
         log = self._p(job, 'log')
 
         def say(text):
@@ -557,7 +726,7 @@ class Box(object):
         from kitlib.lock.store import LockError, EXIT_BUSY
         rid = new_rid()
         _write_json(self._p(job, 'run.json'), {'rid': rid})
-        chdir(self._p(job, 'wt'))
+        chdir(self.tree(spec))
         how, why = 'ended', None
         try:
             code = run_command(spec['cmd'], spec['kind'], spec['repo'], spec['slug'],
@@ -575,6 +744,53 @@ class Box(object):
         if how in ('ended', 'interrupted') and os.path.exists(self._p(job, 'stop.json')):
             how = 'stopped'
         self._result(job, code, how, spec['sha'], why)
+        return code if isinstance(code, int) else 1
+
+    def run_gate(self, job, spec, popen=None, verify=None):
+        """Run the node kit's own gate on a gate job's worktree, `<KIT_ROOT>/tools/gate.py -C <tree>
+        --full`, never a command main sent; the exit code it ended with. gate.py books the node's
+        machine lock itself (runner_env leaves no MACHINE_LOCK_ variable). A Ctrl+C (the runner's
+        SIGTERM: stop) is passed on to it as SIGINT, then a kill after GATE_STOP_S. When it
+        passes, result.json carries the gate-OK record it wrote for the sha as `record` (verify(wt,
+        sha) -> (record, why): the job runner passes kitlib.loadnode.gaterecord.read_record, kept
+        out of this module so the lock tool never reaches the record modules), else why not as
+        `record_why`. popen is spawn.popen, the tests' stand-in."""
+        from kitlib.proc import spawn
+        wt = self.tree(spec)
+        argv = [sys.executable, '-B', os.path.join(KIT_ROOT, 'tools', 'gate.py'), '-C', wt,
+                '--full']
+        how, extra = 'ended', {'gate': True, 'record': None, 'record_why': None}
+        try:
+            p = (popen or spawn.popen)(argv, cwd=wt, env=runner_env(os.environ, job))
+        except OSError as e:
+            self._result(job, 1, 'error', spec['sha'], 'the gate could not start (%s)' %
+                         type(e).__name__, extra)
+            return 1
+        try:
+            code = p.wait()
+        except KeyboardInterrupt:
+            how = 'interrupted'
+            try:
+                p.send_signal(getattr(signal, 'SIGINT', 2))
+                code = p.wait(GATE_STOP_S)
+            except (Exception, KeyboardInterrupt):  # noqa: BLE001 - a second stop too: it ends
+                p.kill()
+                code = p.wait()
+            if code in (None, 0):
+                code = 130
+        if how == 'interrupted' and os.path.exists(self._p(job, 'stop.json')):
+            how = 'stopped'
+        if code == 0:
+            try:
+                if verify is None:
+                    raise LookupError('this job runner reads no gate-OK record')
+                rec, rwhy = verify(wt, spec['sha'])
+            except Exception as e:              # noqa: BLE001 - the result is written anyway
+                rec, rwhy = None, '%s: %s' % (type(e).__name__, e)
+            if rec is not None and rec.get('commit') != spec['sha']:
+                rec, rwhy = None, 'the record names another commit'
+            extra.update(record=rec, record_why=None if rec is not None else str(rwhy)[:300])
+        self._result(job, code, how, spec['sha'], None, extra)
         return code if isinstance(code, int) else 1
 
 
@@ -608,16 +824,16 @@ def serve(cmd, stdin, write, box, exec_fn=None):
             return EXIT_REFUSED
         (exec_fn or (lambda argv: os.execvp(argv[0], argv)))(['git', 'receive-pack', path])
         return EXIT_OK
-    if cmd not in RUN_VERBS:
+    if cmd not in RUN_VERBS and cmd != GATE_VERB:
         return None
     framed = cmd in ('follow', 'fetch')
     try:
         p = read_params(stdin)
-        if cmd == 'start':
+        if cmd in ('start', GATE_VERB):
             try:
-                p = check_spec(p)
+                p = (check_spec if cmd == 'start' else check_gate_spec)(p)
             except SpecError:
-                box.drop_refused(p)          # main pushed refs/node/<job> before this start
+                box.drop_refused(p, cmd == GATE_VERB)   # main pushed refs/node/<job> first
                 raise
         else:
             p = {'job': _job(p.get('job')), 'offset': p.get('offset', 0)}
@@ -633,14 +849,15 @@ def serve(cmd, stdin, write, box, exec_fn=None):
         return box.follow(p['job'], p['offset'], write)
     if cmd == 'fetch':
         return box.fetch(p['job'], write)
-    d = getattr(box, cmd)(p if cmd == 'start' else p['job'])      # start, clean or stop
+    d = getattr(box, cmd)(p if cmd in ('start', GATE_VERB) else p['job'])   # start gate clean stop
     _reply(write, d)
     return EXIT_OK if d.get('ok') else EXIT_REFUSED
 
 
-def job_main(job, base, runner=None):
+def job_main(job, base, runner=None, verify=None):
     """`loadnode.py job <job>`: the detached runner. Points fds 1 and 2 at the job's log, turns
-    SIGTERM into Ctrl+C (so the run is released and a result written), and runs it."""
+    SIGTERM into Ctrl+C (so the run is released and a result written), and runs it; `verify`
+    reads a gate job's record (Box.run_gate)."""
     box = Box(base, runner=runner)
     if not JOB_RE.fullmatch(job) or not os.path.isdir(box.job_dir(job)):
         return EXIT_USAGE
@@ -655,4 +872,4 @@ def job_main(job, base, runner=None):
         raise KeyboardInterrupt()
     if hasattr(signal, 'SIGTERM'):
         signal.signal(signal.SIGTERM, term)
-    return box.run_job(job)
+    return box.run_job(job, verify=verify)

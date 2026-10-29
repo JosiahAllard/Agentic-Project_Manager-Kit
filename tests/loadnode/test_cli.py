@@ -339,5 +339,167 @@ class Run(unittest.TestCase):
                 self.assertIn(want, out + err)
 
 
+
+def gate_reply(**over):
+    return run_reply(verbs=list(box.VERBS), **over)
+
+
+class Gate(unittest.TestCase):
+    """node.py gate: where a gate goes. The checkout's facts are its own (gate_facts on the
+    TempRepo, whose repository name is its folder's, `repo`); NodeJob.run, the main machine's
+    gate and lock are stood in. The node's side is tests/loadnode/test_job.py GateJob."""
+
+    write, run_cli = Cli.write, Cli.run_cli
+
+    def setUp(self):
+        Cli.setUp(self)
+        self.repo = gitfixture.TempRepo(branch='main')
+        self.addCleanup(self.repo.cleanup)
+        self.repo.write('a.txt', 'one\n')
+        self.sha = self.repo.commit('add a', 'a.txt')
+        self.mains, self.node_runs, self.kit = [], [], False
+        self.main_lock = {'cpu_slots': 12, 'cpu_free': 2, 'gpu_slots': 0, 'gpu_free': 0,
+                          'waiting': 0, 'unreadable': [], 'pending': False}
+        self.node_result = 0
+
+        def gate_main(top):
+            self.mains.append(os.path.normcase(top))
+            return 5
+
+        def node_run(nj):
+            self.node_runs.append((nj.node.name, nj.sha, nj.repo, nj.gate, nj.cmd, nj.artifacts))
+            if isinstance(self.node_result, Exception):
+                raise self.node_result
+            return self.node_result
+
+        for name, value in (('_run_gate_main', gate_main),
+                            ('_is_kit', lambda top: self.kit),
+                            ('_need', lambda kind: {'cpu': 2, 'gpu': 0}),
+                            ('_main_lock', lambda: self.main_lock),
+                            ('_link', lambda n: contextlib.nullcontext(object())),
+                            ('_notice_dir', lambda kind: None)):
+            p = mock.patch.object(node_cli, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+        p = mock.patch.object(job.NodeJob, 'run', node_run)
+        p.start()
+        self.addCleanup(p.stop)
+        self.write(node(memory_mb=4096, repos=['repo']), node(name='b2', repos=[]))
+
+    def gate(self, *extra, runner=None):
+        return self.run_cli(['gate', '-C', self.repo.root] + list(extra),
+                            runner or Runner(out=gate_reply()))
+
+    def top(self):
+        return os.path.normcase(os.path.normpath(self.repo.root))
+
+    def test_a_named_node_gates_head_against_the_default_base_and_returns_its_exit(self):
+        self.node_result = 3
+        code, _, _ = self.gate('--node', 'box1')
+        self.assertEqual(code, 3)
+        self.assertEqual(self.node_runs, [('box1', self.sha, 'repo',
+                                           {'base': self.sha, 'remote': 'origin', 'main': 'main'},
+                                           [], [])])
+        self.assertEqual(self.mains, [])
+
+    def test_a_named_node_usage_errors_are_2_and_gate_nothing(self):
+        for extra, setup, want in (
+                (['--node', 'nope'], None, 'no node named nope'),
+                (['--node', 'b2'], None, 'b2 has not opted in repo'),
+                (['--node', 'box1'], lambda: self.repo.write('a.txt', 'two\n'), 'commit first')):
+            with self.subTest(want=want):
+                self.repo.write('a.txt', 'one\n')
+                if setup:
+                    setup()
+                code, _, err = self.gate(*extra)
+                self.assertEqual(code, 2)
+                self.assertIn(want, err)
+        self.assertEqual((self.mains, self.node_runs), ([], []))
+
+    def test_a_kit_checkout_is_never_gated_by_a_nodes_kit(self):
+        # its gate is its own tools/gate.py: a node's installed kit would gate other code
+        self.kit = True
+        code, _, err = self.gate('--node', 'box1')
+        self.assertEqual(code, 2)
+        self.assertIn('is a kit checkout: its gate is its own tools/gate.py, never a node\'s '
+                      'installed kit', err)
+        self.assertEqual((self.mains, self.node_runs), ([], []))
+        run = Runner(out=gate_reply())
+        code, _, err = self.gate(runner=run)
+        self.assertEqual((code, self.mains, self.node_runs), (5, [self.top()], []))
+        self.assertIn('gating on main: a kit checkout gates with its own tools/gate.py', err)
+        self.assertEqual(run.argv, None)                     # no node was even asked
+
+    def test_auto_gates_on_the_node_with_more_free(self):
+        code, _, err = self.gate()
+        self.assertEqual(code, 0)
+        self.assertEqual([r[0] for r in self.node_runs], ['box1'])
+        self.assertIn('gating on box1', err)
+
+    def test_auto_passes_over_a_node_whose_kit_serves_no_gate_verb(self):
+        code, _, err = self.gate(runner=Runner(out=run_reply()))
+        self.assertEqual((code, self.mains, self.node_runs), (5, [self.top()], []))
+        self.assertIn('box1: its kit serves no gate verb (update it)', err)
+
+    def test_auto_stays_on_main_when_main_has_as_many_free(self):
+        self.main_lock['cpu_free'] = 3
+        code, _, err = self.gate()
+        self.assertEqual((code, self.mains), (5, [self.top()]))
+        self.assertIn('gating on main', err)
+
+    def test_auto_falls_back_to_main_when_the_node_fails_before_its_job(self):
+        self.node_result = job.JobError(job.EXIT_NODE, 'box1: the push failed', fallback=True)
+        code, _, err = self.gate()
+        self.assertEqual((code, self.mains), (5, [self.top()]))
+        self.assertIn('gating on main instead', err)
+
+    def test_auto_keeps_a_record_not_taken(self):
+        self.node_result = job.EXIT_RECORD
+        code, _, _ = self.gate()
+        self.assertEqual((code, self.mains), (job.EXIT_RECORD, []))
+
+    def test_auto_gates_on_main_for_each_reason_a_node_cannot_be_asked(self):
+        for why, setup in (
+                ('tracked changes are not committed', lambda: self.repo.write('a.txt', 'two\n')),
+                ('no node has opted in repo', lambda: self.write(node(repos=[]))),
+                ('no load node', lambda: os.remove(self.file))):
+            with self.subTest(why=why):
+                self.repo.write('a.txt', 'one\n')
+                self.write(node(memory_mb=4096, repos=['repo']))
+                self.mains = []
+                setup()
+                code, _, err = self.gate()
+                self.assertEqual((code, len(self.mains), self.node_runs), (5, 1, []))
+                self.assertIn(why, err)
+
+    def test_facts_that_cannot_be_read_gate_on_main_or_are_2_for_a_named_node(self):
+        def bad(top):
+            raise job.JobError(job.EXIT_USAGE, 'the default base of x does not resolve')
+        with mock.patch.object(node_cli, '_gate_facts', bad):
+            code, _, err = self.gate()
+            self.assertEqual((code, len(self.mains)), (5, 1))
+            self.assertIn('gating on main: the default base of x does not resolve', err)
+            code, _, err = self.gate('--node', 'box1')
+            self.assertEqual(code, 2)
+            self.assertIn('does not resolve', err)
+
+    def test_a_follow_with_C_takes_the_record_for_that_checkout_whatever_head_is_now(self):
+        seen = []
+
+        def take(nj, res):
+            seen.append((os.path.normcase(nj.top), nj.sha, nj.repo))
+            return 0
+        res = {'exit': 0, 'how': 'ended', 'gate': True, 'record': {}, 'sha': 'd' * 40}
+        with mock.patch.object(job.NodeJob, 'follow', return_value=res), \
+                mock.patch.object(job.NodeJob, 'take_record', take):
+            code, _, _ = self.run_cli(['follow', 'box1', Run.JOB, '-C', self.repo.root])
+        self.assertEqual((code, seen), (0, [(self.top(), None, 'repo')]))
+
+    def test_the_gate_verb_is_in_the_usage(self):
+        self.assertIn('gate', node_cli.parser().format_help())
+        code, _, err = self.run_cli(['gate', '--kind', 'x'])
+        self.assertEqual(code, 2)
+
+
 if __name__ == '__main__':
     unittest.main()
