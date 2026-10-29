@@ -79,6 +79,18 @@ class RulesTest(unittest.TestCase):
     def test_a_path_outside_the_repo_refuses(self):
         self.refuses({'modules': {'a': {'paths': ['../x']}}}, 'not repo-relative')
 
+    def test_an_absolute_path_refuses_before_it_is_normalised(self):
+        self.refuses({'modules': {'a': {'paths': ['/etc']}}}, "path '/etc' is not repo-relative")
+        self.refuses({'modules': {'a': {'paths': ['\\etc']}}}, 'not repo-relative')
+
+    def test_two_modules_naming_one_literal_path_refuse_at_load(self):
+        self.refuses({'modules': {'a': {'paths': ['shared/x']}, 'b': {'paths': ['Shared\\X/']}}},
+                     'path Shared/X is named by more than one module (a, b)')
+
+    def test_a_note_key_in_modules_is_not_a_module(self):
+        mm = ModuleMap(with_(modules=dict(MAP['modules'], _note='why these four', comment='c')))
+        self.assertEqual(sorted(mm.modules), ['brain', 'node', 'protocol', 'worker'])
+
 
 class FilesTest(unittest.TestCase):
     def setUp(self):

@@ -54,8 +54,9 @@ A `gate.steps` entry that runs the check, as a warning until the map settles:
 ```
 
 - `modules`: name to `paths`, repo-relative folders (an `fnmatch` glob names folders at its own
-  depth; case does not matter). A path belongs to the module of its deepest matching folder; a
-  folder two modules name is refused. A path no module holds is in the pseudo-module `(root)`.
+  depth; case does not matter). A path belongs to the module of its deepest matching folder. A
+  literal path two modules name is refused when the map loads; a folder two modules' globs match
+  is refused only when a scanned file reaches it. Note keys (`_x`, `comment`) are not modules. A path no module holds is in the pseudo-module `(root)`.
 - `messaging`: modules every other module may reach (shared wire formats). Crossings into them
   are always allowed.
 - `edges`: allowed crossings, each `from`, `to`, `kind` (`build`, `data` or `tree`) and `why`.

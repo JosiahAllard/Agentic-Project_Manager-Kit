@@ -10,7 +10,8 @@ import fnmatch
 import posixpath
 import re
 
-from kitlib.config.types import ConfigError, Enum, Field, Int, ListOf, MapOf, Obj, Str, parse_json
+from kitlib.config.types import (ConfigError, Enum, Field, Int, ListOf, MapOf, Obj, Str, is_note,
+                                 parse_json)
 
 ROOT = '(root)'              # a path no module holds: the repository's own files
 NAME_RE = r'[A-Za-z0-9][A-Za-z0-9._-]*'
@@ -78,25 +79,36 @@ class ModuleMap(object):
         if errs:
             raise MapError('; '.join(errs))
         self.where = where
-        self.modules = {n: [_norm(p) for p in m['paths']] for n, m in data['modules'].items()}
+        raw = {n: list(m['paths']) for n, m in data['modules'].items() if not is_note(n)}
+        self.modules = {n: [_norm(p) for p in ps] for n, ps in raw.items()}
         self.messaging = list(data.get('messaging') or [])
         self.edges = list(data.get('edges') or [])
         self.ratchets = list(data.get('ratchets') or [])
         self.test_sources = list(data.get('test_sources') or DEFAULT_TEST_SOURCES)
         self.root_markers = list(data.get('root_markers') or [])
         self._cache = {}
-        self._validate(errs)
+        self._validate(raw, errs)
         if errs:
             raise MapError('%s: %s' % (where, '; '.join(errs)))
 
-    def _validate(self, errs):
+    def _validate(self, raw, errs):
         known = set(self.modules) | {ROOT}
-        for n in self.modules:
+        named = {}                  # a literal path, case-folded -> the module that names it
+        for n in sorted(self.modules):
             if not re.fullmatch(NAME_RE, n):
                 errs.append('module name %r must match %s' % (n, NAME_RE))
-            for p in self.modules[n]:
-                if not p or p.startswith('/') or '..' in p.split('/') or ':' in p:
-                    errs.append('module %s: path %r is not repo-relative' % (n, p))
+            for given, p in zip(raw[n], self.modules[n]):
+                # The raw entry: _norm strips a leading `/`, which would turn /etc into etc.
+                if (not p or given.startswith(('/', '\\')) or '..' in p.split('/')
+                        or ':' in p):
+                    errs.append('module %s: path %r is not repo-relative' % (n, given))
+                    continue
+                if re.search(r'[*?\[]', p):
+                    continue            # a glob is checked lazily, when a scanned path meets it
+                other = named.setdefault(p.lower(), n)
+                if other != n:
+                    errs.append('path %s is named by more than one module (%s, %s)'
+                                % (p, other, n))
         for n in self.messaging:
             if n not in self.modules:
                 errs.append('messaging names %s, which is not a module' % n)
