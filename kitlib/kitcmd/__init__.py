@@ -9,7 +9,8 @@ plugin export the machine uses now (tools/kit.py is the entry point).
   run(kit, name, args)       start it in the caller's directory, wait, and give its exit code
 
 Which kit: the machine config's `plugin.export_dir` (kitlib.pluginsource.load: the PM repo pointer,
-then that repository's .pm-kit/config.json; unset, %LOCALAPPDATA%\\pm-kit\\plugin, as for
+then that repository's .pm-kit/config.json; unset, kitlib.pluginsource.default_export_dir:
+%LOCALAPPDATA%\\pm-kit\\plugin, on Linux <profile>/.local/share/pm-kit/plugin, as for
 tools/plugin_refresh.py), and in it the folder <export_dir>/.claude-plugin/marketplace.json names
 (kitlib.pluginsource.current_folder), read at every call, so a refreshed export is used at the
 next one. That folder must be an export (it holds kitlib.pluginsource.MARKER) with a tools folder.

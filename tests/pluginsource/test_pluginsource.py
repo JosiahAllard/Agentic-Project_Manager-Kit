@@ -392,6 +392,56 @@ class SettingsTest(unittest.TestCase):
             self.assertTrue(P.check(bad), bad)
 
 
+class DefaultExportDirTest(unittest.TestCase):
+    """The export root with no plugin.export_dir, per platform (kitlib.platform.NAME patched; the
+    Linux profile from the password database seam kitlib.platform.linux.paths._pw_dir)."""
+    LINUX = '/home/kit/.local/share/pm-kit/plugin'
+
+    def on(self, name, pw_dir=None):
+        def no_pw():
+            raise AssertionError('the password database was read')
+        self.enterContext(mock.patch('kitlib.platform.NAME', name))
+        self.enterContext(mock.patch('kitlib.platform.linux.paths._pw_dir', pw_dir or no_pw))
+
+    def test_linux_is_under_the_profile_from_the_password_database(self):
+        self.on('linux', lambda: '/home/kit')
+        self.assertEqual(P.default_export_dir({}), self.LINUX)
+        s = P.settings(None, environ={})
+        self.assertEqual(s, P.Settings(os.path.normpath(self.LINUX), False, 'origin'))
+
+    def test_linux_reads_no_environment(self):
+        self.on('linux', lambda: '/home/kit')
+        env = {'XDG_DATA_HOME': '/elsewhere/data', 'HOME': '/elsewhere/home',
+               'LOCALAPPDATA': r'C:\lad'}
+        self.assertEqual(P.default_export_dir(env), self.LINUX)
+        with mock.patch.dict(os.environ, env):
+            self.assertEqual(P.default_export_dir(), self.LINUX)
+            self.assertEqual(P.settings(None).export_dir, os.path.normpath(self.LINUX))
+
+    def test_linux_without_a_profile_names_the_config_key(self):
+        def gone():
+            raise KeyError('uid 4242')
+        self.on('linux', gone)
+        with self.assertRaisesRegex(P.RefreshError, 'plugin.export_dir'):
+            P.settings(None, environ={})
+
+    def test_an_explicit_export_dir_wins_on_either_platform(self):
+        mine = os.path.join(os.path.abspath(os.sep), 'srv', 'pm-export')
+        for name in ('linux', 'windows'):
+            with self.subTest(platform=name), mock.patch('kitlib.platform.NAME', name):
+                with mock.patch('kitlib.platform.linux.paths._pw_dir', lambda: '/home/kit'):
+                    got = P.settings({'export_dir': mine}, environ={'LOCALAPPDATA': r'C:\lad'})
+                self.assertEqual(got.export_dir, os.path.normpath(mine))
+
+    def test_windows_is_unchanged(self):
+        self.on('windows')
+        lad = os.path.join(os.path.abspath(os.sep), 'lad')
+        self.assertEqual(P.default_export_dir({'LOCALAPPDATA': lad, 'XDG_DATA_HOME': '/x'}),
+                         os.path.join(lad, 'pm-kit', 'plugin'))
+        with self.assertRaisesRegex(P.RefreshError, 'LOCALAPPDATA is not set'):
+            P.settings(None, environ={'XDG_DATA_HOME': '/x'})
+
+
 class CurrentLinesTest(Base):
     def test_no_state_behind_failed_and_current(self):
         default, two = self.k.folders('.claude', '.claude-two')

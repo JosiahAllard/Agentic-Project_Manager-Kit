@@ -1,6 +1,8 @@
 """The plugin's source: an export of pushed kit main that every account folder's Claude Code
 installs from (docs/plugin-source.md).
 
+  default_export_dir()             the export root with no plugin.export_dir: %LOCALAPPDATA%\\pm-kit\\
+                                   plugin, on Linux <profile>/.local/share/pm-kit/plugin
   remote_main(kit, remote)         the sha the remote's main points at; refuses one not fetched
   export(kit, sha, root)           <root>/<sha12>/: the tracked files at sha but tests/, plugin.json
                                    stamped, each per-platform manifest the running platform's
@@ -36,6 +38,7 @@ import collections
 import datetime
 import json
 import os
+import posixpath
 import re
 import shutil
 import stat
@@ -149,21 +152,41 @@ def check(obj, kit=None, sweep_dir=None):
     return errs
 
 
+LINUX_EXPORT = ('.local', 'share', 'pm-kit', 'plugin')    # under the Linux profile folder
+
+
+def default_export_dir(environ=None):
+    """The export root when the machine config sets no plugin.export_dir, the one default every
+    reader (settings, so kitlib.gate.pin, kitlib.kitcmd and the installers) gets. Windows (and
+    any platform but Linux): %LOCALAPPDATA%\\pm-kit\\plugin, LOCALAPPDATA from `environ`. Linux:
+    <profile>/.local/share/pm-kit/plugin, the profile from the password database
+    (kitlib.platform.linux.paths.profile), never $HOME or $XDG_DATA_HOME: a cron job, a systemd
+    unit and a login shell of the user all get the folder the managed settings name, as they all
+    get the same PM-repo pointer. RefreshError when it cannot be told."""
+    if kitplatform.NAME == 'linux':
+        from kitlib.platform.linux import paths as linux_paths
+        try:
+            profile = linux_paths.profile()
+        except OSError as e:
+            raise RefreshError('the profile folder cannot be read (%s): set plugin.export_dir in '
+                               'the machine config' % e)
+        return posixpath.join(profile, *LINUX_EXPORT)
+    env = os.environ if environ is None else environ
+    base = env.get('LOCALAPPDATA')
+    if not base or not os.path.isabs(base):
+        raise RefreshError('LOCALAPPDATA is not set: set plugin.export_dir in the machine config')
+    return os.path.join(base, 'pm-kit', 'plugin')
+
+
 def settings(obj, environ=None, kit=None, sweep_dir=None):
     """The checked Settings of a `plugin` object (None: every default). The default export_dir is
-    %LOCALAPPDATA%\\pm-kit\\plugin; RefreshError when that is needed and LOCALAPPDATA is unset,
-    and when the export root is inside `kit` or `sweep_dir` (placement_errors)."""
+    default_export_dir's; RefreshError when that is needed and cannot be told, and when the
+    export root is inside `kit` or `sweep_dir` (placement_errors)."""
     errs = check(obj)
     if errs:
         raise RefreshError('; '.join(errs))
     obj = obj or {}
-    root = obj.get('export_dir')
-    if not root:
-        env = os.environ if environ is None else environ
-        base = env.get('LOCALAPPDATA')
-        if not base or not os.path.isabs(base):
-            raise RefreshError('LOCALAPPDATA is not set: set plugin.export_dir in the machine config')
-        root = os.path.join(base, 'pm-kit', 'plugin')
+    root = obj.get('export_dir') or default_export_dir(environ)
     errs = placement_errors(root, kit, sweep_dir)
     if errs:
         raise RefreshError('; '.join(errs))
