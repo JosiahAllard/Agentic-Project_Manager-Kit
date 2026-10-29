@@ -238,6 +238,57 @@ class OnANode(NodeCase):
         self.assertFalse([s for s in self.said if s.startswith('gating here')], self.said)
 
 
+class RefreshesTheMirrors(NodeCase):
+    """After a landing lands and holds nothing, its merge goes to the nodes' mirrors of main
+    (kitlib.loadnode.mirror.refresh, stood in for here)."""
+
+    def refresh_with(self, effect):
+        self.refreshed = []
+        p = mock.patch('kitlib.loadnode.mirror.refresh', side_effect=effect)
+        self.addCleanup(p.stop)
+        return p.start()
+
+    def test_landed_refreshes_with_the_merge_once_nothing_is_held(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        self.no_main_gate()
+        lander = self.node_lander(Routes(), tip)
+
+        def refresh(root, repo, main, sha, store=None, say=None):
+            held = [e for e in lockqueue.load(self.store)['entries']
+                    if e.get('resource') == land.queue_key(lander.lock.common)]
+            self.refreshed.append((root, repo, main, sha, store, lander.token, held))
+            say("pushed %s to load node n1's mirror of main" % sha[:10])
+        self.refresh_with(refresh)
+        out = lander.run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        repo = land.runner.repo_name(lander.cfg, lander.root)
+        self.assertEqual(self.refreshed, [(self.repo.root, repo, 'main', out.merge, self.store,
+                                           None, [])])  # the lock file and the slot released
+        pushed = "pushed %s to load node n1's mirror of main" % out.merge[:10]
+        self.assertEqual(out.lines[-2:], [pushed, 'LANDED kit/feature on main at %s (pushed and '
+                                          'verified on origin)' % out.merge])
+
+    def test_not_landed_does_not_refresh(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        self.no_main_gate()
+        refresh = self.refresh_with(None)
+        out = self.node_lander(Routes(run=failing), tip).run()
+        self.assert_untouched(out, G.FAILED)
+        self.assertFalse(refresh.called)
+
+    def test_a_refresh_that_raises_still_lands_with_a_warning(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        self.no_main_gate()
+        self.refresh_with(RuntimeError('boom'))
+        out = self.node_lander(Routes(), tip).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(self.remote_main(), out.merge)
+        self.assertEqual(out.lines[-2], "WARNING: refreshing the load nodes' mirrors of main "
+                                        'stopped (RuntimeError: boom); the landing stands')
+        self.assertTrue(out.lines[-1].startswith('LANDED kit/feature on main at %s' % out.merge))
+        self.assertIsNotNone(out.facts['result_record'])
+
+
 class FallsBackToMain(NodeCase):
     def setUp(self):
         NodeCase.setUp(self)

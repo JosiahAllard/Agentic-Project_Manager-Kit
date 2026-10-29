@@ -141,6 +141,10 @@
                  worktree with work in it or in use, and anything git refuses are kept and named;
                  an exception or Ctrl+C here is a WARNING naming `land.py --sweep-landed`. The
                  landing stands whatever is kept. --keep-branch (keep_branch) skips it
+  13 mirror      once the slot is released too (Lander.run, nothing held): the merge pushed to
+                 each opted-in load node's mirror of main (kitlib.loadnode.mirror.refresh, at
+                 most its time cap); its lines go before the LANDED line, a failure or an
+                 exception or Ctrl+C there is a WARNING, and the landing stands
 
 An exception or Ctrl+C under the lock (recover): before the push the lock is released and the
 merge dropped (a merge in progress in the landing tree aborted, best effort), main untouched, and
@@ -2092,6 +2096,8 @@ class Lander(object):
             out.lines.insert(max(0, len(out.lines) - 1), 'WARNING: %s while the machine-lock '
                              'slot was released; its queue entry goes once this process ends'
                              % _what(e))
+        if out.code == G.OK and out.facts.get('merge'):
+            self.refresh_mirrors(out)
         paths = []
         for rr in self.result_runs:
             path, line = rr.finish(out, base=self.expect_main,
@@ -2100,6 +2106,21 @@ class Lander(object):
             paths.append(path)
         out.facts['result_record'] = (paths[0] if len(self.branches) == 1 else paths) if paths else None
         return out
+
+    def refresh_mirrors(self, out):
+        """Step 13, landed and nothing held: the merge pushed to the load nodes' mirrors of main
+        (kitlib.loadnode.mirror.refresh), its lines put before the LANDED line of `out`. The
+        landing stands whatever happens here: an exception or Ctrl+C is a WARNING line."""
+        lines = []
+        try:
+            from kitlib.loadnode import mirror
+            mirror.refresh(self.root, runner.repo_name(self.cfg, self.root), self.cfg.main_branch,
+                           out.facts['merge'], store=self.queue_store(), say=lines.append)
+        except BaseException as e:  # noqa: BLE001 - landed: only the nodes' mirrors lag
+            lines.append("WARNING: refreshing the load nodes' mirrors of %s stopped (%s); the "
+                         'landing stands' % (self.cfg.main_branch, _what(e)))
+        at = next((i for i, x in enumerate(out.lines) if x.startswith('LANDED ')), len(out.lines))
+        out.lines[at:at] = lines
 
     def _run(self):
         why = self.usage()

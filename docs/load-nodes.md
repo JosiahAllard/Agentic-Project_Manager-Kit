@@ -246,6 +246,23 @@ step by step.
 
 A kit checkout is never gated on a node, by a landing or by `node.py gate`.
 
+### The mirror of main
+
+Each node keeps a current mirror of main. After every landing that LANDED (docs/gate.md
+"Landing", step 11), once the landing lock file and its machine-lock slot are released, main
+pushes the merge to `refs/pmkit/main/<main>` on the mirror of each node whose `repos` name the
+repository (`kitlib.loadnode.mirror.refresh`, called by `Lander.refresh_mirrors`), wherever the
+merged gate ran. The pushes go to every node at once, never forced, and each is stopped at 60
+seconds (`mirror.TIMEOUT_S`, an estimate); the landing waits at most 5 seconds more
+(`JOIN_SLACK_S`). So a landing with a node opted in returns up to 65 seconds later; one with no
+registry, no node opted in, or a test's lock store asks no node and says nothing. Each node gets
+one line before the `LANDED` line: `pushed <sha> to load node <n>'s mirror of <main>`, or a
+WARNING saying why not (refused, not a fast-forward, unreachable, no answer in time, a registry
+that cannot be used). A WARNING never changes the verdict: the next landing's push, or a land
+job's own push of its base (step 1), brings the mirror up to date. The node needs no change: its
+forced command serves the push with no job, and the mirror refuses deletes and non-fast-forwards
+(`box.Box.mirror_for_push`); main only moves forward.
+
 ### How a landing uses it
 
 `kitlib.gate.land` (`Lander`):
@@ -312,6 +329,9 @@ A kit checkout is never gated on a node, by a landing or by `node.py gate`.
   (`history_expect`), beside the full runs.
 - Not yet proven on a live machine with a real node: the tests use a stand-in for
   `kitlib.loadnode.landroute` on the real landing, git and scratch lock store.
+- The mirror refresh (The mirror of main) is tested against a real bare mirror made with the
+  node's settings and real git, with ssh stood in for; its push over ssh to a live node is not yet
+  observed, and its 60 second cap is not measured.
 
 ## Lock runs on a node
 
