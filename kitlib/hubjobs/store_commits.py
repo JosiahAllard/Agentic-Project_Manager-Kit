@@ -23,10 +23,13 @@ differs from the remote's, these commits included, and a second pusher of that r
 
 Outcomes (kitlib.hubsite.jobs): nothing to commit, a store that is not a folder store in the PM
 data worktree, or the index lock held by another git command (errors.Busy) are skips. A commit
-returns its short sha and pushes the job event `committed`. Any other store error (Overtaken,
-Uncommitted, IndexStale, Failure) is a failure, and the job then stops: every later pass raises
-the same error and commits nothing while one of that failure's paths is still uncommitted
-(MainBackend.pending lists it), so a person clears it first (the error says how).
+returns its short sha and pushes the job event `committed`. Any other store error is a failure
+(health shows it; the runner pushes `failing` at the third in a row). A commit that fails with
+Uncommitted, Overtaken or IndexStale also stops the job at once: every later pass raises
+StoreStuck and commits nothing while one of that failure's paths is still uncommitted
+(MainBackend.pending lists it), so a person clears it first (the error says how). A bare
+Failure (git did not answer, a status that cannot be read) does not stop it: the next pass
+tries again.
 """
 import os
 import time
@@ -41,6 +44,8 @@ NAME = 'store-commits'
 EVERY_S = 3600
 SETTLE_S = 60                       # a record file changed more recently is left for a later pass
 SUBJECT = 'backlog: hub commits %d uncommitted record path%s'
+# The commit failures that leave paths for a person to clear (Overtaken is an Uncommitted).
+STICKY = (errors.Uncommitted, errors.IndexStale)
 
 
 class StoreStuck(Exception):
@@ -110,9 +115,8 @@ class StoreCommits(object):
                                       + '\n\nSession: hub\n')
             except errors.Busy as e:
                 return jobs.Skip('the index lock is held; tried again next pass: %s' % e)
-            except errors.Refusal as e:
-                text = '%s: %s' % (type(e).__name__, e)
-                self._stuck = (list(getattr(e, 'paths', None) or todo), text)
+            except STICKY as e:         # paths a person clears first: the job stops
+                self._stuck = (list(e.paths or todo), '%s: %s' % (type(e).__name__, e))
                 raise
             if sha:
                 ctx.event('committed', sha[:12])

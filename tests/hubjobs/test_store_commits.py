@@ -149,6 +149,23 @@ class Run(StoreCommitsCase):
         self.assertIn('not a record', out.note)
         self.assertEqual(self.head(), self.seed)
 
+    def test_head_already_holding_them_is_a_skip(self):
+        self.edit('BAR')
+        with mock.patch.object(bstore.MainBackend, 'commit_paths', return_value=None):
+            out = self.run_job()
+        self.assertIsInstance(out, jobs.Skip)
+        self.assertEqual(out.note, 'HEAD already holds them')
+        self.assertEqual(self.events, [])
+
+    def test_a_stop_asked_for_is_a_skip_before_the_commit(self):
+        self.edit('BAR')
+        stop = threading.Event()
+        stop.set()
+        out = self.job(jobs.Ctx(stop, lambda word, detail=None: self.events.append(word)))
+        self.assertIsInstance(out, jobs.Skip)
+        self.assertEqual(out.note, 'stopping')
+        self.assertEqual(self.head(), self.seed)
+
     def test_not_the_pm_data_worktree_is_a_skip(self):
         other = self.repo.worktree('elsewhere')
         self.repo.write('.kit.json', KIT_JSON, root=other)
@@ -174,6 +191,38 @@ class Stops(StoreCommitsCase):
         self.repo.commit('by hand', '%s/BAR.md' % DIR, cwd=self.wt)
         self.assertIn('committed 1 record path', self.run_job())
         self.assertEqual(self.committed(), ['%s/BAZ.md' % DIR])
+
+    def test_a_bare_failure_fails_the_run_and_the_next_run_retries(self):
+        self.edit('BAR')
+        with mock.patch.object(bstore.MainBackend, 'commit_paths',
+                               side_effect=errors.Failure('git hash-object timed out')):
+            with self.assertRaises(errors.Failure) as cm:
+                self.run_job()
+        self.assertNotIsInstance(cm.exception, errors.Uncommitted)
+        self.assertIn('committed 1 record path', self.run_job())
+        self.assertEqual(self.committed(), ['%s/BAR.md' % DIR])
+
+    def test_an_overtaken_commit_stops_the_job(self):
+        self.edit('BAR')
+        fail = errors.Overtaken('HEAD changed it', paths=['%s/BAR.md' % DIR],
+                                changed=['%s/BAR.md' % DIR])
+        with mock.patch.object(bstore.MainBackend, 'commit_paths', side_effect=fail):
+            with self.assertRaises(errors.Overtaken):
+                self.run_job()
+        with mock.patch.object(bstore.MainBackend, 'commit_paths') as commit:
+            with self.assertRaises(sc.StoreStuck) as cm:
+                self.run_job()
+            commit.assert_not_called()
+        self.assertIn('Overtaken', str(cm.exception))
+
+    def test_a_status_that_cannot_be_read_fails_the_run(self):
+        self.edit('BAR')
+        with mock.patch.object(bstore.MainBackend, 'pending',
+                               side_effect=errors.Failure('cannot read the status')):
+            with self.assertRaises(errors.Failure):
+                self.run_job()
+        self.assertEqual(self.head(), self.seed)
+        self.assertIn('committed', self.run_job())  # not stuck: nothing was tried
 
     def test_a_stopped_job_counts_failures_in_the_runner(self):
         self.edit('BAR')
