@@ -6,10 +6,12 @@ Linux machine's own /sys."""
 import os
 import subprocess
 import tempfile
+import types
 import unittest
 from unittest import mock
 
 import kitlib.platform
+from kitlib.lock import api
 from kitlib.lock import layout as lay
 from kitlib.platform.linux import hardware
 from tests.lock import linux_trees
@@ -165,6 +167,15 @@ class Reader(TreeCase):
             self.assertEqual(hardware.all_mask(), 0xFFFF)
             self.assertEqual(hardware.l3_domains(), [0xFFFF])
             self.assertEqual(hardware.memory_mb(), {"total_mb": 32000, "free_mb": 29296})
+
+    def test_the_snapshot_reads_free_memory_through_the_seam(self):
+        """A node's status (api.snapshot) on Linux: the free memory comes from the platform's
+        memory_mb, never the Windows binding (which refuses off Windows)."""
+        hw = self.look("desktop")
+        with mock.patch.object(kitlib.platform, "NAME", "linux"), \
+                mock.patch.object(hardware, "ROOT", self.tree("desktop")):
+            out = api._hardware(types.SimpleNamespace(testing=False), lay.derive(hw, {}), hw)
+        self.assertEqual(out["memory_mb"]["free"], 29296)
 
 
 class FailedLooks(TreeCase):
