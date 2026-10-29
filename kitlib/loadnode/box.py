@@ -37,6 +37,15 @@ at most SPEC_CAP bytes, checked here before anything is done):
                                  sends), which books the node's machine lock itself, then puts
                                  the gate-OK record it wrote for the sha (gate_ok.verify_full) in
                                  result.json
+    land   {land spec}           a landing's merged gate (check_land_spec; docs/load-nodes.md
+                                 "A landing's merged gate on a node"): refused first when the
+                                 node kit's files (kit_files, kitlib.gate.reuse.kit_files_hash)
+                                 are not the spec's; else started as a gate job is, the sha the
+                                 merge and the base the main it was merged into; the runner runs
+                                 `loadnode.py landgate <job>` (kitlib.loadnode.landgate: the
+                                 merged gate at the base's config, under the node's own machine
+                                 lock), then puts the gate-OK record it wrote for the merge in
+                                 result.json
     follow {job, offset}         frames (kitlib.loadnode.frames): L log bytes from offset, K while
                                  nothing is new, then R the result and E
     fetch  {job}                 M the manifest of the spec's artifact globs (regular files inside
@@ -45,9 +54,10 @@ at most SPEC_CAP bytes, checked here before anything is done):
     stop   {job}                 ask the job's machine lock run to stop (kitlib.lock.run
                                  request_stop), else end the runner with SIGTERM
 
-The job runner (`loadnode.py job <job>`, started only by `start` and `gate`, never over ssh) runs
-the spec's command through kitlib.lock.run.run_command under the node's own machine lock (a gate
-job: the node's gate.py, run_gate), its output to the log, and writes result.json. A start sweeps
+The job runner (`loadnode.py job <job>`, started only by `start`, `gate` and `land`, never over
+ssh) runs the spec's command through kitlib.lock.run.run_command under the node's own machine lock
+(a gate job: the node's gate.py, run_gate; a land job: `loadnode.py landgate`, run_land), its
+output to the log, and writes result.json. A start sweeps
 old ended jobs, and the refs/node/ refs no job folder owns (a push whose start never came) once
 the time in their job id is SWEEP_S old. A refusal is one JSON line {"ok": false, "error": ...}
 (framed verbs: an X frame); the error never repeats what was sent. Nothing here prints to a user.
@@ -75,11 +85,15 @@ SHA_RE = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
 KIND_RE = re.compile(r'[a-z0-9][a-z0-9_-]{0,39}')
 RECEIVE_RE = re.compile(r"git-receive-pack 'pmkit-node/mirrors/(%s)\.git'" % registry.REPO_RE)
 GATE_VERB = 'gate'
+LAND_VERB = 'land'
 RUN_VERBS = ('start', 'follow', 'fetch', 'clean', 'stop')     # what node.py run needs of a node
-VERBS = ('status', 'start', GATE_VERB, 'follow', 'fetch', 'clean', 'stop')
+VERBS = ('status', 'start', GATE_VERB, LAND_VERB, 'follow', 'fetch', 'clean', 'stop')
+HEX64_RE = re.compile(r'[0-9a-f]{64}')
 REMOTE_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,39}')
 BRANCH_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,99}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,99}){0,4}')
 BASE_SUFFIX = '-base'           # refs/node/<job>-base: a gate job's base commit
+MAIN_REF = 'refs/pmkit/main/'   # + the main branch: the last base main pushed, so the mirror keeps
+                                # its objects (job.NodeJob.push_main: fast-forwards only)
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 GATE_STOP_S = 60                # a stopped gate gets this long after its Ctrl+C before a kill
 
@@ -229,6 +243,21 @@ def check_gate_spec(d):
     return out
 
 
+def check_land_spec(d):
+    """The checked land spec in `d` (a dict): check_gate_spec's keys (the sha is the merge, the
+    base the main it was merged into), `full` and `docs` (true or false: the merged gate's own
+    arguments) and `kit_files` (main's kitlib.gate.reuse.kit_files_hash, 64 hex), with `land`
+    True. SpecError naming the first wrong key."""
+    out = check_gate_spec(d)
+    for k in ('full', 'docs'):
+        if not isinstance(d.get(k), bool):
+            raise SpecError('%s is not true or false' % k)
+    if not isinstance(d.get('kit_files'), str) or not HEX64_RE.fullmatch(d['kit_files']):
+        raise SpecError('kit_files is not a sha256')
+    out.update(full=d['full'], docs=d['docs'], kit_files=d['kit_files'], land=True)
+    return out
+
+
 def _job_time(job):
     """The epoch seconds of the UTC time in a job id (new_job_id), or None."""
     try:
@@ -316,15 +345,20 @@ def _write_json(path, data):
 class Box(object):
     """One node's jobs under `base`. git(args, cwd) -> (rc, out bytes, err text), alive(pid, job),
     detach(argv, cwd, env) -> (pid, why) and clock() are the tests' stand-ins. `runner` is the
-    argv head that runs `loadnode.py` (the job runner is `runner + ['job', <job>]`)."""
+    argv head that runs `loadnode.py` (the job runner is `runner + ['job', <job>]`). kit_files()
+    is the node kit's kitlib.gate.reuse.kit_files_hash, which `land` compares with the spec's
+    (loadnode.py passes it: this module never imports the gate modules); with none, `land` is
+    refused."""
 
-    def __init__(self, base=None, runner=None, git=None, alive=None, detach=None, clock=time.time):
+    def __init__(self, base=None, runner=None, git=None, alive=None, detach=None, clock=time.time,
+                 kit_files=None):
         self.base = os.path.abspath(base or default_base())
         self.runner = list(runner or [])
         self.git = git or _git_default
         self.alive = alive or _alive_default
         self.detach = detach or _detach_default
         self.clock = clock
+        self.kit_files = kit_files
 
     # paths
     def mirror(self, repo):
@@ -388,6 +422,25 @@ class Box(object):
     def gate(self, spec, env=None):
         """The reply to `gate` for the checked gate spec (check_gate_spec): start's, with the
         base ref checked too and the worktree a linked one of the job's own repo.git."""
+        return self._begin(spec, env, self._gate_tree)
+
+    def land(self, spec, env=None):
+        """The reply to `land` for the checked land spec (check_land_spec): refused, with `kit`
+        true and the pushed refs dropped, when the node kit's files are not the spec's
+        kit_files (or cannot be read); else gate's."""
+        why = None
+        try:
+            mine = self.kit_files() if self.kit_files is not None else None
+        except Exception as e:                  # noqa: BLE001 - told as its kind only
+            mine, why = None, "the node kit's files cannot be read (%s)" % type(e).__name__
+        if mine != spec['kit_files']:
+            m = self.mirror(spec['repo'])
+            if os.path.isdir(m):
+                with _flock(os.path.join(self.base, 'jobs.lock')):
+                    self._drop_ref(spec['job'], m, True)
+            return {'ok': False, 'kit': True, 'error': why or (
+                "the node kit's files are not main's: a landing's merged gate runs only on "
+                "exactly main's kit (update the kit on the node)")}
         return self._begin(spec, env, self._gate_tree)
 
     def _rev(self, m, ref):
@@ -700,13 +753,15 @@ class Box(object):
 
     # the job runner
     def run_job(self, job, run_command=None, new_rid=None, store_factory=None, chdir=os.chdir,
-                verify=None):
+                verify=None, verify_land=None):
         """Run `job`'s command under the machine lock: the exit code it ended with. Its log is
-        the job's `log` (the caller has pointed fds 1 and 2 at it). A gate job goes to run_gate,
-        with `verify`."""
+        the job's `log` (the caller has pointed fds 1 and 2 at it). A land job goes to run_land,
+        with `verify_land`; a gate job to run_gate, with `verify`."""
         spec = _read_json(self._p(job, 'spec.json'))
         if spec is None:
             return EXIT_USAGE
+        if spec.get('land') is True:
+            return self.run_land(job, spec, verify=verify_land)
         if spec.get('gate') is True:
             return self.run_gate(job, spec, verify=verify)
         log = self._p(job, 'log')
@@ -755,11 +810,27 @@ class Box(object):
         sha) -> (record, why): the job runner passes kitlib.loadnode.gaterecord.read_record, kept
         out of this module so the lock tool never reaches the record modules), else why not as
         `record_why`. popen is spawn.popen, the tests' stand-in."""
-        from kitlib.proc import spawn
         wt = self.tree(spec)
         argv = [sys.executable, '-B', os.path.join(KIT_ROOT, 'tools', 'gate.py'), '-C', wt,
                 '--full']
-        how, extra = 'ended', {'gate': True, 'record': None, 'record_why': None}
+        return self._run_child(job, spec, argv, {'gate': True}, popen, verify)
+
+    def run_land(self, job, spec, popen=None, verify=None):
+        """Run a land job's merged gate, `loadnode.py landgate <job> --base <base>` of the node's
+        own kit (kitlib.loadnode.landgate.node_main), never a command main sent: the exit code it
+        ended with. Stopped and read back as run_gate's (verify: the job runner passes
+        kitlib.loadnode.landgate.read_record); result.json has `land` true too."""
+        argv = [sys.executable, '-B', os.path.join(KIT_ROOT, 'optional', 'loadnode', 'loadnode.py'),
+                'landgate', job, '--base', self.base]
+        return self._run_child(job, spec, argv, {'gate': True, 'land': True}, popen, verify)
+
+    def _run_child(self, job, spec, argv, extra, popen, verify):
+        """run_gate's and run_land's run of `argv` in the job's tree: a Ctrl+C passed on as
+        SIGINT (a kill after GATE_STOP_S); on exit 0 the sha's gate-OK record read with
+        verify(wt, sha); result.json written with `extra`, `record` and `record_why`."""
+        from kitlib.proc import spawn
+        wt = self.tree(spec)
+        how, extra = 'ended', dict(extra, record=None, record_why=None)
         try:
             p = (popen or spawn.popen)(argv, cwd=wt, env=runner_env(os.environ, job))
         except OSError as e:
@@ -824,16 +895,17 @@ def serve(cmd, stdin, write, box, exec_fn=None):
             return EXIT_REFUSED
         (exec_fn or (lambda argv: os.execvp(argv[0], argv)))(['git', 'receive-pack', path])
         return EXIT_OK
-    if cmd not in RUN_VERBS and cmd != GATE_VERB:
+    starts = {'start': check_spec, GATE_VERB: check_gate_spec, LAND_VERB: check_land_spec}
+    if cmd not in RUN_VERBS and cmd not in starts:
         return None
     framed = cmd in ('follow', 'fetch')
     try:
         p = read_params(stdin)
-        if cmd in ('start', GATE_VERB):
+        if cmd in starts:
             try:
-                p = (check_spec if cmd == 'start' else check_gate_spec)(p)
+                p = starts[cmd](p)
             except SpecError:
-                box.drop_refused(p, cmd == GATE_VERB)   # main pushed refs/node/<job> first
+                box.drop_refused(p, cmd != 'start')     # main pushed refs/node/<job> first
                 raise
         else:
             p = {'job': _job(p.get('job')), 'offset': p.get('offset', 0)}
@@ -849,15 +921,15 @@ def serve(cmd, stdin, write, box, exec_fn=None):
         return box.follow(p['job'], p['offset'], write)
     if cmd == 'fetch':
         return box.fetch(p['job'], write)
-    d = getattr(box, cmd)(p if cmd in ('start', GATE_VERB) else p['job'])   # start gate clean stop
+    d = getattr(box, cmd)(p if cmd in starts else p['job'])     # start gate land clean stop
     _reply(write, d)
     return EXIT_OK if d.get('ok') else EXIT_REFUSED
 
 
-def job_main(job, base, runner=None, verify=None):
+def job_main(job, base, runner=None, verify=None, verify_land=None):
     """`loadnode.py job <job>`: the detached runner. Points fds 1 and 2 at the job's log, turns
     SIGTERM into Ctrl+C (so the run is released and a result written), and runs it; `verify`
-    reads a gate job's record (Box.run_gate)."""
+    reads a gate job's record (Box.run_gate), `verify_land` a land job's (Box.run_land)."""
     box = Box(base, runner=runner)
     if not JOB_RE.fullmatch(job) or not os.path.isdir(box.job_dir(job)):
         return EXIT_USAGE
@@ -872,4 +944,4 @@ def job_main(job, base, runner=None, verify=None):
         raise KeyboardInterrupt()
     if hasattr(signal, 'SIGTERM'):
         signal.signal(signal.SIGTERM, term)
-    return box.run_job(job, verify=verify)
+    return box.run_job(job, verify=verify, verify_land=verify_land)

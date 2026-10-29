@@ -602,7 +602,8 @@ class GateJob(Base):
         code = self.gate_job().run()
         self.assertEqual(code, 0, self.said)
         self.assertEqual(self.verbs(), ['gate', 'follow', 'clean'])
-        args = self.pushes[0][0]
+        self.assertEqual(self.pushes[0][0][-1], '%s:refs/pmkit/main/main' % BASE_SHA)
+        args = self.pushes[1][0]
         self.assertEqual(args[-2:], ['%s:refs/node/%s' % (SHA, JOB),
                                      '%s:refs/node/%s-base' % (BASE_SHA, JOB)])
         sent = self.link.calls[0][1]
@@ -705,6 +706,152 @@ class GateJob(Base):
             nj.run()
         self.assertEqual(cm.exception.code, job.EXIT_USAGE)
         self.assertIn('base', cm.exception.message)
+        self.assertEqual(self.pushes, [])
+
+
+# -- land jobs (S3b) -------------------------------------------------------------------------------
+
+KITH = 'a' * 64
+LAND = dict(GATE, full=True, docs=False, kit_files=KITH)
+
+
+class LandJob(Base):
+    """A landing's merged gate on a node: the land verb, main's kit files hash in the spec, the
+    node's record taken only through the landing's checker."""
+
+    def setUp(self):
+        Base.setUp(self)
+        self.node_git = RefGit({'refs/node/%s-base' % JOB: BASE_SHA}, head=SHA)
+        self.box.git = self.node_git
+        self.box.kit_files = lambda: KITH
+        self.result = {'exit': 0, 'how': 'ended', 'gate': True, 'land': True, 'record': REC,
+                       'record_why': None}
+        self.checked, self.check_error, self.imported = [], None, []
+
+    def importer(self, top, rec, commit, ran_on, repo):
+        self.imported.append((top, rec, commit, ran_on, repo))
+        return os.path.join(top, 'records', 'r.json'), []
+
+    def checker(self, rec):
+        self.checked.append(rec)
+        if self.check_error:
+            raise self.check_error
+        return rec
+
+    def land_job(self, link=None, **kw):
+        kw.setdefault('checker', self.checker)
+        return self.node_job(link, land=LAND, **kw)
+
+    def test_main_goes_up_then_both_commits_the_land_verb_starts_it_and_the_record_is_checked(self):
+        nj = self.land_job()
+        self.assertEqual(nj.run(), 0, self.said)
+        self.assertEqual(self.verbs(), ['land', 'follow', 'clean'])
+        self.assertEqual(self.pushes[0][0][-1], '%s:refs/pmkit/main/main' % BASE_SHA)
+        self.assertEqual(self.pushes[1][0][-2:], ['%s:refs/node/%s' % (SHA, JOB),
+                                                  '%s:refs/node/%s-base' % (BASE_SHA, JOB)])
+        sent = self.link.calls[0][1]
+        self.assertEqual((sent['full'], sent['docs'], sent['kit_files'], sent['base']),
+                         (True, False, KITH, BASE_SHA))
+        self.assertEqual(self.checked, [REC])
+        self.assertEqual(nj.land_record, REC)
+        self.assertEqual(nj.ran_on, {'node': 'box1', 'host_key': registry.fingerprint(KEY),
+                                     'job': JOB})
+        self.assertEqual(self.imported, [])            # a landing writes its own record
+        self.assertFalse(os.path.exists(self.box.job_dir(JOB)))
+
+    def test_a_record_the_checker_refuses_is_exit_15_and_the_job_stays(self):
+        self.check_error = job.RecordRefused('the record ran a, b; main would run a, b, c')
+        nj = self.land_job()
+        self.assertEqual(nj.run(), job.EXIT_RECORD)
+        text = '\n'.join(self.said)
+        self.assertIn('the merged gate passed on box1, and its gate-OK record was not taken: the '
+                      'record ran a, b; main would run a, b, c; job %s stays there' % JOB, text)
+        self.assertIn('node.py stop box1 %s' % JOB, text)
+        self.assertIsNone(nj.land_record)
+        self.assertIsNone(nj.ran_on)
+        self.assertNotIn('clean', self.verbs())
+        self.assertTrue(os.path.isdir(self.box.job_dir(JOB)))
+
+    def test_with_no_checker_no_record_is_taken(self):
+        nj = self.node_job(land=LAND)
+        self.assertEqual(nj.run(), job.EXIT_RECORD)
+        self.assertIn("no way to check a landing's gate-OK record", ' '.join(self.said))
+        self.assertIsNone(nj.land_record)
+
+    def test_a_checker_that_returns_no_record_takes_none(self):
+        nj = self.land_job(checker=lambda rec: None)
+        self.assertEqual(nj.run(), job.EXIT_RECORD)
+        self.assertIn('the checker returned none', ' '.join(self.said))
+
+    def test_a_record_of_another_commit_is_not_checked(self):
+        nj = self.land_job()
+        self.assertEqual(nj.take_land({'sha': 'd' * 40, 'record': REC}), job.EXIT_RECORD)
+        self.assertEqual(self.checked, [])
+        self.assertIn('the node gated dddddddddddd, not the merge cccccccccccc',
+                      ' '.join(self.said))
+
+    def test_a_pass_with_no_record_takes_none(self):
+        self.result.update(record=None, record_why='no gate-OK record for this commit')
+        self.assertEqual(self.land_job().run(), job.EXIT_RECORD)
+        self.assertEqual(self.checked, [])
+        self.assertIn("the node's merged gate wrote none it could read", ' '.join(self.said))
+
+    def test_a_failed_merged_gate_is_its_own_exit_and_checks_nothing(self):
+        self.result.update(exit=1, record=None)
+        self.assertEqual(self.land_job().run(), 1)
+        self.assertEqual(self.checked, [])
+
+    def test_a_followed_land_job_is_never_taken(self):
+        # node.py follow knows no landing: the result says land, and nothing is taken or cleaned
+        nj = job.NodeJob(NODE, FakeLink(self.box), self.top, None, 'my-repo', None, None, [],
+                         say=self.said.append, job=JOB, importer=self.importer)
+        self.assertEqual(nj.finish(dict(self.result, sha=SHA)), job.EXIT_RECORD)
+        self.assertIn('taken only by the landing that started it', ' '.join(self.said))
+        self.assertEqual(self.imported, [])
+
+    def test_a_node_with_another_kit_refuses_and_main_falls_back(self):
+        self.box.kit_files = lambda: 'f' * 64
+        with self.assertRaises(job.JobError) as cm:
+            self.land_job().run()
+        self.assertEqual((cm.exception.code, cm.exception.fallback), (job.EXIT_NODE, True))
+        self.assertIn("the node kit's files are not main's", cm.exception.message)
+
+    def test_a_node_whose_kit_has_no_land_verb_falls_back(self):
+        class Old(FakeLink):
+            def call(self, verb, payload, timeout_s=None):
+                return 2, (b'{"protocol":1,"ok":false,"error":"refused: not a command this '
+                           b'node serves"}\n'), b''
+        with self.assertRaises(job.JobError) as cm:
+            self.land_job(Old(self.box)).run()
+        self.assertEqual((cm.exception.code, cm.exception.fallback), (job.EXIT_NODE, True))
+        self.assertIn('its kit serves no land verb; update the kit on the node',
+                      cm.exception.message)
+
+    def test_a_land_spec_the_node_would_refuse_is_never_pushed(self):
+        nj = self.node_job(land=dict(LAND, kit_files='not-a-hash'), checker=self.checker)
+        with self.assertRaises(job.JobError) as cm:
+            nj.run()
+        self.assertEqual(cm.exception.code, job.EXIT_USAGE)
+        self.assertIn('kit_files', cm.exception.message)
+        self.assertEqual(self.pushes, [])
+
+    def test_a_refused_main_push_is_a_warning_and_the_job_goes_on(self):
+        real = self.git
+
+        def git(args, cwd, env=None, timeout=None):
+            if 'push' in args and args[-1].endswith(':refs/pmkit/main/main'):
+                self.pushes.append((args, cwd, env))
+                return 1, b'', ' ! [rejected]        main (non-fast-forward)\n'
+            return real(args, cwd, env, timeout)
+        self.git = git
+        self.assertEqual(self.land_job().run(), 0, self.said)
+        self.assertTrue(any(s.startswith("WARNING: main's main was not pushed to box1's mirror")
+                            for s in self.said), self.said)
+        self.assertEqual(self.checked, [REC])
+
+    def test_a_run_job_has_no_main_push(self):
+        nj = self.node_job()
+        self.assertFalse(nj.push_main())
         self.assertEqual(self.pushes, [])
 
 

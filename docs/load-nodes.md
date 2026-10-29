@@ -195,6 +195,48 @@ Known limits:
   `dev_drive`) and its gate logs and result folder stay on the node; the job folder goes.
 - `gate.py` itself does not send a gate to a node; `node.py gate` is the only way in.
 
+## A landing's merged gate on a node
+
+The parts a landing needs to run its merged gate (docs/gate.md "Landing") on a load node are in
+the kit; the landing does not use them yet, so every landing still gates on main. The node checks
+the job and runs the gate; main checks the record it sends back against main's own reading of the
+same merge, step by step.
+
+1. Main starts a `NodeJob` in land mode (`kitlib.loadnode.job`, `land={full, docs, kit_files}`):
+   the merge commit, the base (main's tip the merge was made on), the repository name and main's
+   kit files hash (`kitlib.gate.reuse.kit_files_hash`). Before the job's refs it pushes the base to
+   the node mirror's `refs/pmkit/main/<main>` (never forced; a refusal or failure is a WARNING and
+   the job goes on), so later job pushes send only what is new. The pre-push hook takes no part:
+   it is not a branch.
+2. The node's `land` verb (`box.check_land_spec`: the gate spec's keys, plus `full` and `docs` as
+   booleans and `kit_files` as 64 lowercase hex) refuses unless `kit_files` is its own kit's files
+   hash: `{"ok": false, "kit": true}`, and both job refs are dropped. A landing's gate runs only on
+   a node with exactly main's kit files; any other kit, or one whose hash cannot be read, is for the
+   landing to gate on main instead, saying why in one line. A node kit with no `land` verb is
+   "its kit serves no land verb", the same as an old kit for `gate`.
+3. The job runner runs the node kit's `loadnode.py landgate <job>` (`kitlib.loadnode.landgate`,
+   never served over ssh) in the job's worktree. It refuses again on another kit, a tree not at
+   the merge, or a config at the base it cannot read (exit 4), runs `runner.merged_gate` as the
+   landing would (`full`, `docs`), and fails (exit 1) if the gate left the tree changed. On a pass
+   it writes a gate-OK record with the node kit's identity and files hash, `base` and `config_rev`
+   at the base, the gate's `source`, and `mode` "docs" for a docs-only gate. The record is read
+   back (`gate_ok.verify`) into the job's result with `land: true`.
+4. Main takes a land record only in the `NodeJob` that started it (`take_land`), through the
+   landing's checker (`landgate.checker`), which reads main's own selection once with
+   `runner.merged_steps` (the steps `merged_gate` would run, run nothing) and refuses when main's
+   own gate would refuse the merge. The record is refused, at its first failing check, unless:
+   it names the merge; `gate_ok`'s checks pass (keys, schema, verdict, tree, author); its
+   `gate_config` is the hash of main's config at the base; its `base` and `config_rev` are the
+   base; its `mode` and `full` match main's; its `source` is main's; its steps are exactly main's
+   by name, once each; every step's result is `pass` or `warn` (a `skip` or `reused` step is
+   refused); its `repo` is main's name; and its kit files are main's.
+5. A refused record is exit 15, the job kept and the follow and stop lines said, as for `gate`;
+   `node.py follow` never takes a land record ("taken only by the landing that started it"). A
+   taken one sets the job's `land_record` and `ran_on` (node, host key fingerprint, job), for the
+   landing's own record on main (`gate_ok.record_pass(ran_on=...)`, with no `input_keys`).
+
+A kit checkout is never gated on a node, by a landing or by `node.py gate`.
+
 ## Lock runs on a node
 
 ```

@@ -939,6 +939,47 @@ def merged_gate(root, cfg, base, full=False, slug='land', log_dir=None, say=None
     return out
 
 
+def _merged_choice(cfg, eff, tree, base, full, docs):
+    """What _merged_gate selects at HEAD of `tree` against `base`, running nothing: (head,
+    changed, chosen, docs, empty), or the REFUSED Outcome it would end with."""
+    empty = detect.nothing_detected(eff)
+    head, why = refs.head(tree)
+    if not head:
+        return G.Outcome(G.REFUSED, ['REFUSED: no HEAD commit: %s' % why])
+    changed, why = changed_between(tree, base, head)
+    if changed is None:
+        return G.Outcome(G.REFUSED, ['REFUSED: git cannot list the merged paths: %s' % why])
+    from kitlib.gate import reuse as R     # reuse imports this module; `reuse` is the planner
+    docs = bool(docs) and not (full or empty) and R.docs_only_change(cfg, eff.gate, changed)
+    try:
+        all_steps = S.build(eff.gate, tree, base, cfg.tools_dir, merged=True, full=full)
+        chosen, _ = S.select(eff.gate, all_steps, changed, full=not docs, docs=docs,
+                             read=S.working_tree_reader(tree))
+    except S.GateConfigError as e:
+        return G.Outcome(G.REFUSED, ['REFUSED: %s' % e])
+    if not chosen and not empty:
+        return G.Outcome(G.REFUSED, [NO_STEP_FULL], head=head)
+    return head, changed, chosen, docs, empty
+
+
+def merged_steps(root, cfg, base, full=False, tree=None, docs=False):
+    """What merged_gate() with these arguments would run, without running anything:
+    `({'head', 'steps': [names, in order], 'docs': bool, 'source'}, None)`, or `(None, why)` when
+    it would refuse. A landing whose merged gate runs on a load node checks the node's record
+    against this (kitlib.loadnode.landgate)."""
+    tree = tree or root
+    try:
+        eff = detect.effective(cfg, tree, base=base)
+    except detect.DetectError as e:
+        return None, 'the auto-detected gate: %s' % e
+    picked = _merged_choice(cfg, eff, tree, base, full, docs)
+    if isinstance(picked, G.Outcome):
+        return None, '; '.join(picked.lines)
+    head, _changed, chosen, docs, _empty = picked
+    return {'head': head, 'steps': [s.name for s in chosen], 'docs': docs,
+            'source': eff.source}, None
+
+
 def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, say=None,
                  book_kw=None, reuse=None, slot=None, tree=None, docs=False):
     """Gate the merged tree at HEAD of `tree` (a landing's merge, in its landing tree; default
@@ -968,23 +1009,10 @@ def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, sa
     say = say or _quiet
     tree = tree or root
     gate = eff.gate
-    empty = detect.nothing_detected(eff)
-    head, why = refs.head(tree)
-    if not head:
-        return G.Outcome(G.REFUSED, ['REFUSED: no HEAD commit: %s' % why])
-    changed, why = changed_between(tree, base, head)
-    if changed is None:
-        return G.Outcome(G.REFUSED, ['REFUSED: git cannot list the merged paths: %s' % why])
-    from kitlib.gate import reuse as R     # reuse imports this module; `reuse` is the planner
-    docs = bool(docs) and not (full or empty) and R.docs_only_change(cfg, gate, changed)
-    try:
-        all_steps = S.build(gate, tree, base, cfg.tools_dir, merged=True, full=full)
-        chosen, _ = S.select(gate, all_steps, changed, full=not docs, docs=docs,
-                             read=S.working_tree_reader(tree))
-    except S.GateConfigError as e:
-        return G.Outcome(G.REFUSED, ['REFUSED: %s' % e])
-    if not chosen and not empty:
-        return G.Outcome(G.REFUSED, [NO_STEP_FULL], head=head)
+    picked = _merged_choice(cfg, eff, tree, base, full, docs)
+    if isinstance(picked, G.Outcome):
+        return picked
+    head, changed, chosen, docs, empty = picked
     name = repo_name(cfg, root)
     logs = new_log_dir(cfg, root, name, 'land-' + slug, log_dir)
     if docs:
