@@ -2,11 +2,13 @@
 final), and wait-result, the wait a second session arms on them (its one write: a running
 record whose process died, finished error) (docs/gate.md "Result
 record")."""
+import contextlib
 import json
 import os
 import subprocess
 import sys
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -24,6 +26,27 @@ FIELDS = ('schema', 'kind', 'branch', 'tip', 'base', 'run_id', 'started_at', 'fi
           'verdict', 'code', 'log', 'summary', 'gate_ok_record', 'cleanup', 'source', 'pid',
           'ctime')
 UTC = r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$'
+
+
+class FakeClock(object):
+    """time.monotonic and time.sleep for the `with` of patched(): a sleep is recorded and moves
+    the clock on at once, so a retry loop's tries and pauses are counted exactly."""
+
+    def __init__(self):
+        self.now, self.sleeps = 1000.0, []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, s):
+        self.sleeps.append(s)
+        self.now += s
+
+    def patched(self):
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.object(time, 'monotonic', self.monotonic))
+        stack.enter_context(mock.patch.object(time, 'sleep', self.sleep))
+        return stack
 
 
 def block_dir(root):
@@ -108,27 +131,46 @@ class Records(unittest.TestCase):
         result.write(self.repo.root, self.rec(branch='con'))
         self.assertEqual(result.read(self.repo.root, 'con')[0]['branch'], 'con')
 
-    def test_a_replace_held_open_is_retried(self):
-        real, calls = os.replace, []
+    def test_a_replace_held_open_is_tried_five_times_0_2_s_apart_then_a_result_error(self):
+        # The equivalence test of _put's move onto kitlib.fs.replace: the loop it replaced tried
+        # RETRIES (5) times, sleeping RETRY_SLEEP (0.2 s) between, then raised the
+        # PermissionError (a ResultError here). The clock is faked, so the count is exact.
+        for fails, tries, written in ((2, 3, True), (4, 5, True), (5, 5, False), (9, 5, False)):
+            with self.subTest(fails=fails):
+                branch = 'kit/held%d' % fails
+                real, calls, clock = os.replace, [], FakeClock()
 
-        def flaky(a, b):
-            calls.append(1)
-            if len(calls) < 3:
-                raise PermissionError('held open')
-            return real(a, b)
-        with mock.patch.object(result, 'RETRY_SLEEP', 0), mock.patch('os.replace', flaky):
-            result.write(self.repo.root, self.rec())
-        self.assertEqual(len(calls), 3)
-        self.assertEqual(result.read(self.repo.root, 'kit/x')[0]['verdict'], 'pass')
+                def flaky(a, b):
+                    calls.append(b)
+                    if len(calls) <= fails:
+                        raise PermissionError('held open')
+                    return real(a, b)
+                with clock.patched(), mock.patch('os.replace', flaky):
+                    if written:
+                        result.write(self.repo.root, self.rec(branch=branch))
+                    else:
+                        with self.assertRaises(result.ResultError) as cm:
+                            result.write(self.repo.root, self.rec(branch=branch))
+                self.assertEqual(len(calls), tries)
+                self.assertEqual(clock.sleeps, [0.2] * (tries - 1))
+                if written:
+                    self.assertEqual(result.read(self.repo.root, branch)[0]['verdict'], 'pass')
+                else:
+                    self.assertIn('held open', str(cm.exception))
+                    self.assertFalse(os.path.exists(result.result_path(self.repo.root, branch)))
+                self.assertEqual([n for n in os.listdir(result.result_dir(self.repo.root))
+                                  if n.endswith('.tmp')], [])
 
-    def test_a_replace_held_open_too_long_is_a_result_error_and_leaves_no_temp(self):
-        def held(a, b):
-            raise PermissionError('held open')
-        with mock.patch.object(result, 'RETRY_SLEEP', 0), mock.patch('os.replace', held):
+    def test_a_replace_refused_otherwise_is_not_retried(self):
+        calls, clock = [], FakeClock()
+
+        def refused(a, b):
+            calls.append(b)
+            raise OSError('disk said no')
+        with clock.patched(), mock.patch('os.replace', refused):
             with self.assertRaises(result.ResultError):
                 result.write(self.repo.root, self.rec())
-        self.assertEqual(os.listdir(result.result_dir(self.repo.root)),     # only the lock
-                         [os.path.basename(result.lock_path(result.result_path(self.repo.root, 'kit/x')))])
+        self.assertEqual((len(calls), clock.sleeps), (1, []))
 
     def test_run_writes_running_then_final_with_one_run_id(self):
         run = result.Run(self.repo.root, 'gate', 'kit/x', self.tip)
