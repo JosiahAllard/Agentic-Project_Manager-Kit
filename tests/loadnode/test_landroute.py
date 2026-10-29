@@ -467,6 +467,9 @@ class LandRun(Base):
         with self.assertRaises(KeyboardInterrupt):
             self.run_on(make_job=lambda link: slow)
         self.assertFalse(slow.stopped.is_set())
+        # its start may be on the node already: the owner is told how to stop it
+        self.assertIn('Ctrl+C: job %s was not seen to start on box1; if it did, stop it: '
+                      'node.py stop box1 %s' % (JOB, JOB), self.said)
 
 
 class OpenLink(object):

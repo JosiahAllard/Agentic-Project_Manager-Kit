@@ -244,7 +244,8 @@ def run_on_node(node, root, merge, base, cfg, repo, slug, full=False, docs=False
     runner.repo_name; full, docs: the merged gate's own arguments. open_link(node) is a context
     giving a remote.Link (default remote.Link), make_job(link) the job.NodeJob, checker and
     kit_hash landgate's (default: read here), job_kw more NodeJob arguments: the tests'
-    stand-ins. Ctrl+C asks the node to stop a started job, says how to follow it, and goes on up."""
+    stand-ins. Ctrl+C asks the node to stop a started job and says how to follow it; before the
+    start it says how to stop the job should it have started; either way it goes on up."""
     say = say or (lambda text: None)
     if kit_hash is None:
         try:
@@ -278,10 +279,14 @@ def run_on_node(node, root, merge, base, cfg, repo, slug, full=False, docs=False
             except KeyboardInterrupt:
                 done.set()
                 watcher.join()
-                if holder[0].started:
-                    _stop(holder[0], say)
-                    for line in holder[0].follow_lines():
+                nj = holder[0]
+                if nj.started:
+                    _stop(nj, say)
+                    for line in nj.follow_lines():
                         say(line)
+                else:   # its start may be on the node already, its reply not back yet
+                    say('Ctrl+C: job %s was not seen to start on %s; if it did, stop it: %s stop %s %s'
+                        % (nj.job, node.name, getattr(nj, 'tool', tool), node.name, nj.job))
                 raise
             finally:
                 done.set()
