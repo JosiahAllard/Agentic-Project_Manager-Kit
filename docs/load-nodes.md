@@ -213,7 +213,7 @@ same merge, step by step.
    hash: `{"ok": false, "kit": true}`, and both job refs are dropped. A landing's gate runs only on
    a node with exactly main's kit files; any other kit, or one whose hash cannot be read, is for the
    landing to gate on main instead, saying why in one line. A node kit with no `land` verb is
-   "its kit serves no land verb", the same as an old kit for `gate`.
+   "its kit serves no land verb", as a kit with no `gate` verb is for `node.py gate`.
 3. The job runner runs the node kit's `loadnode.py landgate <job>` (`kitlib.loadnode.landgate`,
    never served over ssh) in the job's worktree. It refuses again on another kit, a tree not at
    the merge, or a config at the base it cannot read (exit 4), runs `runner.merged_gate` as the
