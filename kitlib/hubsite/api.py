@@ -315,6 +315,12 @@ is newer than this process, restart the owner's to-do text then (null otherwise)
 Api.code_status when it is built; a status that raises or is not an object gives null. The
 tunnel's health holds fixed words only and carries none.
 
+Jobs. GET health carries `jobs`: null when this hub runs no timed job, else {name: block} from
+kitlib.hubsite.jobs Jobs.status, each block {"every_s", "runs", "failures", "running",
+"last_at", "ok_at", "note", "error"} (kitlib.hubsite.jobs docstring). The server sets
+Api.jobs_status when it is built; a status that raises or is not an object gives null. The
+tunnel's health carries none.
+
 Pending for one session. Every pending item carries `from`, the session key it is for
 (Api.pending). GET pending and GET wait (with pending=1) take `for=<key>`: only that key's
 items are listed (`for=pm`: see Routes), and such a wait is woken only by one of them, a reset or its timeout, so a
@@ -673,6 +679,7 @@ class Api(object):
         self._pushed = {}           # session key -> `now` of the latest push written to it
         self.watcher_status = None  # PushWorker.watcher_status, set by the worker ("Watcher")
         self.code_status = None     # Hub.code_state, set by serve.build ("Code")
+        self.jobs_status = None     # jobs.Jobs.status, set by serve.build ("Jobs")
 
     def call(self, method, path, role, body=None, query=None, via='', raise_unexpected=False,
              agent_words=False, strong=False):
@@ -1015,6 +1022,17 @@ class Api(object):
         try:
             got = fn()
         except Exception:           # noqa: BLE001 - the snapshot and health answer whatever it does
+            return None
+        return got if isinstance(got, dict) else None
+
+    def jobs_seen(self):
+        """The timed jobs' health blocks (module docstring "Jobs"), or None. Never raises."""
+        fn = self.jobs_status
+        if fn is None:
+            return None
+        try:
+            got = fn()
+        except Exception:           # noqa: BLE001 - health answers whatever the jobs do
             return None
         return got if isinstance(got, dict) else None
 
@@ -2973,7 +2991,8 @@ def health(api, req):
         out.update(extra)
     out.pop('store', None)
     out.update(ok=True, version=API_VERSION, revision=api.store.revision, unavailable=missing,
-               watcher=api.watcher_seen(), push=api.push_seen(), code=api.code_seen())
+               watcher=api.watcher_seen(), push=api.push_seen(), code=api.code_seen(),
+               jobs=api.jobs_seen())
     if req.role == OWNER:           # where the store is on this machine is the owner's to know
         out['store'] = api.store.root
     return out

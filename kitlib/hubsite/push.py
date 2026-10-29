@@ -94,6 +94,12 @@ beat acknowledges one still owed, and only after a fresh beat can it fire again.
 for a watcher this worker never saw fresh. watcher_status() -> {"state", "age"} (age in whole
 seconds, None with no beat) is the snapshot's and GET health's `watcher` (Api.watcher_seen).
 
+Jobs (the hub's timed jobs, kitlib.hubsite.jobs): job_event(name, event), on any thread, owes the
+PM one `job <name> <event>` push (a newer event of the same job replaces one still owed); the
+thread sends each owed one every round (send_jobs), tried on the same schedule until a try is
+written or GIVE_UP_S passes. Owed job pushes live in memory only, never in the outbox: a restart
+drops them, and the job pushes again when it fails again.
+
 Files, in `folder` (the launcher's state_dir):
   push-outbox.json         {"<kind>:<id>": {kind, id, event, fingerprint, status, repo, from,
                            first_at, recipients: {key: {attempt, next_at, last, once}}}} (a
@@ -106,11 +112,13 @@ Files, in `folder` (the launcher's state_dir):
   push-undelivered.jsonl   one line per try that was not written, and per give-up:
                            {ts, kind, id, status, recipient, name, attempt, reason}; reason is the
                            state, `ambiguous` (an extra line, written or not) or `gave-up`;
-                           a `watcher down` try is kind watcher, id down. Never
+                           a `watcher down` try is kind watcher, id down; a job push's
+                           kind job, id the job's name, status its event. Never
                            a token or any item text. Rotated once to .1 at LOG_MAX.
 
 The text is fixed: a header `[hub push] <kind> <id> <status> repo:<repo> from:<from>
-route:<recipient> attempt:<k>` (each field cut to [A-Za-z0-9._:-], 64 characters) and one line of
+route:<recipient> attempt:<k>` (`[hub push] job <name> <event> route:<recipient> attempt:<k>`
+for a job push; each field cut to [A-Za-z0-9._:-], 64 characters) and one line of
 what to do. It never carries a title, a note or an answer: those are free text and the
 recipient takes the message as a prompt.
 
@@ -369,6 +377,8 @@ class PushWorker(object):
         self._watched = None            # the clock of the latest heartbeat read, None before
         self._armed = False             # seen 'up' since the last `watcher down` fired
         self._down = None               # the `watcher down` owed: {attempt, next_at, first_at}
+        self._jobs = {}                 # job name -> the job push owed: {event, attempt, next_at, first_at}
+        self._jobs_lock = threading.Lock()  # job_event is called on a job's thread
         if api is not None:
             api.push_status = self.status   # the snapshot's `push` (Api.push_seen)
             api.watcher_status = self.watcher_status    # its `watcher` (Api.watcher_seen)
@@ -418,6 +428,7 @@ class PushWorker(object):
                     self._round(changes)
                     if self._watched is None or self.clock() - self._watched >= WATCHER_POLL_S:
                         self.watch()
+                    self.send_jobs()
                     self._save()                    # each round: an unclean exit loses no more
                     self._summarize()
                 except HubError as e:
@@ -500,6 +511,55 @@ class PushWorker(object):
         if sent.state == WRITTEN:
             self._down = None
         self._summarize()
+
+    def job_event(self, name, event):
+        """Owe the PM one job push: a timed job's `event` (kitlib.hubsite.jobs: `failing`,
+        `recovered`, or a job's own word), sent by the thread (module docstring "Jobs"). A newer
+        event of the same job replaces one still owed. Any thread."""
+        with self._jobs_lock:
+            self._jobs[name] = {'event': event, 'attempt': 0, 'next_at': self.clock(),
+                                'first_at': None}
+
+    def send_jobs(self):
+        """Send each job push that is due (module docstring "Jobs"): the thread's step every
+        round, and a test's."""
+        now = self.clock()
+        with self._jobs_lock:
+            due = [(n, o) for n, o in self._jobs.items()]
+        for name, owed in due:
+            if self._stop.is_set():
+                return
+            entry = {'kind': 'job', 'id': name, 'status': owed['event']}
+            if owed['first_at'] is not None and now - owed['first_at'] >= GIVE_UP_S:
+                self._note(entry, PM_KEY, None, owed['attempt'], GAVE_UP)
+                self._forget_job(name, owed)
+                continue
+            if owed['next_at'] > now:
+                continue
+            text = ('[hub push] job %s %s route:%s attempt:%d\n'
+                    'A hub timed job reported this: hub health shows its state, note and error '
+                    'under jobs.%s. For your information; no reply is needed.'
+                    % (field(name), field(owed['event']), field(PM_KEY), owed['attempt'] + 1,
+                       field(name)))
+            sent = self._deliver(PM_KEY, text)
+            self._last = sent.state
+            owed['attempt'] += 1
+            owed['next_at'] = now + schedule(owed['attempt'])
+            if owed['first_at'] is None:
+                owed['first_at'] = now
+            if sent.state != WRITTEN:
+                self._note(entry, PM_KEY, sent.name, owed['attempt'], sent.state)
+            if sent.ambiguous:
+                self._note(entry, PM_KEY, sent.name, owed['attempt'], AMBIGUOUS)
+            if sent.state == WRITTEN:
+                self._forget_job(name, owed)
+            self._summarize()
+
+    def _forget_job(self, name, owed):
+        """Drop job `name`'s owed push, unless job_event replaced it meanwhile."""
+        with self._jobs_lock:
+            if self._jobs.get(name) is owed:
+                del self._jobs[name]
 
     def _deliver(self, recipient, text):
         """Sent of one deliver: one that raises, or answers a state not known, is UNCERTAIN."""
