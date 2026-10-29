@@ -14,7 +14,10 @@ A Start runs `<kit>/tools/launch.py start --session KEY --account N` as a child,
 checklist prints, at most one per run. What it pushes to the PM (ctx.event, detail `KEY:aN`):
 `restarted` (or `restarted-unchecked` when the account has no usage file, so its limit was not
 checked, as launch.py's own headroom check does), `over-limit`, `not-signed-in` and `gave-up`,
-each once per time the coordinator is down. A child that exits non-zero or does not end in
+each once per time the coordinator is down. The hub keeps one owed push per job and a newer one
+replaces it, so a run pushes at most one event: one word, its detail every `KEY:aN` of that word
+that fits the 64-character field, joined by '.'. Only what that event carries counts as told; the
+rest goes out on a later run. A child that exits non-zero or does not end in
 START_TIMEOUT_S is a failure (health), and counts as a start for the backoff and the cap.
 
 Held, never started: a live session of the entry's stem (any account or recycle, the test
@@ -59,6 +62,10 @@ STOP_LOG = 'stop.log'
 _NOWIN = 0x08000000            # CREATE_NO_WINDOW
 _STOP = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) stopped '([^']*)' .*; successor '([^']*)'")
 _ACCOUNT = re.compile(r'-a(\d+)(?:-r\d+)?\Z')
+STAMP_S = 1                    # stop.log stamps are whole seconds (pmwatch.stop_log_reader's allowance)
+DETAIL_MAX = 64                # kitlib.hubsite.push field(): a header field's length
+_STAMP = '%Y-%m-%d %H:%M:%S'
+_FIRST = ('restarted', 'restarted-unchecked', 'gave-up', 'over-limit', 'not-signed-in')
 
 AccountState = collections.namedtuple('AccountState', 'signed_in usage')
 
@@ -124,7 +131,7 @@ def decide(key, entry, live, record, last_stop, down_runs, accounts, now):
     if any((n or '').startswith(stem) for n in live):   # lookup.running_stem's test
         return _hold('running')
     seen = (record or {}).get('seen_at')
-    if last_stop is not None and (seen is None or last_stop >= seen):
+    if last_stop is not None and (seen is None or last_stop + STAMP_S > seen):
         return _hold('stopped on purpose (stop.log, no successor): left down')
     if down_runs < DOWN_RUNS:
         return _hold('down %d of %d runs needed' % (down_runs, DOWN_RUNS))
@@ -151,10 +158,27 @@ def decide(key, entry, live, record, last_stop, down_runs, accounts, now):
                     'restarted-unchecked' if st.usage is None else 'restarted', st.usage is None)
 
 
+def local_epoch(text, mktime=time.mktime, localtime=time.localtime):
+    """Epoch seconds of a local 'YYYY-MM-DD HH:MM:SS' stamp. In the repeated hour when daylight
+    saving ends the stamp names two instants: the later is taken, so a stop there reads as newer
+    and the coordinator is left down rather than restarted."""
+    st = time.strptime(text, _STAMP)
+    fits = []
+    for dst in (0, 1):
+        try:
+            t = mktime(tuple(st[:8]) + (dst,))
+        except (OverflowError, ValueError):
+            continue
+        lt = localtime(t)
+        if tuple(lt[:6]) == tuple(st[:6]) and lt.tm_isdst == dst:
+            fits.append(t)
+    return max(fits) if fits else mktime(st)
+
+
 def stop_times(text, epoch=None):
     """{name: epoch seconds of its newest stop with no successor} from stop.log's text. `epoch`
-    turns a local 'YYYY-MM-DD HH:MM:SS' into epoch seconds (default time.mktime)."""
-    epoch = epoch or (lambda s: time.mktime(time.strptime(s, '%Y-%m-%d %H:%M:%S')))
+    turns a local 'YYYY-MM-DD HH:MM:SS' into epoch seconds (default local_epoch)."""
+    epoch = epoch or local_epoch
     out = {}
     for line in (text or '').splitlines():
         m = _STOP.match(line)
@@ -230,7 +254,7 @@ class RestartJob(object):
                 self._down.pop(key, None)
                 self._told.pop(key, None)
         stops = accts = None
-        notes, started = [], None
+        notes, started, owed = [], None, []
         for key in sorted(down):
             entry = down[key]
             if any(n.startswith(entry['stem']) for n in live):    # another session of the stem runs
@@ -247,7 +271,8 @@ class RestartJob(object):
                        self._down[key], accts, now)
             if not d.start:
                 notes.append('%s: %s' % (key, d.reason))
-                self._tell(ctx, key, d)
+                if d.word and self._told.get(key) != d.word:
+                    owed.append((key, d))
                 continue
             if ctx.stop.is_set():
                 notes.append('%s: start left for the next run (the hub is closing)' % key)
@@ -259,15 +284,17 @@ class RestartJob(object):
             rec['starts'] = recent_starts(rec, now) + [now]
             self._write_records(records)    # before the start: a crash mid-start still counts
             changed = False
-            self._start(ctx, key, d)
+            self._start(key, d)
+            owed.insert(0, (key, d))
             notes.insert(0, '%s: started on account %s' % (key, d.account))
+        self._tell(ctx, owed)
         if changed:
             self._write_records(records)
         if started is None:
             return jobs.Skip('; '.join(notes) or 'every coordinator is running')
         return '; '.join(notes)
 
-    def _start(self, ctx, key, d):
+    def _start(self, key, d):
         argv = start_argv(self.kit, key, d.account)
         try:
             code, lines = self.child(argv, self.kit)
@@ -278,13 +305,24 @@ class RestartJob(object):
         if code != 0:
             raise StartFailed('launch.py start --session %s --account %s exited %s: %s'
                               % (key, d.account, code, (lines or ['no output'])[-1]))
-        self._told[key] = d.word
-        ctx.event(d.word, '%s:a%s' % (key, d.account))
 
-    def _tell(self, ctx, key, d):
-        if d.word and self._told.get(key) != d.word:
-            self._told[key] = d.word
-            ctx.event(d.word, key if d.account is None else '%s:a%s' % (key, d.account))
+    def _tell(self, ctx, owed):
+        """Push one event for this run's `owed` [(key, Decision)]: the first word by _FIRST,
+        detail every key of that word that fits. Only those are marked told: the hub keeps one
+        owed push per job, so a second event would replace the first."""
+        if not owed:
+            return
+        word = min((d.word for _, d in owed), key=lambda w: _FIRST.index(w) if w in _FIRST else len(_FIRST))
+        detail = None
+        for key, d in owed:
+            if d.word != word:
+                continue
+            item = key if d.account is None else '%s:a%s' % (key, d.account)
+            if detail is not None and len(detail) + 1 + len(item) > DETAIL_MAX:
+                continue
+            detail = item if detail is None else detail + '.' + item
+            self._told[key] = word
+        ctx.event(word, detail)
 
     def _note_sightings(self, sessions, live, records, now):
         """Record seen_at and the account for every coordinator entry with a live session of its

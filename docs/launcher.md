@@ -147,14 +147,21 @@ Tests: tests/launcher/test_pipes.py.
 The hub server's timed job `coord-restart` (`kitlib/hubjobs/coord_restart.py`; docs/action-hub.md "Timed jobs") restarts a stopped coordinator on its last account, every 300 s, the first run 120 s after the hub starts. It looks only at agent entries of sessions.json that the PM checklist lists as not running (`kitlib.pmstart` `down_entries`: a name, `autostart` not false); plain sessions are left alone. A start runs `launch.py start --session KEY --account N` as a windowless child, the line the checklist prints, at most one per run. The last account is the one the job last saw a session of the stem running on (the `-a<N>` of its name), else the entry's `account`. The decision is `coord_restart.decide`, which reads nothing itself. It holds, starting nothing, when:
 
 - any session of the stem runs (the test `start --session` refuses on), so there is never a second copy;
-- stop.log has a line with no successor (`successor '-'`) for a session of the stem that is newer than the last time the job saw it running, or the job never saw it running;
+- stop.log has a line with no successor (`successor '-'`) for a session of the stem that is newer than the last time the job saw it running (a stamp within 1 s before the sighting counts as newer: stamps are whole seconds), or the job never saw it running;
 - it has been seen down on fewer than 2 runs in a row, which gives after-reboot and a hand-off time to start it first;
 - it has had 3 starts in 24 hours (pushed `gave-up`), or the last start was less than 10 minutes (after the first) or 30 minutes (after the second) ago;
 - no account is known, the account is not signed in (`not-signed-in`), or it is at or over `accounts.HEADROOM_LIMIT` (90%) of a window that has not reset (`over-limit`).
 
-A start is pushed as `restarted`, or as `restarted-unchecked` when the account has no usage file, so its limit was not checked (as `check_headroom` does for other launches). A push's detail is `KEY:aN`, and each word goes out once per down spell. A child that exits non-zero or runs past 180 s is a job failure (hub health) and still counts toward the cap. `coord-restart.json` in `launcher.state_dir` keeps `{key: {seen_at, account, starts}}`, so a hub restart keeps the cap. The hub keeps one owed push per job, so a second event in one run can replace the first; hub health's `note` lists every entry's state.
+A start is pushed as `restarted`, or as `restarted-unchecked` when the account has no usage file, so its limit was not checked (as `check_headroom` does for other launches). A push's detail is `KEY:aN`, and each word goes out once per down spell. The hub keeps one owed push per job and a newer one replaces it, so a run pushes at most one event: one word (a start first, then `gave-up`, `over-limit`, `not-signed-in`), its detail every `KEY:aN` of that word that fits the 64-character field, joined by `.`. Only what that event carries counts as sent; the rest goes out on a later run. A child that exits non-zero or runs past 180 s is a job failure (hub health) and still counts toward the cap. `coord-restart.json` in `launcher.state_dir` keeps `{key: {seen_at, account, starts}}`, so a hub restart keeps the cap. Hub health's `note` lists every entry's state.
 
-To keep a coordinator down for good, stop it with `launch.py stop --name <name>` and no `--successor` (the PM's step on `ready to stop:`), or set `"autostart": false` on its entry. A window closed by hand writes no stop.log line, so it reads as a crash and is restarted, within the cap. The PM checklist line and after-reboot are unchanged.
+To keep a coordinator down for good, stop it with `launch.py stop --name <name>` and no `--successor` (the PM's step on `ready to stop:`), or set `"autostart": false` on its entry. The PM checklist line and after-reboot are unchanged.
+
+Known limits:
+
+- A window closed by hand writes no stop.log line, so it reads as a crash and is restarted, within the cap.
+- An event still owed when the next run pushes is replaced: the PM gets only the newer one (hub health's `note` still has both).
+- The last account prefers the account the job last saw running over sessions.json `account`, so after a hand-off to another account a start goes to the old account until the job sees the new session run.
+- A stop.log stamp in the repeated hour when daylight saving ends is read as the later of its two instants, so such a stop counts as deliberate rather than a crash.
 
 ## PM relaunch
 
