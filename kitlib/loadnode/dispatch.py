@@ -105,7 +105,10 @@ def _interrupted(nj, say):
     except (job.JobError, OSError) as e:
         asked = 'not stopped: %s' % e
     say('Ctrl+C: job %s on %s %s' % (nj.job, nj.node.name, asked))
-    say('  follow it: %s follow %s %s' % (nj.tool, nj.node.name, nj.job))
+    # the follow line names the checkout and the globs: a bare follow of an ended job cleans it
+    # with its artifacts never fetched
+    for line in nj.follow_lines():
+        say(line)
     return EXIT_INTERRUPTED
 
 

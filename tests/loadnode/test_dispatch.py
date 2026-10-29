@@ -233,6 +233,19 @@ class RealRun(RouterCase):
         self.assertIn('Ctrl+C: job %s on box1 asked to stop' % stops[0], self.text())
         self.assertIn('follow box1 %s' % stops[0], self.text())
 
+    def test_the_ctrl_c_follow_line_names_the_checkout_and_the_artifacts(self):
+        # a bare follow of a job that ended cleans it with its artifacts never fetched
+        def follow(nj):
+            raise KeyboardInterrupt
+        self.main_lock['cpu_free'] = 0
+        with self.steps(follow, lambda nj: {'ok': True, 'ended': True}):
+            self.assertEqual(self.route(self.router(artifacts=['out/*.txt', 'a.bin'])), 130)
+        line = [x for x in self.said if 'follow it:' in x]
+        self.assertEqual(len(line), 1, self.said)
+        self.assertIn(' -C "', line[0])
+        self.assertIn('--artifact "out/*.txt" --artifact "a.bin"', line[0])
+        self.assertIn('node.py" stop box1 j-', self.text())
+
     def test_a_second_ctrl_c_after_the_start_says_how_to_follow_not_that_nothing_started(self):
         def follow(nj):
             raise KeyboardInterrupt
@@ -296,6 +309,39 @@ class NoStartReply(RouterCase):
     def test_a_named_node_is_the_after_start_code_not_10(self):
         self.assertEqual(self.run_it('box1'), job.EXIT_AFTER_START)
         self.assertIn('node.py" follow box1 j-', self.text())
+
+
+class StartRefused(RouterCase):
+    """The real NodeJob.run and start, the push stood in: the node replies to the start with a
+    refusal that is not busy. Nothing started there, so auto runs it here and a named node is 10."""
+    REPLIES = (b'{"protocol":1,"ok":false,"error":"refs/node/j-x is not the commit asked for"}',
+               b'{"protocol":1,"ok":false,"error":"refused: not a command this node serves"}')
+
+    def run_it(self, where, reply):
+        class Link(object):
+            def call(self, verb, payload, timeout_s=None):
+                return 1, reply + b'\n', b''
+        r = self.router(where)
+        r.open_link = lambda n: contextlib.nullcontext(Link())
+        self.main_lock['cpu_free'] = 0
+        with mock.patch.object(job.NodeJob, 'run', REAL_RUN), \
+                mock.patch.object(job.NodeJob, 'push', lambda nj: None):
+            return self.route(r)
+
+    def test_under_auto_a_refusal_runs_it_here(self):
+        for reply in self.REPLIES:
+            with self.subTest(reply=reply):
+                self.said[:] = []
+                self.assertIsNone(self.run_it('auto', reply))
+                self.assertIn('box1 refused the job', self.text())
+                self.assertIn('running here instead', self.text())
+
+    def test_a_named_node_that_refuses_is_10(self):
+        for reply in self.REPLIES:
+            with self.subTest(reply=reply):
+                self.said[:] = []
+                self.assertEqual(self.run_it('box1', reply), job.EXIT_NODE)
+                self.assertNotIn('running here instead', self.text())
 
 
 class Named(RouterCase):
