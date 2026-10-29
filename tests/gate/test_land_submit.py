@@ -17,6 +17,7 @@ import unittest
 from unittest import mock
 
 from kitlib import gate as G
+from kitlib.allowrules import rules
 from kitlib.gate import pin, result, submit, verdicts
 from kitlib.git import repo
 from kitlib.lock import detach as lockdetach
@@ -79,6 +80,19 @@ class SubmitCase(LandCase):
         rec, why = result.read(self.repo.root, branch, 'land')
         self.assertIsNotNone(rec, why)
         return rec
+
+    REVIEW = {'verdict': 'LAND', 'risk': 'High', 'reviewer': 'pm-kit:reviewer',
+              'reviewer_model': 'opus', 'reviewer_id': 'agent-r1',
+              'author': 'Kit Test / strong-worker', 'session': 'coord-1', 'records': []}
+
+    def common(self):
+        common, why = repo.common_dir(self.repo.root)
+        self.assertIsNotNone(common, why)
+        return common
+
+    def queue(self, branch, tip, **kw):
+        verdicts.add(self.common(), dict(self.REVIEW, branch=branch, tip=tip,
+                                         range='%s..%s' % (self.main[:10], tip), **kw))
 
 
 class TheLine(SubmitCase):
@@ -330,18 +344,6 @@ class OldFolder(SubmitCase):
 class ReviewLines(SubmitCase):
     """A REVIEW line, before the SUBMITTED line, for each branch with a verdict queued at the tip
     submitted (docs/gate.md "Submitting a landing"): the submission shows the review on record."""
-    REVIEW = {'verdict': 'LAND', 'risk': 'High', 'reviewer': 'pm-kit:reviewer',
-              'reviewer_model': 'opus', 'reviewer_id': 'agent-r1',
-              'author': 'Kit Test / strong-worker', 'session': 'coord-1', 'records': []}
-
-    def common(self):
-        common, why = repo.common_dir(self.repo.root)
-        self.assertIsNotNone(common, why)
-        return common
-
-    def queue(self, branch, tip):
-        verdicts.add(self.common(), dict(self.REVIEW, branch=branch, tip=tip,
-                                         range='%s..%s' % (self.main[:10], tip)))
 
     def test_a_verdict_queued_at_the_tip_is_said_before_the_submitted_line(self):
         _, tip = self.branch('feature', {'a.py': 'a\n'})
@@ -380,6 +382,168 @@ class ReviewLines(SubmitCase):
         self.assertEqual(out.code, G.OK, out.lines)
         self.assertEqual(len(out.lines), 1, out.lines)
         self.assertTrue(out.lines[0].startswith('SUBMITTED '), out.lines)
+
+
+class NamedReview(SubmitCase):
+    """A submission names the review each branch lands on, --reviewed-by <reviewer id> before
+    --submit (submit.named_review; docs/gate.md "Submitting a landing"), so the review shows on
+    the command line the host's permission check reads. Missing or miscounted: USAGE with an
+    Instead: line, the command in the land permission rule's form with the queued ids; a wrong id,
+    or no usable verdict at the tip: REFUSED, no Instead: line. Nothing written either way."""
+    AGAIN = staticmethod(lambda ids: 'again ' + ' '.join(ids))
+
+    def named(self, branches, tips, given, **kw):
+        return self.submit(branches, tips, reviewed_by=given, again=self.AGAIN, **kw)
+
+    def assert_nothing_written(self, out, detach, branches):
+        self.assertEqual(detach.calls, [], out.lines)
+        for b in branches:
+            rec, why = result.read(self.repo.root, b, 'land')
+            self.assertIsNone(rec, (b, rec, why))
+
+    def test_the_queued_reviewer_named_submits(self):
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        self.queue(BRANCH, tip)
+        for given in ('AGENT-R1', ' agent-r1 '):        # case and spaces aside
+            self.assertIsNone(submit.named_review(self.repo.root, [BRANCH], [tip], [given]))
+        out, detach = self.named([BRANCH], [tip], ['agent-r1'])
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertTrue(out.lines[-1].startswith('SUBMITTED '), out.lines)
+        self.assertEqual(len(detach.calls), 1)
+        self.assertNotIn(submit.REVIEWED_BY, detach.calls[0][0])    # not the detached child's
+
+    def test_any_id_the_entry_lists_names_it(self):
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        self.queue(BRANCH, tip, reviewer_id='agent-r1 / agent-r2')
+        out, _ = self.named([BRANCH], [tip], ['agent-r2'])
+        self.assertEqual(out.code, G.OK, out.lines)
+
+    def test_no_reviewer_named_is_usage_with_the_command_to_run(self):
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        self.queue(BRANCH, tip, reviewer_id='agent-r1 / agent-r2')
+        out, detach = self.named([BRANCH], [tip], [])
+        self.assertEqual(out.code, G.USAGE, out.lines)
+        self.assertTrue(out.lines[0].startswith('USAGE: a submission names the review each '
+                                                'branch lands on: one --reviewed-by'), out.lines)
+        self.assertIn('(0 given for 1 branch)', out.lines[0])
+        self.assertEqual(out.lines[1:], ['Instead: again agent-r1'])
+        self.assert_nothing_written(out, detach, [BRANCH])
+
+    def test_a_wrong_id_is_refused_without_a_command(self):
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        self.queue(BRANCH, tip)
+        out, detach = self.named([BRANCH], [tip], ['agent-r9'])
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+        self.assertEqual(out.lines, [
+            'REFUSED: --reviewed-by agent-r9 for kit/feature is not the reviewer of its verdict '
+            'queued at %s: LAND by pm-kit:reviewer/opus (agent-r1); name the review that verdict '
+            'records, or queue the one you mean (tools/verdict.py add); nothing was changed'
+            % tip])
+        self.assert_nothing_written(out, detach, [BRANCH])
+
+    def test_no_usable_verdict_at_the_tip_is_refused(self):
+        wt, old = self.branch('feature', {'a.py': 'a\n'})
+        out, detach = self.named([BRANCH], [old], ['agent-r1'])
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+        self.assertIn('kit/feature lands only with a verdict queued at its tip, and none is '
+                      'queued for it', out.lines[0])
+        self.assert_nothing_written(out, detach, [BRANCH])
+        out, detach = self.named([BRANCH], [old], [])     # no Instead: with nothing queued
+        self.assertEqual((out.code, len(out.lines)), (G.REFUSED, 1), out.lines)
+        self.queue(BRANCH, old)
+        self.repo.write('b.py', 'b\n', root=wt)
+        tip = self.repo.commit('more', 'b.py', cwd=wt)
+        out, detach = self.named([BRANCH], [tip], ['agent-r1'])
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+        self.assertIn('the verdict of kit/feature was given at %s, and the submission names %s'
+                      % (old, tip), out.lines[0])
+        self.assert_nothing_written(out, detach, [BRANCH])
+        self.queue(BRANCH, tip)
+        self.assertTrue(verdicts.mark_failed(self.common(), BRANCH, 'red gate'))
+        out, detach = self.named([BRANCH], [tip], ['agent-r1'])
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+        self.assertIn('the verdict of kit/feature is marked failed (red gate)', out.lines[0])
+        self.assert_nothing_written(out, detach, [BRANCH])
+
+    def test_a_carried_verdict_is_named_at_the_head(self):
+        wt, reviewed = self.branch('feature', {'a.py': 'a\n'})
+        self.queue(BRANCH, reviewed)
+        self.repo.write('m.py', 'm\n')
+        self.main = self.repo.commit('main edit', 'm.py')
+        self.repo.git('push', '-q', 'origin', 'main')
+        self.repo.git('merge', '-q', '--no-edit', 'main', cwd=wt)
+        tip = self.repo.head(wt)
+        verdicts.carry(self.common(), self.repo.root, BRANCH, self.main)
+        out, _ = self.named([BRANCH], [tip], ['agent-r1'])
+        self.assertEqual(out.code, G.OK, out.lines)
+
+    def test_a_batch_names_one_reviewer_per_branch_in_order(self):
+        _, ta = self.branch('a', {'a.py': 'a\n'})
+        _, tb = self.branch('b', {'b.py': 'b\n'})
+        self.queue('kit/a', ta)
+        self.queue('kit/b', tb, reviewer_id='agent-r2')
+        out, detach = self.named(['kit/a', 'kit/b'], [ta, tb], ['agent-r1'])
+        self.assertEqual(out.code, G.USAGE, out.lines)
+        self.assertIn('(1 given for 2 branches)', out.lines[0])
+        self.assertEqual(out.lines[1:], ['Instead: again agent-r1 agent-r2'])
+        self.assert_nothing_written(out, detach, ['kit/a', 'kit/b'])
+        out, detach = self.named(['kit/a', 'kit/b'], [ta, tb], ['agent-r2', 'agent-r1'])
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+        self.assertIn('--reviewed-by agent-r2 for kit/a is not the reviewer', out.lines[0])
+        self.assert_nothing_written(out, detach, ['kit/a', 'kit/b'])
+        out, _ = self.named(['kit/a', 'kit/b'], [ta, tb], ['agent-r1', 'agent-r2'])
+        self.assertEqual(out.code, G.OK, out.lines)
+
+    def test_the_instead_command_is_one_the_land_permission_rule_allows(self):
+        """submit.again_line in the rule's form: forward slashes (the rules deny a backslash),
+        -C first, --submit last; allowed by the rule lines tools/allow_rules.py prints."""
+        tip = 'a' * 40
+        kit, root = r'Z:\pm-kit\plugin\0123456789ab', 'Y:/repo'
+        line = submit.again_line('land.py', ['-C', root, BRANCH, '--expect-tip', tip],
+                                 ['aad31bc6c5e0a88a3'], kit=kit)
+        self.assertEqual(line, 'python Z:/pm-kit/plugin/0123456789ab/tools/land.py -C Y:/repo '
+                               'kit/feature --expect-tip %s --reviewed-by aad31bc6c5e0a88a3 '
+                               '--submit' % tip)
+        lines = {'allow': rules.allow_lines('Z:/pm-kit/plugin/0123456789ab', root),
+                 'deny': rules.deny_lines('Z:/pm-kit/plugin/0123456789ab', root)}
+        self.assertEqual(rules.decide(lines, 'PowerShell', line), 'allow')
+
+    def run_tool(self, *args):
+        return subprocess.run([sys.executable] + list(args), capture_output=True, text=True,
+                              timeout=60, stdin=subprocess.DEVNULL, cwd=KIT_ROOT,
+                              env=dict(os.environ, KIT_PINNED='live'))
+
+    def test_the_tools_print_the_command_with_the_queued_reviewer(self):
+        """tools/land.py and tools/gate.py land: a bare --submit exits 2 with the Instead: line,
+        the caller's own submission with the queued reviewer named; nothing written."""
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        self.queue(BRANCH, tip)
+        root = os.path.abspath(self.repo.root).replace('\\', '/')
+        kit = KIT_ROOT.replace('\\', '/')
+        for tool, argv in (('land.py', [LAND_PY, '-C', self.repo.root, BRANCH]),
+                           ('gate.py', [GATE_PY, 'land', BRANCH, '-C', self.repo.root])):
+            with self.subTest(tool=tool):
+                r = self.run_tool(*(argv + ['--expect-tip', tip, '--full', '--submit']))
+                self.assertEqual(r.returncode, G.USAGE, (r.stdout, r.stderr))
+                lines = r.stdout.splitlines()
+                self.assertTrue(lines[0].startswith('USAGE: a submission names the review'),
+                                lines)
+                head = ('-C %s %s' % (root, BRANCH) if tool == 'land.py'
+                        else 'land %s -C %s' % (BRANCH, root))
+                self.assertEqual(lines[1:], [
+                    'Instead: python %s/tools/%s %s --expect-tip %s --full --reviewed-by '
+                    'agent-r1 --submit' % (kit, tool, head, tip)])
+                rec, why = result.read(self.repo.root, BRANCH, 'land')
+                self.assertIsNone(rec, (rec, why))
+
+    def test_the_tools_take_reviewed_by_only_with_submit(self):
+        tip = 'b' * 40
+        for argv in ([LAND_PY, 'kit/x', '--expect-tip', tip, '--reviewed-by', 'r'],
+                     [GATE_PY, 'land', 'kit/x', '--expect-tip', tip, '--reviewed-by', 'r']):
+            with self.subTest(argv=argv[0]):
+                r = self.run_tool(*argv)
+                self.assertEqual(r.returncode, G.USAGE, (r.stdout, r.stderr))
+                self.assertIn('USAGE: --reviewed-by goes with --submit', r.stderr)
 
 
 class TheDetachedLanding(SubmitCase):
@@ -957,18 +1121,23 @@ class RealCarrier(unittest.TestCase):
 @windows_only('the detached start is Windows only')
 class RealDetach(SubmitCase):
     """tools/land.py --submit and tools/gate.py land --submit, run for real on a landing from a
-    linked worktree: each prints its one SUBMITTED line and exits 0, and the detached landing it
+    linked worktree, naming its queued reviewer: each prints its REVIEW line, then its SUBMITTED
+    line, and exits 0, and the detached landing it
     started refuses (not a main checkout) before it books anything, finishing the record."""
 
     def run_submit(self, argv):
         wt, tip = self.branch('feature', {'a.py': 'a\n'})
+        self.queue(BRANCH, tip)
         r = subprocess.run([sys.executable] + argv + [BRANCH, '-C', wt, '--expect-tip', tip,
-                                                      '--submit'],
+                                                      '--reviewed-by', 'agent-r1', '--submit'],
                            capture_output=True, text=True, timeout=HANG_S, env=self.env,
                            stdin=subprocess.DEVNULL, cwd=KIT_ROOT)
         self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
         lines = r.stdout.splitlines()
-        self.assertEqual(len(lines), 1, r.stdout)
+        self.assertEqual(len(lines), 2, r.stdout)
+        self.assertEqual(lines[0], 'REVIEW kit/feature %s: LAND by pm-kit:reviewer/opus '
+                                   '(agent-r1)' % tip)
+        lines = lines[1:]
         self.assertTrue(lines[0].startswith('SUBMITTED kit/feature tip %s wait: python ' % tip),
                         lines)
         self.assertTrue(lines[0].endswith(' wait-result kit/feature --tip %s --kind land -C %s'
