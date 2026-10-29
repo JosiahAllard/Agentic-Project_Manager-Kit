@@ -4,8 +4,9 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
-from kitlib import kitroot
+from kitlib import kitroot, platform
 from tests import gitfixture
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -24,6 +25,24 @@ class Root(unittest.TestCase):
         self.addCleanup(os.chdir, before)
         os.chdir(os.path.dirname(REPO))
         self.assertTrue(os.path.samefile(kitroot.root(), REPO), kitroot.root())
+
+
+class Command(unittest.TestCase):
+    KIT = 'C:/some kit'
+
+    def run_on(self, name, *args):
+        with mock.patch.object(platform, 'NAME', name):
+            return kitroot.command('gate', *args, kit=self.KIT)
+
+    def test_windows_names_python(self):
+        self.assertEqual(self.run_on('windows'), 'python "C:/some kit/tools/gate.py"')
+        self.assertEqual(self.run_on('windows', 'D:\\wt'),
+                         'python "C:/some kit/tools/gate.py" -C "D:/wt"')
+
+    def test_linux_names_python3(self):
+        self.assertEqual(self.run_on('linux'), 'python3 "C:/some kit/tools/gate.py"')
+        self.assertEqual(self.run_on('linux', 'D:\\wt'),
+                         'python3 "C:/some kit/tools/gate.py" -C "D:/wt"')
 
 
 class LockTool(unittest.TestCase):
