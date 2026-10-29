@@ -17,7 +17,8 @@ ROOT = '(root)'              # a path no module holds: the repository's own file
 NAME_RE = r'[A-Za-z0-9][A-Za-z0-9._-]*'
 KINDS = ('build', 'source', 'data', 'tree')
 EDGE_KINDS = ('build', 'data', 'tree')
-DETECTORS = ('csproj', 'paths')
+DETECTORS = ('csproj', 'paths', 'gradle', 'python', 'java-imports')
+JAVA_IMPORTS = 'java-imports'      # the detector a ratchet drives itself (its files and imports)
 DEFAULT_TEST_SOURCES = ['*/src/test/*', '*Tests/*', '*.Tests/*', 'tests/*', '*/tests/*',
                         '*/test/*', 'test/*', '*/test_*.py', 'test_*.py', '*_test.py', '*Test.java',
                         '*Tests.java', '*Test.kt', '*Tests.cs', '*.test.js', '*.test.ts']
@@ -47,13 +48,26 @@ RATCHET = Obj({
     'goal': Field(Int(0), None, 'the floor goal'),
     'goal_reason': Field(Str(), None, 'the owner\'s reason for a goal above 0'),
     'record': Field(Str(), None, 'the record that drives the count toward the goal'),
-}, required=('id', 'from', 'to', 'goal'), what='{id, from, to, kinds, detector, goal, goal_reason, record}')
+    'files': Field(ListOf(Str(), nonempty=True), None,
+                   'java-imports only: fnmatch globs (* crosses /) naming the files it reads'),
+    'imports': Field(ListOf(Str(), nonempty=True), None,
+                     'java-imports only: the package prefixes an import line names'),
+}, required=('id', 'from', 'to', 'goal'),
+    what='{id, from, to, kinds, detector, goal, goal_reason, record, files, imports}')
+
+RAISE = Obj({
+    'ratchet': Field(Str(pattern=NAME_RE, what='a ratchet id'), None, 'the ratchet raised'),
+    'ceiling': Field(Int(0), None, 'the highest ceiling the owner allows it'),
+    'why': Field(Str(), None, "the owner's reason"),
+    'approval': Field(Str(), None, 'the owner approval (A-NNN) that allowed it'),
+}, required=('ratchet', 'ceiling', 'why'), what='{ratchet, ceiling, why, approval}')
 
 MAP = Obj({
     'modules': Field(MapOf(MODULE, 'module'), None, 'module name -> its folders'),
     'messaging': Field(ListOf(Name), None, 'the messaging module(s): a crossing into one is always allowed'),
     'edges': Field(ListOf(EDGE), None, 'the allowed edges'),
     'ratchets': Field(ListOf(RATCHET), None, 'the counted couplings'),
+    'raises': Field(ListOf(RAISE), None, "ceilings the owner allows above the base's"),
     'test_sources': Field(ListOf(Str(), nonempty=True), None, 'files the paths detector reads'),
     'root_markers': Field(ListOf(Str(), nonempty=True), None, 'names a root climb looks for, added to the defaults'),
 }, required=('modules',), what='module map')
@@ -84,6 +98,7 @@ class ModuleMap(object):
         self.messaging = list(data.get('messaging') or [])
         self.edges = list(data.get('edges') or [])
         self.ratchets = list(data.get('ratchets') or [])
+        self.raises = list(data.get('raises') or [])
         self.test_sources = list(data.get('test_sources') or DEFAULT_TEST_SOURCES)
         self.root_markers = list(data.get('root_markers') or [])
         self._cache = {}
@@ -128,6 +143,31 @@ class ModuleMap(object):
                     errs.append('ratchet %s: %s names %s, which is not a module' % (r['id'], end, r[end]))
             if r['goal'] > 0 and not (r.get('goal_reason') or '').strip():
                 errs.append('ratchet %s: a goal above 0 needs the owner\'s goal_reason' % r['id'])
+            self._validate_detector(r, errs)
+        raised = set()
+        for x in self.raises:
+            if x['ratchet'] not in seen:
+                errs.append('raises names %s, which no ratchet has' % x['ratchet'])
+            elif x['ratchet'] in raised:
+                errs.append('ratchet %s is raised twice' % x['ratchet'])
+            raised.add(x['ratchet'])
+
+    @staticmethod
+    def _validate_detector(r, errs):
+        if r.get('detector') == JAVA_IMPORTS:
+            for key in ('files', 'imports'):
+                if not r.get(key):
+                    errs.append('ratchet %s: a java-imports ratchet needs "%s"' % (r['id'], key))
+            if r.get('kinds'):
+                errs.append('ratchet %s: a java-imports ratchet counts build crossings: drop '
+                            '"kinds"' % r['id'])
+            return
+        for key in ('files', 'imports'):
+            if key in r:
+                errs.append('ratchet %s: "%s" is for a java-imports ratchet only' % (r['id'], key))
+        if r['from'] == r['to']:
+            errs.append('ratchet %s joins %s to itself (only a java-imports ratchet may)'
+                        % (r['id'], r['from']))
 
     def module_of(self, path):
         path = _norm(path)
@@ -161,8 +201,15 @@ class ModuleMap(object):
         return next((e for e in self.edges
                      if e['from'] == src and e['to'] == dst and e['kind'] == kind), None)
 
+    def raise_for(self, ratchet_id):
+        """The owner's raise entry for `ratchet_id`, or None."""
+        return next((x for x in self.raises if x['ratchet'] == ratchet_id), None)
+
     def ratchet_for(self, crossing):
-        """The first ratchet that counts `crossing`, or None."""
+        """The ratchet that counts `crossing`, or None: the one it names (java-imports), else the
+        first whose ends and filters match."""
+        if getattr(crossing, 'ratchet', None):
+            return next((r for r in self.ratchets if r['id'] == crossing.ratchet), None)
         for r in self.ratchets:
             if r['from'] != crossing.src or r['to'] != crossing.dst:
                 continue
@@ -198,8 +245,14 @@ def load_ceilings(path):
     if path is None:
         return {}
     data = _read(path, 'ceilings file')
+    return ceilings_of(data, path)
+
+
+def ceilings_of(data, where):
+    """`{ratchet id: ceiling}` from parsed ceilings `data`, note keys dropped. MapError when the
+    shape is wrong."""
     errs = []
-    CEILINGS.check(data, path, errs)
+    CEILINGS.check(data, where, errs)
     if errs:
         raise MapError('; '.join(errs))
-    return {k: v for k, v in data.items() if not k.startswith('_') and k != 'comment'}
+    return {k: v for k, v in data.items() if not is_note(k)}

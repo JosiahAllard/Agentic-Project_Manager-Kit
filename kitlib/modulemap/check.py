@@ -3,7 +3,8 @@
 The check scans the whole tree each run, so it keeps no state and needs no diff. Each crossing a
 detector reports is, in this order: into a messaging module (allowed), along an allowed edge of its
 kind (allowed), counted by a ratchet, or refused. A ratchet whose count is over its ceiling fails
-too; one under its ceiling gets a "lower the ceiling" line.
+too; one under its ceiling gets a "lower the ceiling" line. A ceiling above the base's is refused
+unless the owner's map raises it (ratchet.py).
 """
 import collections
 import json
@@ -11,8 +12,9 @@ import os
 import re
 
 from kitlib.git import cmd as gitcmd
+from kitlib.git import refs as gitrefs
 
-from . import detectors
+from . import detectors, ratchet
 from .load import ROOT, MapError, load_ceilings, load_map
 
 SECTION = 'modules'
@@ -84,7 +86,9 @@ def sort_crossings(mm, crossings):
     messaging, allowed, refused = [], [], []
     ratcheted = collections.OrderedDict((r['id'], []) for r in mm.ratchets)
     for c in crossings:
-        if c.dst in mm.messaging:
+        if c.ratchet:                       # a ratchet's own detector (java-imports) counts it
+            ratcheted[c.ratchet].append(c)
+        elif c.dst in mm.messaging:
             messaging.append(c)
         elif mm.edge_for(c.src, c.dst, c.kind):
             allowed.append(c)
@@ -101,8 +105,9 @@ def where(c):
     return '%s:%d  (%s: %s)' % (c.path, c.line, c.detector, c.target)
 
 
-def check(mm, ceilings, files, read):
-    """Outcome of the edge check: 0 every crossing allowed or under its ratchet's ceiling, 1 not."""
+def check(mm, ceilings, files, read, base=None):
+    """Outcome of the edge check: 0 every crossing allowed or under its ratchet's ceiling and
+    every ceiling at or under the base's (`base`, a ratchet.Base; None: not compared), 1 not."""
     s = sort_crossings(mm, scan(mm, files, read))
     lines, failed = [], False
     total = len(s.messaging) + len(s.allowed) + sum(map(len, s.ratcheted.values())) + len(s.refused)
@@ -129,6 +134,10 @@ def check(mm, ceilings, files, read):
         if len(got) > ceiling:
             for c in got:
                 lines.append('  %s' % where(c))
+    if base is not None:
+        raised, more = ratchet.compare(mm, ceilings, base)
+        failed = failed or raised
+        lines.extend(more)
     lines.append('module_map: %s' % ('FAIL' if failed else 'OK'))
     return Outcome(FAIL if failed else OK, lines)
 
@@ -171,15 +180,53 @@ def baseline(mm, ceilings, files, read):
     return Outcome(OK, lines)
 
 
-def run(root, cfg, mode, map_path=None, ceilings_path=None, files=None):
-    """`mode` 'check' or 'baseline'. MapError when the map, the ceilings file or the tree listing
-    cannot be used. A baseline needs no owner path (it writes nothing)."""
+def _rel(root, path):
+    """`path` relative to `root`, posix, or None when it is outside it (another drive too)."""
+    if not path:
+        return None
+    try:
+        rel = os.path.relpath(os.path.abspath(path), os.path.abspath(root)).replace(os.sep, '/')
+    except ValueError:
+        return None
+    return None if rel == '..' or rel.startswith('../') or os.path.isabs(rel) else rel
+
+
+def base_of(root, cfg, rev, map_path, ceilings_path):
+    """`(ratchet.Base or None, notes)` for `rev`; with no `rev`, the default base (docs/gate.md
+    "Default base"), and none (a note) when that does not resolve. MapError when a given `rev`
+    or the git reads fail."""
+    notes = []
+    if not rev:
+        rev, note = gitrefs.default_base(root, cfg.remote, cfg.main_branch)
+        if note:
+            notes.append('note: %s' % note)
+        sha, why = gitrefs.resolve(rev, root)
+        if not sha:
+            return None, notes + ['note: no base (%s): ceilings are not compared; pass --base'
+                                  % why]
+    map_rel, ceilings_rel = _rel(root, map_path), _rel(root, ceilings_path)
+    for what, path, rel in (('map', map_path, map_rel), ('ceilings file', ceilings_path,
+                                                          ceilings_rel)):
+        if path and rel is None:
+            return None, notes + ['note: the %s is outside the checkout: ceilings are not '
+                                  'compared with the base' % what]
+    base, more = ratchet.read_base(root, rev, map_rel, ceilings_rel)
+    return base, notes + more
+
+
+def run(root, cfg, mode, map_path=None, ceilings_path=None, files=None, base_rev=None):
+    """`mode` 'check' or 'baseline'. MapError when the map, the ceilings file, the base or the
+    tree listing cannot be used. A baseline needs no owner path (it writes nothing) and reads no
+    base."""
     map_path, ceilings_path, notes = map_paths(root, cfg, map_path, ceilings_path,
                                                require_owner=(mode == 'check'))
     mm = load_map(map_path)
     ceilings = load_ceilings(ceilings_path)
     if files is None:
         files = tree_files(root)
-    fn = check if mode == 'check' else baseline
-    out = fn(mm, ceilings, files, reader(root))
+    if mode == 'check':
+        base, more = base_of(root, cfg, base_rev, map_path, ceilings_path)
+        out = check(mm, ceilings, files, reader(root), base)
+        return Outcome(out.code, notes + more + out.lines)
+    out = baseline(mm, ceilings, files, reader(root))
     return Outcome(out.code, notes + out.lines)
