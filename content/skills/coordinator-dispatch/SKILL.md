@@ -34,7 +34,7 @@ Roles are named bare here; your host's instructions say how a role name becomes 
 ## The brief
 
 - Holds: role; the owner's decisions where they matter, as a paraphrase, no ruling id; verified facts; **exact files and sections
-  to read**; scope + files *not* theirs + their owners; shared resources assigned; test gate (final: the gate `<kit>/docs/gate.md` "The final gate" names, on the exact tip);
+  to read**; scope + files *not* theirs + their owners; shared resources assigned; test gate (final: the gate `<kit>/docs/gate.md` "The final gate" names (when unsure, `--full`), on the exact tip);
   report wanted; no land, merge or push; for code work the entry files and symbols you know
   (path:Symbol) - a brief with no paths costs the worker about 35 calls. Brief names doc topics
   to look up, never a pasted rule. Where the repo has a brief template (`--find brief`), follow it.
