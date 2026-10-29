@@ -271,6 +271,11 @@ SECTIONS = {
         }, what='{prefix, bound_s, session}'), None,
             'the gate-time check of tools/maint_lint.py (docs/maint-lint.md "Gate time"): bound_s (1 to 86400, default 900) the seconds a gate step\'s median time over full gates may reach; prefix the id prefix of the record a plain run files for a step over it (unset: none is filed); session the session that record carries; unset: the check runs at 900 s and files nothing'),
     },
+    # tools/module_map.py (kitlib.modulemap, docs/module-map.md).
+    'modules': {
+        'map': Field(RelPath(), None, 'the module map file: modules, messaging, allowed edges and ratchets (docs/module-map.md); --check refuses to run unless "owner".paths locks it; unset: no module map'),
+        'ceilings': Field(RelPath(), None, 'the ratchet ceilings file, {ratchet id: ceiling} (docs/module-map.md "Ratchets"); unset: every ceiling is 0'),
+    },
     'pieces': {},
     'preflight': {
         'engines': Field(Strs, [], 'process-name prefixes listed as running engines'),
@@ -327,7 +332,8 @@ SECTIONS = {
 
 # A section that may be a string naming a repo-relative JSON file. guard never: a file beside
 # .kit.json would let a change to it widen what agent sessions may write past the kit-json rule.
-FILE_OK = frozenset(SECTIONS) - {'repo', 'owner', 'hook', 'guard'}
+# modules never: a file beside .kit.json would let an agent repoint the owner's module map.
+FILE_OK = frozenset(SECTIONS) - {'repo', 'owner', 'hook', 'guard', 'modules'}
 # Sections whose content is a table the kit does not shape-check (an object of anything).
 OPAQUE = frozenset(('forbidden', 'pieces'))
 # Sections that are a map of one entry type: role name -> permissions, over policy.ROLE_DEFAULTS.
