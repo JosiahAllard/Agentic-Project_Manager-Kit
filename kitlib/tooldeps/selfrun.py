@@ -74,7 +74,6 @@ import json
 import os
 import re
 import shutil
-import stat
 import subprocess
 import sys
 import threading
@@ -82,6 +81,7 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from kitlib.config import user as kuser
+from kitlib.fs.rmtree import plain_dir as _plain_dir, rmtree_force
 from kitlib.proc import spawn
 from kitlib.pytests import runner as unit_runner
 from kitlib.tooldeps import pool as worker_pool
@@ -212,30 +212,6 @@ def git_direct_env(base_env):
     return env, 'git: %s first on PATH, not the %s launcher' % (direct, found)
 
 
-_HAS_ONEXC = sys.version_info >= (3, 12)       # shutil.rmtree's onexc; before it, onerror
-
-
-def rmtree_force(path, ignore_errors=False):
-    """Remove the folder `path` the way shutil.rmtree does, but clear the read-only bit of what
-    refuses to go and retry it once: git writes its objects read-only, and on Windows rmtree stops
-    at the first one, so a throwaway repository would stay in TEMP. Python 3.12+ takes the handler
-    as onexc, older as onerror. `ignore_errors` leaves what still stays; otherwise it raises.
-    Only `path` and what is under it is touched; a missing `path` is not an error."""
-    def clear(func, target, _exc):
-        try:
-            os.chmod(target, stat.S_IWRITE)
-            func(target)
-        except OSError:
-            if not ignore_errors:
-                raise
-    if not os.path.lexists(path):
-        return
-    if _HAS_ONEXC:
-        shutil.rmtree(path, onexc=clear)
-    else:
-        shutil.rmtree(path, onerror=clear)
-
-
 def work_parent(root):
     """The folder a run's folder is made in: the kit's temp folder for the checkout `root`
     (kitlib.config.user.work_temp, the rule the gate logs follow too), so a unit's temp files,
@@ -248,7 +224,6 @@ def work_parent(root):
 RUN_PREFIX = 'kit-tests-'
 DIRECT_PREFIX = 'kit-direct-'
 STALE_AFTER = 24 * 3600
-_REPARSE = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)
 
 
 def make_work(root):
@@ -257,17 +232,6 @@ def make_work(root):
     (kuser.make_temp)."""
     work, note = kuser.make_temp(root, RUN_PREFIX)
     return work, note and 'the run folder %s' % note
-
-
-def _plain_dir(path):
-    """Whether `path` is a folder itself: not a link, junction or other reparse point."""
-    try:
-        st = os.lstat(path)
-    except OSError:
-        return None
-    if not stat.S_ISDIR(st.st_mode) or getattr(st, 'st_file_attributes', 0) & _REPARSE:
-        return None
-    return st
 
 
 def prune_stale(parent, now=None, after=STALE_AFTER):

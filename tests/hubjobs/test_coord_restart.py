@@ -25,10 +25,10 @@ def iso(ts):
     return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).isoformat()
 
 
-def usage(pct, resets_in=3600):
-    return {'updated_at': iso(NOW - 60),
+def usage(pct, resets_in=3600, week_in=86400, age=60):
+    return {'updated_at': iso(NOW - age),
             'five_hour': {'used_percentage': pct, 'resets_at': iso(NOW + resets_in)},
-            'seven_day': {'used_percentage': 10, 'resets_at': iso(NOW + 86400)}}
+            'seven_day': {'used_percentage': 10, 'resets_at': iso(NOW + week_in)}}
 
 
 def decide(entry=ENTRY, live=(), record=None, last_stop=None, down_runs=2, accounts=OK, now=NOW):
@@ -91,6 +91,30 @@ class Decide(unittest.TestCase):
 
     def test_a_window_that_has_reset_is_not_over(self):
         self.assertTrue(decide(accounts={'1': C.AccountState(True, usage(99, resets_in=-60))}).start)
+
+    def test_a_fresh_account_under_the_limit_whose_week_resets_first_wins_over_the_last(self):
+        d = decide(accounts={'1': C.AccountState(True, usage(50, week_in=3 * 86400)),
+                             '2': C.AccountState(True, usage(50, week_in=86400))})
+        self.assertEqual((d.start, d.account, d.word), (True, '2', 'restarted'))
+        self.assertIn('resets first', d.reason)
+
+    def test_with_no_fresh_account_under_the_limit_the_last_account_rule_is_unchanged(self):
+        stale = usage(10, week_in=3600, age=2 * 3600)                 # resets first, but 2 h old
+        d = decide(accounts={'1': C.AccountState(True, None), '2': C.AccountState(True, stale)})
+        self.assertEqual((d.start, d.account, d.word), (True, '1', 'restarted-unchecked'))
+        d = decide(accounts={'1': C.AccountState(True, usage(50, age=2 * 3600)),
+                             '2': C.AccountState(True, stale)})
+        self.assertEqual((d.start, d.account, d.word), (True, '1', 'restarted'))   # stale but under: as before
+        d = decide(accounts={'1': C.AccountState(True, usage(95)), '2': C.AccountState(True, stale)})
+        self.assertEqual((d.start, d.account, d.word), (False, '1', 'over-limit'))
+        d = decide(accounts={'1': C.AccountState(False, None), '2': C.AccountState(True, usage(95))})
+        self.assertEqual((d.start, d.account, d.word), (False, '1', 'not-signed-in'))
+
+    def test_no_last_account_known_still_starts_on_a_fresh_account(self):
+        e = dict(ENTRY)
+        del e['account']
+        d = decide(entry=e, accounts={'1': C.AccountState(True, None), '2': C.AccountState(True, usage(50))})
+        self.assertEqual((d.start, d.account, d.word), (True, '2', 'restarted'))
 
     def test_an_account_not_signed_in_holds(self):
         d = decide(accounts={'1': C.AccountState(False, None)})
@@ -309,6 +333,24 @@ class Job(JobBase):
             self.run_job(ctx)
         self.assertEqual(self.calls, [])
         self.assertEqual(ctx.events, [('over-limit', 'kit:a1')])
+
+    def test_the_usage_file_judged_is_the_newest_reading_not_the_newest_write(self):
+        second = os.path.join(self.tmp, 'a2b')
+        os.makedirs(second)
+        self.settings = lsettings.Settings({'state_dir': self.state,
+                                            'accounts': {'1': [self.acct['1']], '2': [self.acct['2'], second]}},
+                                           home=self.tmp)
+        self.job = self.new_job()
+        fresh, stale = (os.path.join(d, 'usage-status.json') for d in (self.acct['2'], second))
+        for path, data in ((fresh, usage(10, age=60)), (stale, usage(10, age=3 * 3600))):
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f)
+        os.utime(fresh, (NOW - 3600, NOW - 3600))
+        os.utime(stale, (NOW, NOW))                  # written last, its reading older
+        for _ in range(2):
+            self.now += 300
+            self.run_job()
+        self.assertEqual(self.calls[0][-5:], ['start', '--session', 'kit', '--account', '2'])
 
     def test_a_failed_start_is_a_failure_and_counts_toward_the_cap(self):
         self.code = 2

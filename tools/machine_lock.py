@@ -41,7 +41,7 @@ from kitlib.lock import layout as lay                              # noqa: E402
 from kitlib.lock import status as st                               # noqa: E402
 from kitlib.lock.background import run_background                  # noqa: E402
 from kitlib.lock.run import (ORIGIN_ENV, ScriptArgError, check_resource,  # noqa: E402
-                             run_command, script_command)
+                             path_alias_line, run_command, script_command)
 from kitlib.lock.store import (EXIT_REQUIRE, EXIT_USAGE, LockError, Store,  # noqa: E402
                                caller, iso, new_id, utc_now)
 from kitlib.loadnode import box, dispatch                          # noqa: E402
@@ -385,6 +385,9 @@ def cmd_status(a, store):
     else:
         for line in st.render(snap):
             out(line)
+        warn = path_alias_line()
+        if warn:
+            out(warn)
         for line in dispatch.status_lines(a.registry, testing=store.testing):
             out(line)
     return 0

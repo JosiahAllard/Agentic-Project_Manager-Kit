@@ -9,6 +9,7 @@
 - Each run fetches, puts the worktree at the ref, and loads the gate from the ref's own `.kit.json`. All steps then run in one slot of `"daily_full".kind` (default `daily-full`) through `kitlib.gate.runner.gated`, waiting up to `"daily_full".max_wait` seconds. A failing step does not stop the run.
 - Every run writes `<out>/<stamp>/result.json`, where `<out>` defaults to `<gate log dir>/daily`. The fields are `verdict`, which is green, red or skipped; `sha`; `steps`; `red`, which lists the failing step names plus `infra` when the run could not start; `skipped`, the steps that did not run; `error`; and, for a skip, `reason` and `cause`. A run in which no step ran (every one SKIP) is red `infra`, never green.
 - Unchanged commit: after the fetch, if the latest run that ran (skips do not count) is green at the ref's commit, the run is a recorded skip with cause `unchanged`, prints `daily: SKIPPED (unchanged) - ...` and exits 0. The recorded results under `<out>` are the state; there is no other file. A red latest run, or a green one at another commit, runs. `--force` runs regardless. `--summary` shows these skips as `skipped (unchanged since the last green run)`, not as a problem.
+- A step's own machine-lock booking nests in the run's slot and takes nothing more. The module isolation run is such a step: a `daily_cmd` of `module_map.py --isolate` (docs/module-map.md "Isolation runs").
 - A lock refusal is a recorded skip, not a red. The cause is one of busy, timeout, lock-unavailable, reserved or hold.
 - `--summary` prints the status lines from the recorded runs:
   - the last verdict, with its failing steps;
@@ -39,8 +40,10 @@ The kit registers no task for it (above); the repository's owner does. A task wh
 ```powershell
 $py = python -c "import os, sys; print(os.path.join(sys.base_prefix, 'pythonw.exe'))"
 if (-not $py -or $py -match '\\WindowsApps\\' -or -not (Test-Path -LiteralPath $py)) { throw "no pythonw.exe outside WindowsApps: $py" }
-Register-ScheduledTask -TaskName '<task name>' -Trigger (New-ScheduledTaskTrigger -Daily -At <HH:mm>) -Action (New-ScheduledTaskAction -Execute $py -Argument '"<kit>\tools\no_window.py" python "<kit>\tools\daily_full.py" -C "<main checkout>"' -WorkingDirectory '<main checkout>') -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable) -User $env:USERNAME -RunLevel Limited
+Register-ScheduledTask -TaskName '<task name>' -Trigger (New-ScheduledTaskTrigger -Daily -At <HH:mm>) -Action (New-ScheduledTaskAction -Execute $py -Argument '"<kit>\tools\no_window.py" python "<kit>\tools\daily_full.py" -C "<main checkout>"' -WorkingDirectory '<main checkout>') -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -Priority 7) -User $env:USERNAME -RunLevel Limited
 ```
+
+`-Priority 7` is BELOW_NORMAL, Task Scheduler's own default, stated so it is a choice and not an accident: every process the run starts inherits it, and since the lock's pinned slots keep other lock runs off its cores, it yields only to unpinned work on those cores.
 
 A task that is already registered keeps its trigger and settings and gets only the new action:
 
