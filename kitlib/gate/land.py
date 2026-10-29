@@ -167,7 +167,8 @@ and a landing of a tool outside the machine lock. A node-routed landing that fal
 (step 7) gives the resource up while it books again, holding the lock file: the next landing of
 the repository may then book and wait at the lock file, with the holder waiting in the queue
 behind it. That landing sees it (Lander.yield_turn), releases its run and books again, behind the
-holder, with what is left of its --wait.
+holder, with what is left of its --wait, at most once a look (poll_s). That booking not given in
+time is NOT RUN with the machine lock's exit code, not BUSY.
 
 `land.py --check-strict BRANCH` (check_strict()) is the strict check's dry run: read-only, no lock
 and no verdict, it says whether each branch changes a strict path (Lander.strict_paths).
@@ -489,6 +490,7 @@ class Lander(object):
         self.route = None           # the landroute.Route plan_route chose before the booking;
                                     # None again once a fallback gates on main (rebook_here)
         self.holder = None          # the landing lock file's record when another holds it
+        self.yielded_to = None      # the holder yield_turn last gave the turn back to
         self.tree_given = tree      # Lander(tree=), or None: the default place (tree_path)
         self.tree = None            # the landing tree's path, once prepare_tree placed it
         self.branches, self.tips = _as_list(branch), _as_list(expect_tip)
@@ -646,11 +648,17 @@ class Lander(object):
 
     def plan_route(self):
         """Step 2b, before the booking: where the merged gate runs (landroute.plan), its line said
-        unless it is quiet. A test's merged gate always gates here."""
+        unless it is quiet. A test's merged gate always gates here. A plan that raises gates here
+        too, said as `gating here: the load-node plan failed: <error>`."""
         lr = self.routes()
-        self.route = lr.plan(self.root, runner.repo_name(self.cfg, self.root),
-                             self.cfg.section('gate')['kind'], store=self.queue_store(),
-                             merged_gate_fn=self.merged_gate_fn)
+        try:
+            self.route = lr.plan(self.root, runner.repo_name(self.cfg, self.root),
+                                 self.cfg.section('gate')['kind'], store=self.queue_store(),
+                                 merged_gate_fn=self.merged_gate_fn)
+        except Exception as e:      # noqa: BLE001 - nothing booked or changed yet: gate on main
+            self.route = None
+            self.say('gating here: the load-node plan failed: %s' % _what(e))
+            return
         line = lr.route_line(self.route)
         if line:
             self.say(line)
@@ -715,6 +723,7 @@ class Lander(object):
             if final or left <= 0:
                 return why
             if self.yield_turn(left):
+                time.sleep(max(0.01, min(self.poll_s, left)))   # one booking a look, at most
                 continue
             if not said:
                 said = True
@@ -746,8 +755,11 @@ class Lander(object):
         waiting in the machine lock's queue for that turn (a node-routed landing's fallback
         booking again, rebook_here): else each waits for the other until this landing's --wait
         runs out. Its run is released and booked again, behind the holder, waiting for what is
-        left (`left`) of the --wait budget. A queue that cannot be read: False. Raises LockError
-        (the new booking)."""
+        left (`left`) of the --wait budget, with one cpu slot again when its merged gate is routed
+        to a load node. Its line is said once per holder: the new booking may be granted at once
+        (a backfill, the holder's start being far off) and given back again at the next look,
+        one look (poll_s) apart (take). A queue that cannot be read: False. Raises LockError (the
+        new booking)."""
         rec = self.holder or {}
         branches = rec.get('branches')
         if self.slot is None or not isinstance(branches, list) or not branches:
@@ -759,11 +771,15 @@ class Lander(object):
             return False
         if not waiting:
             return False
-        self.say('the landing holding the landing lock (%s) waits in the machine lock for this '
-                 "repository's landing turn, which this landing holds: releasing it and booking "
-                 'again behind it, waiting up to %d s' % (', '.join(map(str, branches)), left))
+        who = (rec.get('token'), rec.get('pid'), tuple(map(str, branches)))
+        if who != self.yielded_to:
+            self.yielded_to = who
+            self.say('the landing holding the landing lock (%s) waits in the machine lock for '
+                     "this repository's landing turn, which this landing holds: releasing it and "
+                     'booking again behind it, waiting up to %d s'
+                     % (', '.join(map(str, branches)), left))
         self.drop_slot(0, 'done')
-        self.book_slot(left)
+        self.book_slot(left, cores=1 if self.on_node() else None)
         return True
 
     def held_by(self, rec):

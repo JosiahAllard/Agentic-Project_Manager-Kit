@@ -109,7 +109,8 @@ class NodeCase(LandCase):
     def node_lander(self, routes, tip, **kw):
         kw.setdefault('book_kw', {'store': self.store, 'env': self.env})
         kw.setdefault('say', self.said.append)
-        return self.lander(BRANCH, self.main, tip, node_route=routes, book=self.book, **kw)
+        branch = kw.pop('branch', BRANCH)
+        return self.lander(branch, self.main, tip, node_route=routes, book=self.book, **kw)
 
     def landing_books(self):
         return [s for s in self.seen if s['slug'] == 'kit-feature']
@@ -298,6 +299,18 @@ class FallsBackToMain(NodeCase):
         self.assertIn('refused: the owner holds the machine', out.lines[0])
         self.assert_untouched(out, G.FAILED)
 
+    def test_a_plan_that_raises_gates_here(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        routes = Routes()
+        routes.plan = mock.Mock(side_effect=OSError('the registry is unreadable'))
+        out = self.node_lander(routes, tip).run()
+        self.assert_landed_here(out)
+        self.assertEqual(self.said[0],
+                         'gating here: the load-node plan failed: OSError: the registry is '
+                         'unreadable')
+        [b] = self.landing_books()
+        self.assertNotIn('cores', b)
+
     def test_a_plan_for_main_books_as_before(self):
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
         routes = Routes(where=None)
@@ -315,6 +328,20 @@ class GivesTheTurnBack(NodeCase):
         # A holds the lock file. B sees A waiting for the turn, gives it back and books again
         # behind A; both land, B on A's merge. Without that B would wait at the lock file and A
         # for the turn, until B's --wait ran out.
+        self.two_landings(lambda tip_b, said_b: self.lander(
+            'kit/other', self.main, tip_b, wait_s=120, poll_s=0.05, say=said_b.append))
+
+    def test_a_node_routed_landing_books_one_slot_again_when_it_gives_the_turn_back(self):
+        routes_b = Routes()
+        self.two_landings(lambda tip_b, said_b: self.node_lander(
+            routes_b, tip_b, branch='kit/other', wait_s=120, poll_s=0.05, say=said_b.append))
+        books_b = [b for b in self.seen if b['slug'] == 'kit-other']
+        self.assertEqual([b['cores'] for b in books_b], [1, 1], books_b)
+        self.assertEqual(books_b[1]['priority'], 'land')
+        self.assertEqual(routes_b.names(), ['plan', 'same_tree', 'recheck', 'run'])
+
+    def two_landings(self, make_b):
+        """A (node-routed) falls back while B holds the turn; B made by make_b(tip_b, said_b)."""
         _, tip_a = self.branch('feature', {'a.py': 'a\n'})
         _, tip_b = self.branch('other', {'b.py': 'b\n'})
         inside, go = threading.Event(), threading.Event()
@@ -333,8 +360,8 @@ class GivesTheTurnBack(NodeCase):
         while not inside.wait(0.05):        # A ending before its gate fails here, not at HANG_S
             self.assertTrue(a.is_alive(), results)
             self.assertLess(time.monotonic(), end)
-        b = threading.Thread(target=lambda: results.__setitem__('b', self.lander(
-            'kit/other', self.main, tip_b, wait_s=120, poll_s=0.05, say=said_b.append).run()))
+        b = threading.Thread(target=lambda: results.__setitem__('b', make_b(tip_b,
+                                                                            said_b).run()))
         b.start()
         self.addCleanup(b.join, HANG_S)
         end = time.monotonic() + HANG_S
@@ -353,6 +380,36 @@ class GivesTheTurnBack(NodeCase):
                                                   '(kit/feature) waits')]
         self.assertEqual(len(gave), 1, said_b)
         self.assertIsNone(self.lock().read())
+
+    def test_a_turn_granted_again_at_once_is_given_back_once_a_look(self):
+        # The booking after a yield may be granted at once (a backfill: the holder's start is far
+        # off) while the holder still waits: the landing gives it back again only a look
+        # (poll_s) later, and says so once, not in a loop until --wait runs out.
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        lander = self.lander(BRANCH, self.main, tip, poll_s=0.1, say=self.said.append)
+        holder = {'branches': ['kit/other'], 'pid': 1, 'token': 't'}
+        books = []
+
+        class Slot(object):
+            def release(self, code, how):
+                pass
+
+        def try_take():
+            lander.holder = holder
+            return 'held by kit/other', False
+
+        def book_slot(wait_s, cores=None):
+            books.append((wait_s, cores))
+            lander.slot = Slot()
+        lander.try_take, lander.book_slot = try_take, book_slot
+        lander.turn_waiters = lambda: [{'slug': 'kit-other', 'state': 'waiting'}]
+        lander.slot, lander.deadline = Slot(), time.monotonic() + 1.0
+        self.assertEqual(lander.take(), 'held by kit/other')
+        self.assertLessEqual(len(books), 12, len(books))
+        self.assertGreaterEqual(len(books), 2)
+        self.assertEqual({c for _, c in books}, {None})       # routed to main: the kind's size
+        gave = [s for s in self.said if s.startswith('the landing holding the landing lock')]
+        self.assertEqual(len(gave), 1, gave)
 
     def test_a_holder_waiting_for_nothing_keeps_the_turn(self):
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})

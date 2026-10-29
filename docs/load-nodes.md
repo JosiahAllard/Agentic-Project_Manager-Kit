@@ -284,7 +284,10 @@ A kit checkout is never gated on a node, by a landing or by `node.py gate`.
   of the repository may book it. That landing then waits at the landing lock file, while the
   holder waits in the queue behind it. The waiting landing sees this (`Lander.yield_turn`: the
   lock file's holder has a waiting entry for this repository's landing resource). It releases its
-  run, says so in a line, and books again behind the holder with what is left of its `--wait`.
+  run, says so in a line, and books again behind the holder with what is left of its `--wait`
+  (one cpu slot again when it is node-routed itself). The new booking may be granted at once (a
+  backfill, while the holder's start is far off); it is then given back again at the next look,
+  `poll_s` apart, the line said once per holder.
 
 ### Known limits
 
@@ -294,6 +297,12 @@ A kit checkout is never gated on a node, by a landing or by `node.py gate`.
 - A landing waiting at the lock file gives its turn back only if it runs a kit with
   `yield_turn`. One from an older kit waits until its `--wait` runs out (BUSY), and the fallback
   waits that long too.
+- A landing whose booking after a yield is not given before its `--wait` runs out ends NOT RUN
+  with the machine lock's exit code, not BUSY as when it waits at the lock file holding its turn.
+- While the holder's start stays far off, the landing that yielded books again once a look
+  (`poll_s`, 5 s) until it runs out of `--wait`.
+- A plan that raises is said as `gating here: the load-node plan failed: <error>` and the
+  landing gates on main.
 - The plan and the 1-slot booking use the config read before the landing's turn. A base whose
   config names another `"gate".kind` is not booked again at that size.
 - A 1-slot landing run's held time goes into the `land` mode of the kind's expected times
