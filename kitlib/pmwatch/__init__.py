@@ -15,7 +15,10 @@ from kitlib.git import cmd as gitcmd
 KEY = "pm_watch"
 WEEK_BANDS = (95, 98, 99)
 FIVE_BANDS = (95, 98, 99)         # 95 no new work, 98 landings only; no PM headroom
-LINE = re.compile(r"account (\d+|codex): five_hour=(reset|\d+)%?.*?seven_day=(reset|\d+)%?")
+LINE = re.compile(r"account (\d+|codex): five_hour=(reset|\d+|\?)%?.*?seven_day=(reset|\d+|\?)%?")
+NO_FILE = re.compile(r"account (\d+|codex): no usage (?:file|data)")
+AGE = re.compile(r"\[updated (\d+|\?) min ago\]")
+STALE_MINUTES = 60               # a reading older than this is shown as stale (docs/launcher.md "Usage")
 
 
 def load_config(path=None):
@@ -144,10 +147,24 @@ def branch_tip(repo, ref):
 
 
 def parse_usage(text):
+    """{account: {"five", "week", "age", "stale", "missing"}} from kitlib.launcher.usage's lines.
+    five and week are whole percentages, 0 for a window that has reset, and None when the reading
+    is unknown (`?`, or no usage file): unknown is never 0. age is the reading's age in minutes
+    (None when unknown); stale is True when it is older than STALE_MINUTES or of unknown age;
+    missing is True for an account with no usage file. RuntimeError when no account line at all."""
     out = {}
-    for m in LINE.finditer(text):
-        conv = lambda v: 0 if v == "reset" else int(v)
-        out[m.group(1)] = {"five": conv(m.group(2)), "week": conv(m.group(3))}
+    conv = lambda v: None if v == "?" else 0 if v == "reset" else int(v)
+    for line in text.splitlines():
+        m = LINE.search(line)
+        if m:
+            a = AGE.search(line)
+            age = int(a.group(1)) if a and a.group(1) != "?" else None
+            out[m.group(1)] = {"five": conv(m.group(2)), "week": conv(m.group(3)), "age": age,
+                               "stale": age is None or age > STALE_MINUTES, "missing": False}
+            continue
+        m = NO_FILE.search(line)
+        if m:
+            out[m.group(1)] = {"five": None, "week": None, "age": None, "stale": True, "missing": True}
     if not out:
         raise RuntimeError("the usage report printed no account lines")
     return out
@@ -179,20 +196,35 @@ def band(v, bands):
 
 
 def usage_events(prev, cur):
+    """Band and reset events between two parse_usage readings; a window unknown (None) in either
+    is skipped, never read as 0."""
     ev = []
     for acct, u in cur.items():
         p = prev.get(acct)
         if p is None:
             continue
-        wb, pwb = band(u["week"], WEEK_BANDS), band(p["week"], WEEK_BANDS)
-        if wb > pwb:
-            ev.append("USAGE account %s seven_day %d%% (now %d%%)" % (acct, wb, u["week"]))
-        fb, pfb = band(u["five"], FIVE_BANDS), band(p["five"], FIVE_BANDS)
-        if fb > pfb:
-            ev.append("USAGE account %s five_hour %d%% (now %d%%)" % (acct, fb, u["five"]))
-        if p["week"] - u["week"] >= 20:
+        known = lambda k: u.get(k) is not None and p.get(k) is not None
+        if known("week"):
+            wb, pwb = band(u["week"], WEEK_BANDS), band(p["week"], WEEK_BANDS)
+            if wb > pwb:
+                ev.append("USAGE account %s seven_day %d%% (now %d%%)" % (acct, wb, u["week"]))
+        if known("five"):
+            fb, pfb = band(u["five"], FIVE_BANDS), band(p["five"], FIVE_BANDS)
+            if fb > pfb:
+                ev.append("USAGE account %s five_hour %d%% (now %d%%)" % (acct, fb, u["five"]))
+        if known("week") and p["week"] - u["week"] >= 20:
             ev.append("RESET account %s (weekly %d%% -> %d%%)" % (acct, p["week"], u["week"]))
     return ev
+
+
+def merge_usage(prev, cur):
+    """The watcher's stored usage after a reading: cur over prev, but a window cur does not know
+    (None) keeps prev's known figure, so a band crossed while a reading was missing still fires."""
+    out = dict(prev)
+    for acct, u in cur.items():
+        p = prev.get(acct) or {}
+        out[acct] = {**u, **{k: p[k] for k in ("five", "week") if u.get(k) is None and p.get(k) is not None}}
+    return out
 
 
 def alert_events(seen, alerts_dir):
@@ -594,7 +626,7 @@ class Watcher:
                 cur = self.usage_reader()
                 self.fails["usage"] = 0
                 events += usage_events(s.get("usage", {}), cur)
-                s["usage"] = {**s.get("usage", {}), **cur}
+                s["usage"] = merge_usage(s.get("usage", {}), cur)
             except Exception as e:
                 self._failed("usage", e, events)
         if now >= self.next_i:

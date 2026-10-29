@@ -75,9 +75,11 @@ def repos(cfg, stored=(), read=None, toplevel=None, kit_dir=None):
 def usage(report, clock):
     """Every account's plan usage. `report` is a callable giving the lines kitlib.launcher.usage
     prints (or None when no launcher is configured); `clock` gives the as_of text. Available:
-    {"available": True, "accounts": {name: {"five", "week"}}, "as_of"}; otherwise
-    {"available": False, "reason", "as_of"} (no source, the source raised, or it printed no
-    account line)."""
+    {"available": True, "accounts": {name: {"five", "week", "age", "stale", "missing"}}, "as_of"}
+    (kitlib.pmwatch.parse_usage: five or week None is unknown, never 0; age is the reading's own
+    age in minutes before as_of, so an old file is not shown as read at as_of; an account with no
+    usage file is listed, missing); otherwise {"available": False, "reason", "as_of"} (no
+    source, the source raised, or it printed no account line)."""
     as_of = clock()
     if report is None:
         return {"available": False, "reason": "no launcher usage source configured", "as_of": as_of}

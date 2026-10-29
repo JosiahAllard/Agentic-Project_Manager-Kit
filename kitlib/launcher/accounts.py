@@ -145,13 +145,13 @@ def check_headroom(settings, n, now, force, out, limit=HEADROOM_LIMIT):
 
 def week_rows(settings, now):
     """[(account, pct, reset)] of every signed-in account's seven-day window. A window whose
-    reset has passed is fresh (0%) and resets 7 days after the old time; no file reads as 0%,
-    resetting a week from now."""
+    reset has passed is fresh (0%) and resets 7 days after the old time. No file, or a file with
+    no seven-day window, is unknown: pct and reset None, never 0%."""
     rows = []
     for n in settings.account_numbers():
         if not account_signed_in(settings, n):
             continue
-        pct, reset = 0, now + datetime.timedelta(days=7)
+        pct, reset = None, None
         _, data = newest_usage(settings, n)
         w = (data or {}).get('seven_day')
         if isinstance(w, dict) and parse_time(w.get('resets_at')):
@@ -165,12 +165,14 @@ def week_rows(settings, now):
 def pick(settings, now, limit=PICK_LIMIT):
     """(account, rows): the signed-in account under `limit`% of its week whose week resets
     soonest (use up the allowance that expires first); when every one is over, the soonest reset
-    anyway, so something always runs. LaunchError when no account is signed in."""
+    anyway, so something always runs. An account whose week is unknown (no usage file) counts as
+    under the limit, resetting a week from now, as before. LaunchError when no account is signed in."""
     rows = week_rows(settings, now)
     if not rows:
         raise LaunchError('No account in launcher.accounts is signed in.')
-    ok = [r for r in rows if r[1] < limit]
-    chosen = min(ok or rows, key=lambda r: r[2])
+    unknown = now + datetime.timedelta(days=7)
+    ok = [r for r in rows if r[1] is None or r[1] < limit]
+    chosen = min(ok or rows, key=lambda r: unknown if r[2] is None else r[2])
     return chosen[0], rows
 
 
@@ -226,5 +228,6 @@ def resolve_current(settings, now, environ=None):
 
 
 def explain(rows):
-    return ['account %s: %d%% of week, resets %s' % (n, pct, reset.astimezone().strftime('%a %b %d %H:%M'))
+    return ['account %s: week unknown (no usage reading)' % n if pct is None else
+            'account %s: %d%% of week, resets %s' % (n, pct, reset.astimezone().strftime('%a %b %d %H:%M'))
             for n, pct, reset in rows]

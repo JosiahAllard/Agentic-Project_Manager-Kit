@@ -111,9 +111,29 @@ class UsageTests(unittest.TestCase):
     def test_parsed_accounts(self):
         got = derived.usage(lambda: self.LINES, CLOCK)
         self.assertTrue(got['available'])
-        self.assertEqual(got['accounts'], {'1': {'five': 40, 'week': 71},
-                                           'codex': {'five': 0, 'week': 12}})
+        self.assertEqual(got['accounts'], {
+            '1': {'five': 40, 'week': 71, 'age': 3, 'stale': False, 'missing': False},
+            '2': {'five': None, 'week': None, 'age': None, 'stale': True, 'missing': True},
+            'codex': {'five': 0, 'week': 12, 'age': 5, 'stale': False, 'missing': False}})
         self.assertEqual(got['as_of'], CLOCK())
+
+    def test_stale_missing_and_unknown_readings_reach_the_hub_from_the_files(self):
+        # End to end: usage-status.json files -> kitlib.launcher.usage lines -> parse_usage -> the hub view.
+        import datetime
+        from kitlib.launcher import usage as launcher_usage
+        from tests.launcher.fakes import NOW, Home
+        h = Home(self, accounts=('1', '2', '3', '4'))
+        day = datetime.timedelta(days=1)
+        h.usage('1', week=(98, NOW + day), updated=NOW - datetime.timedelta(minutes=3735))   # five_hour null
+        h.usage('2', five=(8, NOW + day / 8), week=(18, NOW + 5 * day))
+        h.usage('3', five=(70, NOW - day), week=(None, NOW + day), updated=NOW - datetime.timedelta(minutes=668))
+        got = derived.usage(lambda: launcher_usage.report(h.settings, NOW), CLOCK)
+        self.assertTrue(got['available'])
+        acc = got['accounts']
+        self.assertEqual(acc['1'], {'five': None, 'week': 98, 'age': 3735, 'stale': True, 'missing': False})
+        self.assertEqual(acc['2'], {'five': 8, 'week': 18, 'age': 0, 'stale': False, 'missing': False})
+        self.assertEqual(acc['3'], {'five': 0, 'week': None, 'age': 668, 'stale': True, 'missing': False})
+        self.assertEqual(acc['4'], {'five': None, 'week': None, 'age': None, 'stale': True, 'missing': True})
 
     def test_no_source_is_not_available(self):
         got = derived.usage(None, CLOCK)
@@ -125,7 +145,9 @@ class UsageTests(unittest.TestCase):
         def boom():
             raise OSError('disk gone')
         self.assertIn('disk gone', derived.usage(boom, CLOCK)['reason'])
-        self.assertFalse(derived.usage(lambda: ['account 2: no usage file'], CLOCK)['available'])
+        self.assertFalse(derived.usage(lambda: ['current account: unknown'], CLOCK)['available'])
+        only = derived.usage(lambda: ['account 2: no usage file'], CLOCK)       # listed as missing, not dropped
+        self.assertEqual(only['accounts']['2']['missing'], True)
 
 
 class AgentsTests(Tmp):
