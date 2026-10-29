@@ -63,6 +63,8 @@ heartbeat (docs/pm-watch.md "Stream mode and heartbeat") is at most 5 minutes ol
 (`kitlib.pmstart` `BEAT_STALE`) and names the pid of a running `python` process whose command line
 holds `pm_watch.py` and that started at the time the heartbeat records (within 2 seconds,
 `START_SLACK`; skipped when either start time is unknown), so a reused pid does not count.
+It also counts as running while the hub's session-watch job covers its checks (docs/pm-watch.md
+"Hub session-watch job").
 Otherwise the line says whether it stopped polling, is an older copy with no heartbeat, or is not
 running, and gives the command to start it in the background (docs/pm-watch.md: it exits with its
 events, and the PM starts it again at once, then handles them). A running watcher whose heartbeat

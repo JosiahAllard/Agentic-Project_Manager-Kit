@@ -583,8 +583,8 @@ store's git push (the `push` setting).
   - `session-watch` drops the events it saw while pm_watch's heartbeat was fresh and not stepped aside
     (`yielded`), so those of the last 300 s before a pm_watch stopped are not pushed, and one at the
     hand-over, before the job reads the `yielded` heartbeat, can reach neither; it does not see a pm_watch run with
-    its own `--state`, so both push then, unless pm_watch's `--sessions` is the config's
-    `sessions_file` and it steps aside; with no push worker its events are not pushed. While it
+    its own `--state`, so both push then, unless pm_watch's sessions file, alerts and notice
+    folders are the job's and it steps aside; with no push worker its events are not pushed. While it
     covers, a stopped pm_watch's BRANCH and HUB lines reach no one, and no `watcher down` push says so
     (docs/pm-watch.md "Hub session-watch job").
 
