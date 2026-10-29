@@ -773,7 +773,7 @@ class Box(object):
             try:
                 p.send_signal(getattr(signal, 'SIGINT', 2))
                 code = p.wait(GATE_STOP_S)
-            except Exception:                   # noqa: BLE001 - it ends either way
+            except (Exception, KeyboardInterrupt):  # noqa: BLE001 - a second stop too: it ends
                 p.kill()
                 code = p.wait()
             if code in (None, 0):

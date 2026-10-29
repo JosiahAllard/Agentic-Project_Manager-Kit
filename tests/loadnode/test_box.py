@@ -701,7 +701,8 @@ class SweepRefs(GateBase):
 class FakePopen(object):
 
     def __init__(self, codes, interrupt=False, slow=False):
-        self.codes, self.interrupt, self.slow = list(codes), interrupt, slow
+        # interrupt: True (or a count) raises KeyboardInterrupt from that many waits
+        self.codes, self.interrupt, self.slow = list(codes), int(interrupt), slow
         self.signals, self.killed, self.args = [], False, None
 
     def __call__(self, argv, cwd=None, env=None):
@@ -710,7 +711,7 @@ class FakePopen(object):
 
     def wait(self, timeout=None):
         if self.interrupt:
-            self.interrupt = False
+            self.interrupt -= 1
             raise KeyboardInterrupt()
         if self.slow and timeout is not None and not self.killed:
             raise RuntimeError('timed out')
@@ -792,6 +793,13 @@ class RunGate(GateBase):
         code, res, _ = self.run_gate(p)
         self.assertTrue(p.killed)
         self.assertEqual((code, res['how']), (-9, 'interrupted'))
+
+    def test_a_second_stop_during_the_wait_kills_it_and_still_leaves_a_result(self):
+        p = FakePopen([-9], interrupt=2)
+        code, res, seen = self.run_gate(p, stop=True)
+        self.assertTrue(p.killed)
+        self.assertEqual(p.signals, [getattr(signal, 'SIGINT', 2)])
+        self.assertEqual((code, res['exit'], res['how'], seen), (-9, -9, 'stopped', []))
 
     def test_a_gate_that_cannot_start_leaves_a_result(self):
         def popen(argv, cwd=None, env=None):
