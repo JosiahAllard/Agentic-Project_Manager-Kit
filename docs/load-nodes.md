@@ -234,6 +234,15 @@ same merge, step by step.
    `node.py follow` never takes a land record ("taken only by the landing that started it"). A
    taken one sets the job's `land_record` and `ran_on` (node, host key fingerprint, job), for the
    landing's own record on main (`gate_ok.record_pass(ran_on=...)`, with no `input_keys`).
+6. Where the landing's gate runs, and how its job ends, is `kitlib.loadnode.landroute` (main's
+   side only; job and dispatch never import it). `plan` chooses before the landing books main's
+   lock (`route.choose` with only nodes that serve `land`), quietly main for a kit checkout, a
+   test's merged gate or no registry; `recheck` asks the nodes again at the landing's turn;
+   `same_tree_why` keeps on main a one-branch landing whose tip's --full record has the merge's
+   tree (main reuses its steps; a node never does). `run_on_node` raises `Fallback` (main may gate
+   the merge itself) only while nothing ran on the node, or when the node's lock answered busy;
+   once the job started, every other end is a failed gate, so the landing does not land, and the
+   job is stopped after `CEILING_S` (4 hours, an estimate) of wall time.
 
 A kit checkout is never gated on a node, by a landing or by `node.py gate`.
 
