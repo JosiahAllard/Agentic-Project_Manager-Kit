@@ -1,4 +1,4 @@
-"""Hand-off and recycle, after-reboot's skips, the autostart script, and launch.py's exit codes."""
+"""Hand-off and recycle, after-reboot's skips, the retired install-autostart, and launch.py's exit codes."""
 import io
 import json
 import os
@@ -80,7 +80,7 @@ class Handoff(unittest.TestCase):
 class AfterReboot(unittest.TestCase):
     def test_skips_running_stems_autostart_off_and_a_running_desktop_app(self):
         h = Home(self)
-        h.write_state('sessions.json', {'alpha': dict(ALPHA), 'helper': dict(HELPER, autostart=False)})
+        h.write_state('sessions.json', {'alpha': dict(ALPHA, agent=False), 'helper': dict(HELPER, autostart=False)})
         h.write_state('coordinators.json', {'pm_session_id': 's1', 'pm_folder': h.root, 'pm_account': 1})
         app = {'Name': 'claude.exe', 'ProcessId': 5, 'ParentProcessId': 1,
                'ExecutablePath': 'C:' + chr(92) + 'WindowsApps' + chr(92) + 'claude.exe', 'CommandLine': None}
@@ -95,7 +95,7 @@ class AfterReboot(unittest.TestCase):
 
     def test_dry_run_starts_and_writes_nothing(self):
         h = Home(self)
-        h.write_state('sessions.json', {'alpha': dict(ALPHA)})
+        h.write_state('sessions.json', {'alpha': dict(ALPHA, agent=False)})
         host = FakeHost(h.root)
         out = reboot.run(h.settings, host, dry_run=True)
         self.assertTrue(any(line.startswith('would start alpha-coord-a1 (alpha)') for line in out))
@@ -103,87 +103,29 @@ class AfterReboot(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(h.state, 'after-reboot.log')))
 
 
-@mock.patch('kitlib.platform.NAME', 'windows')   # the Windows form, on any machine
 class Autostart(unittest.TestCase):
-    def empty_python(self):
-        """A python.exe path in a folder the test makes and leaves empty: no pythonw.exe beside it,
-        whatever the drive holds."""
-        d = tempfile.mkdtemp(prefix='kit-autostart-')
-        self.addCleanup(shutil.rmtree, d, True)
-        return os.path.join(d, 'python.exe')
+    """install-autostart is retired: the hub restarts agents. It registers nothing and runs nothing."""
 
-    def test_what_if_registers_nothing_and_the_task_runs_after_reboot_unelevated(self):
-        def run(*a, **k):
-            raise AssertionError('what-if ran PowerShell')
-        out = autostart.install('/kit/tools/launch.py', python='/py/python.exe', whatif=True, run=run,
-                                isfile=lambda p: True)        # /py is not there: say pythonw is
-        script = out[1]
-        self.assertIn("-TaskName 'Claude coordinators after reboot'", script)
-        self.assertIn('-LogonType Interactive -RunLevel Limited', script)
-        self.assertIn("-Execute '%s' -Argument '\"%s\" \"/py/python.exe\" \"/kit/tools/launch.py\" after-reboot'"
-                      % (os.path.join('/py', 'pythonw.exe'), os.path.join('/kit/tools', 'no_window.py')), script)
+    def test_install_refuses_and_names_the_task_to_remove(self):
+        for whatif in (False, True):
+            with self.assertRaises(autostart.LaunchError) as cm:
+                autostart.install('/kit/tools/launch.py', whatif=whatif)
+            text = str(cm.exception)
+            self.assertIn('install-autostart is retired', text)
+            self.assertIn('nothing registered', text)
+            self.assertIn("Unregister-ScheduledTask -TaskName 'Claude coordinators after reboot'", text)
+        self.assertFalse(hasattr(autostart, 'task_script'))
+        self.assertFalse(hasattr(autostart, 'linux_install'))
 
-    def test_the_task_opens_no_console_window_of_its_own(self):
-        """The task runs pythonw (no console) on the kit's carrier, which starts the console python
-        on launch.py with no window: no PowerShell window flashes at sign-in."""
-        script = autostart.task_script('/py/pythonw.exe', '/kit/tools/launch.py')
-        self.assertIn("-Execute '%s' -Argument '\"%s\" \"%s\" \"/kit/tools/launch.py\" after-reboot'"
-                      % (os.path.join('/py', 'pythonw.exe'), os.path.join('/kit/tools', 'no_window.py'),
-                         os.path.join('/py', 'python.exe')), script)
-        self.assertNotIn('powershell.exe', script)
-        self.assertNotIn('-WindowStyle', script)
-        self.assertNotIn('-EncodedCommand', script)
-        kit = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        self.assertTrue(os.path.isfile(os.path.join(kit, 'tools', 'no_window.py')))
+    def test_the_names_a_leftover_task_is_known_by_stay(self):
+        self.assertEqual(autostart.TASK_NAME, 'Claude coordinators after reboot')
+        self.assertEqual(autostart.LINUX_JOB, 'coordinators-after-reboot')
 
-    def test_no_pythonw_beside_the_python_is_refused_and_nothing_is_registered(self):
-        """The task's program would be a file that is not there: it would register and never
-        start. The folder is empty, so the default check itself says no."""
-        def run(*a, **k):
-            raise AssertionError('a refused install ran PowerShell')
-        python = self.empty_python()
-        with self.assertRaisesRegex(autostart.LaunchError, 'no pythonw.exe beside') as cm:
-            autostart.install('/kit/tools/launch.py', python=python, run=run)
-        self.assertIn(os.path.join(os.path.dirname(python), 'pythonw.exe'), str(cm.exception))
-        self.assertIn('nothing registered', str(cm.exception))
-
-    def test_the_pythonw_asked_about_is_the_one_registered(self):
-        asked, calls = [], []
-
-        class R(object):
-            returncode, stderr = 0, ''
-
-        def isfile(path):
-            asked.append(path)
-            return True
-
-        def run(*a, **k):
-            calls.append(a[0])
-            return R()
-        autostart.install('/kit/tools/launch.py', python='/py/python.exe', run=run, isfile=isfile)
-        self.assertEqual(asked, [os.path.join('/py', 'pythonw.exe')])
-        self.assertIn("-Execute '%s'" % asked[0], calls[0][-1])
-
-    def test_what_if_refuses_as_the_install_would(self):
-        """What-if predicts the real outcome: the same refusal, with the script and the refusal
-        line said before it."""
-        with self.assertRaisesRegex(autostart.LaunchError, 'no pythonw.exe beside') as cm:
-            autostart.install('/kit/tools/launch.py', python=self.empty_python(), whatif=True)
-        self.assertEqual(len(cm.exception.lines), 3)
-        self.assertEqual(cm.exception.lines[0], 'Would run in PowerShell:')
-        self.assertIn('install-autostart would refuse: no pythonw.exe beside', cm.exception.lines[2])
-        out = autostart.install('/kit/tools/launch.py', python='/py/python.exe', whatif=True,
-                                isfile=lambda p: True)
-        self.assertEqual(len(out), 2)
-
-    def test_a_worktree_copy_is_refused(self):
-        def run(*a, **k):
-            raise AssertionError('a refused install ran PowerShell')
+    def test_a_worktree_path_is_known(self):
         sep = chr(92)
         for path in ('/kit/.claude/worktrees/x/tools/launch.py',
                      sep.join(['D:', 'kit', '.Claude', 'Worktrees', 'x', 'tools', 'launch.py'])):
-            with self.assertRaisesRegex(autostart.LaunchError, 'main kit checkout, not a worktree'):
-                autostart.install(path, python='/py/python.exe', run=run)
+            self.assertTrue(autostart.in_worktree(path), path)
         self.assertFalse(autostart.in_worktree('/kit/tools/launch.py'))
         self.assertFalse(autostart.in_worktree('/kit/worktrees/.claude/launch.py'))
 
@@ -292,22 +234,17 @@ class Cli(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("-n 'alpha-coord-a2'", out)
 
-    @mock.patch('kitlib.platform.NAME', 'windows')    # the Linux branch would install a real job
-    def test_install_autostart_what_if_with_no_pythonw_exits_1_as_the_install_does(self):
-        d = tempfile.mkdtemp(prefix='kit-autostart-')                  # empty: no pythonw.exe
-        self.addCleanup(shutil.rmtree, d, True)
-        with mock.patch.object(autostart, 'in_worktree', return_value=False), \
-                mock.patch.object(autostart.pythonw_mod, 'base_pythonw',
-                                  return_value=os.path.join(d, 'pythonw.exe')):
-            seen = {}
+    def test_install_autostart_is_retired_and_exits_1(self):
+        def never(*a, **k):
+            raise AssertionError('install-autostart ran a command')
+        with mock.patch('subprocess.run', never), mock.patch('kitlib.proc.spawn.run', never):
             for argv in (['install-autostart', '--what-if'], ['install-autostart']):
                 with self.subTest(argv=argv):
-                    code, seen[len(argv)], err, _ = self.main(argv)
+                    code, out, err, _ = self.main(argv)
                     self.assertEqual(code, 1)
-                    self.assertIn('launch.py install-autostart: no pythonw.exe at', err)
+                    self.assertIn('launch.py install-autostart: install-autostart is retired', err)
                     self.assertIn('nothing registered', err)
-        self.assertIn('install-autostart would refuse: no pythonw.exe at', seen[2])   # what-if says it
-        self.assertEqual(seen[1], '')             # the real install refused before saying anything
+                    self.assertEqual(out, '')
 
     def test_usage_errors_exit_2(self):
         with redirect_stderr(io.StringIO()):

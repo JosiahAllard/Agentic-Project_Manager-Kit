@@ -1,11 +1,10 @@
-"""The pythonw.exe a scheduled task runs (kitlib/launcher/pythonw.py) and install-autostart's use of
-it: the base install's, never a WindowsApps alias. Nothing is registered here: PowerShell is a fake."""
+"""The pythonw.exe a scheduled task runs (kitlib/launcher/pythonw.py): the base install's, never a
+WindowsApps alias. Nothing is registered here."""
 import os
 import sys
 import unittest
 from unittest import mock
 
-from kitlib.launcher import autostart
 from kitlib.launcher import pythonw as P
 
 SEP = chr(92)
@@ -38,38 +37,6 @@ class Helper(unittest.TestCase):
         self.assertIn(ALIAS, why)
         self.assertIn('no pythonw.exe at', P.refusal(os.path.join(BASE, 'pythonw.exe'), isfile=lambda p: False))
         self.assertIsNone(P.refusal(os.path.join(BASE, 'pythonw.exe'), isfile=lambda p: True))
-
-
-@mock.patch('kitlib.platform.NAME', 'windows')   # the Windows form, on any machine
-class Install(unittest.TestCase):
-
-    def test_with_no_python_named_the_task_runs_the_base_install_pythonw(self):
-        """sys.executable is not asked: the pythonw and the console python are the base install's."""
-        out = autostart.install('/kit/tools/launch.py', whatif=True, run=never, isfile=lambda p: True,
-                                base_prefix=BASE)
-        self.assertEqual(len(out), 2, out)
-        self.assertIn("-Execute '%s' -Argument '\"%s\" \"%s\" \"/kit/tools/launch.py\" after-reboot'"
-                      % (os.path.join(BASE, 'pythonw.exe'), os.path.join('/kit/tools', 'no_window.py'),
-                         os.path.join(BASE, 'python.exe')), out[1])
-
-    def test_the_default_is_this_interpreters_base_prefix(self):
-        out = autostart.install('/kit/tools/launch.py', whatif=True, run=never, isfile=lambda p: True)
-        self.assertIn("-Execute '%s'" % os.path.join(sys.base_prefix, 'pythonw.exe').replace("'", "''"), out[1])
-
-    def test_a_windows_apps_python_is_refused_even_when_its_pythonw_is_a_file(self):
-        with self.assertRaisesRegex(autostart.LaunchError, 'WindowsApps') as cm:
-            autostart.install('/kit/tools/launch.py', python=STORE, run=never, isfile=lambda p: True)
-        self.assertIn('nothing registered', str(cm.exception))
-        with self.assertRaisesRegex(autostart.LaunchError, 'WindowsApps') as cm:  # what-if: the same
-            autostart.install('/kit/tools/launch.py', python=STORE, whatif=True, run=never,
-                              isfile=lambda p: True)
-        lines = cm.exception.lines
-        self.assertEqual(len(lines), 3, lines)
-        self.assertTrue(lines[2].startswith('install-autostart would refuse: '), lines[2])
-        self.assertIn('WindowsApps', lines[2])
-        with self.assertRaisesRegex(autostart.LaunchError, 'WindowsApps'):
-            autostart.install('/kit/tools/launch.py', run=never, isfile=lambda p: True,
-                              base_prefix=os.path.dirname(STORE))
 
 
 if __name__ == '__main__':

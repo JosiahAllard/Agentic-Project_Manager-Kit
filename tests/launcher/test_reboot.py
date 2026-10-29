@@ -1,5 +1,6 @@
-"""After a reboot (kitlib/launcher/reboot.py): a failed start never stops the run, briefs reach
-every entry that has one, and each path of the PM resume."""
+"""After a reboot (kitlib/launcher/reboot.py): plain entries start and agent entries are left to the
+hub, a failed start never stops the run, briefs reach every entry that has one, and each path of
+the PM resume."""
 import os
 import subprocess
 import unittest
@@ -8,8 +9,10 @@ from kitlib.launcher import reboot, start, window
 from kitlib.launcher import settings as S
 from tests.launcher.fakes import NOW, FakeHost, Home, role_of, session
 
-ALPHA = {'repo': 'alpha', 'agent': True, 'stem': 'alpha-coord', 'state': 's.md', 'account': 1, 'name': 'alpha-coord-a1'}
-BETA = {'repo': 'alpha', 'agent': True, 'stem': 'beta-coord', 'state': 's.md', 'account': 1, 'name': 'beta-coord-a1'}
+# plain sessions (agent false): the ones after-reboot starts
+ALPHA = {'repo': 'alpha', 'agent': False, 'stem': 'alpha-coord', 'state': 's.md', 'account': 1, 'name': 'alpha-coord-a1'}
+BETA = {'repo': 'alpha', 'agent': False, 'stem': 'beta-coord', 'state': 's.md', 'account': 1, 'name': 'beta-coord-a1'}
+COORD = {'repo': 'alpha', 'agent': True, 'stem': 'lead-coord', 'state': 's.md', 'account': 1, 'name': 'lead-coord-a1'}
 HELPER = {'repo': 'alpha', 'agent': False, 'stem': 'alpha-help', 'state': 's.md', 'brief': 'b.md', 'account': 1,
           'name': 'alpha-help-a1'}
 PM = {'pm_session_id': 'pm-sid-1', 'pm_folder': None, 'pm_account': 2}
@@ -42,7 +45,7 @@ class FailedStarts(unittest.TestCase):
         out = reboot.run(self.h.settings, host)
         self.assertTrue(any(line.startswith('FAILED to start alpha : ') and said in line for line in out), out)
         names = sorted(role_of(t) for t in host.opened)
-        self.assertEqual(names, ['coordinator', 'pm'])                  # beta and the PM still start
+        self.assertEqual(names, ['plain', 'pm'])                        # beta and the PM still start
         written = self.h.read_state('sessions.json')
         self.assertEqual(written['alpha'], ALPHA)                        # the failed entry is unchanged
         self.assertEqual(written['beta']['name'], 'beta-coord-a1')
@@ -61,14 +64,15 @@ class FailedStarts(unittest.TestCase):
 
 
 class Briefs(unittest.TestCase):
-    def test_after_reboot_passes_the_brief_of_a_plain_entry_and_of_an_agent_entry(self):
+    def test_after_reboot_passes_the_brief_of_every_plain_entry(self):
         h = Home(self)
         h.write_state('sessions.json', {'helper': dict(HELPER), 'alpha': dict(ALPHA, brief='c.md')})
         host = FakeHost(h.root)
         reboot.run(h.settings, host)
-        by_role = {role_of(t): t for t in host.opened}
-        self.assertIn('Read your standing brief b.md first. ', by_role['plain'])
-        self.assertIn('Read your standing brief c.md first. ', by_role['coordinator'])
+        briefs = sorted(t for t in host.opened if role_of(t) == 'plain')
+        self.assertEqual(len(briefs), 2)
+        self.assertTrue(any('Read your standing brief b.md first. ' in t for t in briefs))
+        self.assertTrue(any('Read your standing brief c.md first. ' in t for t in briefs))
 
     def test_the_prompts_name_the_pm_by_its_live_session_name(self):
         h = Home(self)
@@ -85,8 +89,8 @@ class Briefs(unittest.TestCase):
         self.assertTrue(args['no_agent'])
         args = start.entry_start_args(None, 'helper', HELPER, '2', 'go', any_brief=True)
         self.assertEqual(args['brief'], 'b.md')
-        self.assertEqual(start.entry_start_args(None, 'alpha', dict(ALPHA, brief='c.md'), '2', 'go')['brief'], 'c.md')
-        self.assertNotIn('brief', start.entry_start_args(None, 'alpha', ALPHA, '2', 'go', any_brief=True))
+        self.assertEqual(start.entry_start_args(None, 'lead', dict(COORD, brief='c.md'), '2', 'go')['brief'], 'c.md')
+        self.assertNotIn('brief', start.entry_start_args(None, 'lead', COORD, '2', 'go', any_brief=True))
 
     def test_dry_run_says_the_pm_decision_and_opens_and_logs_nothing(self):
         for key, said in ((False, 'desktop app running, pm-session skipped'),
@@ -220,6 +224,31 @@ class ResumePm(unittest.TestCase):
                         self.lines)
 
 
+class HubOwnsCoordinators(unittest.TestCase):
+    """The hub is the only restarter: its coord-restart job starts the coordinators, and runs
+    after-reboot once after a boot for the plain sessions and the PM."""
+
+    def test_the_plain_entry_starts_the_agent_entry_is_skipped_and_the_pm_resumes(self):
+        h = Home(self)
+        h.write_state('sessions.json', {'lead': dict(COORD), 'helper': dict(HELPER)})
+        h.write_state('coordinators.json', dict(PM, pm_folder=h.root))
+        host = FakeHost(h.root)
+        out = reboot.run(h.settings, host)
+        self.assertEqual(sorted(role_of(t) for t in host.opened), ['plain', 'pm'])
+        self.assertFalse(any("-n 'lead-coord" in t for t in host.opened))
+        self.assertIn('lead a coordinator: the hub restarts it (coord-restart), skipped', out)
+        self.assertTrue(any(line.startswith('started alpha-help-a') for line in out), out)
+        self.assertIn('started pm-session', out)
+        self.assertEqual(h.read_state('sessions.json')['lead'], COORD)     # left as it was
+
+    def test_a_dry_run_says_the_skip_too(self):
+        h = Home(self)
+        h.write_state('sessions.json', {'lead': dict(COORD)})
+        out = reboot.run(h.settings, FakeHost(h.root), dry_run=True)
+        self.assertIn('lead a coordinator: the hub restarts it (coord-restart), skipped', out)
+        self.assertFalse(any(line.startswith('would start lead-coord') for line in out), out)
+
+
 class TopLevelFailures(unittest.TestCase):
     """The hidden task has no console: a failure before any entry is a FAILED log line, not a traceback."""
 
@@ -261,7 +290,7 @@ class TopLevelFailures(unittest.TestCase):
         host = FakeHost(h.root)
         out = reboot.run(h.settings, host)
         self.assertTrue(any(line.startswith('FAILED to read coordinators.json : ') for line in out), out)
-        self.assertEqual([role_of(t) for t in host.opened], ['coordinator'])
+        self.assertEqual([role_of(t) for t in host.opened], ['plain'])
 
 
 class SaidAsItHappens(unittest.TestCase):
