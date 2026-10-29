@@ -7,8 +7,9 @@ Runs every check of kitlib.maintlint on the checkout DIR: keyword holds, unprice
 pulls, dead blockers, duplicates, parked records whose hub question is answered, the backlog
 audit (7 days, no fetch) as counts, body, files and scope paths, the worktrees the nightly sweep
 leaves, the decision ledger as counts, and each gate step's median time over full gates against
-"maint_lint".gate_time.bound_s (kitlib.maintlint.gatetime). No check flags anything for its age
-alone. Every finding prints the command that fixes it; nothing is run, and no ledger entry,
+"maint_lint".gate_time.bound_s (kitlib.maintlint.gatetime), and, in a repository with a module
+map, one count line summing the gates' scope records (kitlib.modulemap.scopelog). No check
+flags anything for its age alone. Every finding prints the command that fixes it; nothing is run, and no ledger entry,
 worktree or git ref is written. The one write: a plain run files a backlog record for each step
 over the bound, when "maint_lint".gate_time.prefix is set and no live record of that step is in
 the store (one `gate time:` line each); --dry-run files nothing.
@@ -38,6 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import maintlint                                       # noqa: E402
 from kitlib.maintlint import gatetime, page, publish, result as rmod, slot   # noqa: E402
+from kitlib.modulemap import scopelog                              # noqa: E402
 
 # An unexpected error (any Exception other than the lock's refusals): none of 0-4, nor a lock code.
 EXIT_ERROR = 5
@@ -52,6 +54,8 @@ def _counts(res):
                                % (led['stale_cites'], sum(led['rules'].values()),
                                   len(led['rules']), len(led['over_budget']),
                                   led['conflict_pairs'], led['overrides'])))
+    if res.get('module_scope') is not None:
+        out.append(scopelog.line(res['module_scope']))
     return out
 
 

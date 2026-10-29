@@ -13,6 +13,10 @@ record, a pull with no branch, a landed tree), never on a record's or a tree's a
   run(root, home, now, previous)  the whole lint of the repository at `root`, as a result dict
                                   (kitlib.maintlint.result writes it)
 
+The result's `module_scope` is the weekly sum of the gates' scope records
+(kitlib.modulemap.scopelog.summary): counts only, never a finding, and None when the repository
+names no module map.
+
 run() writes no record, ledger entry, worktree or git ref. maint_lint writes only the gate-time
 record, in a plain run (kitlib.maintlint.gatetime.file, which tools/maint_lint.py calls).
 """
@@ -27,6 +31,7 @@ from kitlib.backlog import audit_check
 from kitlib.backlog.errors import Failure, Refusal
 from kitlib.backlog import pull_branch as pullmod
 from kitlib.backlog.opener import open_store
+from kitlib.modulemap import scopelog
 
 Finding = collections.namedtuple('Finding', 'check key text fix age', defaults=(None,))
 
@@ -132,6 +137,8 @@ def run(root, home=None, now=None, previous=None, questions=None):
     found, more = gatetime.findings(code_checkout(root), now)
     findings += found
     notes += more
+    module_scope, more = scopelog.summary(code_checkout(root), now)
+    notes += more
     counts_ledger, more = ledger.counts(home)
     notes += more
     findings = _first_of_each(findings + ledger.findings(counts_ledger))
@@ -149,4 +156,5 @@ def run(root, home=None, now=None, previous=None, questions=None):
             'started': now.strftime('%Y-%m-%dT%H:%M:%SZ'),
             'elapsed_s': round(time.monotonic() - started, 2),
             'counts': {c: counts.get(c, 0) for c in CHECKS},
-            'ledger': counts_ledger, 'notes': notes, 'findings': rows}
+            'ledger': counts_ledger, 'module_scope': module_scope, 'notes': notes,
+            'findings': rows}
