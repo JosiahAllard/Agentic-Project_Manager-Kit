@@ -106,6 +106,13 @@ class Params(unittest.TestCase):
                   'a\x01', 'x' * 201, None):
             self.assertFalse(box.glob_ok(g), g)
 
+    def test_a_glob_is_ascii_only(self):
+        """An artifact path is ASCII only (job.artifact_path_ok), so a glob that is not could
+        match nothing the node sends back: main refuses it before the run."""
+        for g in ('out/caf%s.txt' % chr(0xe9), '%s%s/*' % (chr(0x6587), chr(0x4ef6)),
+                  'x%s.bin' % chr(0x200b)):
+            self.assertFalse(box.glob_ok(g), g)
+
     def test_parameters_are_one_capped_json_object_line(self):
         self.assertEqual(box.read_params(io.BytesIO(b'{"job": 1}\n')), {'job': 1})
         for data in (b'', b'{"a":1}\n{"b":2}\n', b'[1]\n', b'\xff\n', b'{' + b' ' * box.SPEC_CAP):

@@ -24,9 +24,11 @@ that, LOST included, so the owner hears of the window on the node as of one on m
 Exit codes (JobError carries them; `fallback` is True for a failure `--node auto` may answer by
 running on the main machine instead): the job's own exit code when it ended; EXIT_BUSY the node
 was busy (at its most jobs, or its lock refused to wait); EXIT_NODE the node could not be used
-(unreachable, its host key, the push, a start it refused, a kit too old to serve the run verbs) or
-its runner vanished; EXIT_LOST the connection did not come back; EXIT_ARTIFACTS the job succeeded
-but its artifacts did not all come or could not all be copied into the checkout (none was). Once
+(unreachable, its host key, the push, a start it refused, a kit too old to serve the run verbs);
+EXIT_AFTER_START the node started the job but it ended there with no exit code of its own (its
+runner vanished, the node lost it) or could not be followed; EXIT_LOST the connection did not come
+back; EXIT_ARTIFACTS the job succeeded but its artifacts did not all come or could not all be
+copied into the checkout (none was). Once
 the node has started the job (`started`), only its lock refusing it as busy (the command never
 ran) is one `--node auto` answers on main; no other failure is, or the job would run twice.
 Nothing here prints: `say(text)` gets every line for the user
@@ -45,7 +47,7 @@ from fnmatch import fnmatchcase
 
 from kitlib.loadnode import box, frames, remote
 
-EXIT_USAGE, EXIT_BUSY, EXIT_LOST, EXIT_NODE, EXIT_ARTIFACTS = 2, 6, 9, 10, 13
+EXIT_USAGE, EXIT_BUSY, EXIT_LOST, EXIT_NODE, EXIT_ARTIFACTS, EXIT_AFTER_START = 2, 6, 9, 10, 13, 14
 REATTACH_S = 120
 BACKOFF = (2, 4, 8, 16, 30)
 PUSH_TIMEOUT_S = 1800
@@ -204,8 +206,8 @@ class NodeJob(object):
 
     def follow(self):
         """Stream the job's output from self.offset to its result: the result dict, or None when
-        the connection did not come back within reattach_s (LOST). JobError(EXIT_NODE) when the
-        node says it has no such job."""
+        the connection did not come back within reattach_s (LOST). JobError(EXIT_AFTER_START)
+        when the node says it has no such job."""
         delays, deadline = list(BACKOFF), None
         while True:
             dec, state = frames.Decoder(), {'frames': 0}
@@ -236,7 +238,7 @@ class NodeJob(object):
             if isinstance(state.get('result'), dict):
                 return state['result']
             if 'error' in state:
-                raise JobError(EXIT_NODE, '%s: %s' % (self.node.name, state['error']))
+                raise JobError(EXIT_AFTER_START, '%s: %s' % (self.node.name, state['error']))
             if state.get('bad'):
                 why = 'the stream was not frames (%s)' % state['bad']
             now = self.clock()
@@ -504,7 +506,7 @@ class NodeJob(object):
         if type(code) is not int or how in ('vanished', 'not started'):
             self.say('the job on %s did not end with an exit code (%s: %s)'
                      % (self.node.name, how, str(res.get('why'))[:300]))
-            return EXIT_NODE
+            return EXIT_AFTER_START
         if self.artifacts and how in ('ended', 'stopped', 'interrupted'):
             ok, got = self.fetch()
             if not ok:

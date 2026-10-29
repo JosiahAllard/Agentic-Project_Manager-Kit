@@ -233,9 +233,9 @@ class Run(Base):
         self.assertEqual(self.verbs()[-1], 'clean')
         self.assertIsNotNone(self.notice('end'))
 
-    def test_a_runner_gone_with_no_result_is_exit_10(self):
+    def test_a_runner_gone_with_no_result_is_the_after_start_exit(self):
         self.result = None
-        self.assertEqual(self.node_job().run(), job.EXIT_NODE)
+        self.assertEqual(self.node_job().run(), job.EXIT_AFTER_START)
         self.assertIn('vanished', ' '.join(self.said))
 
 
@@ -283,11 +283,11 @@ class Reattach(Base):
         self.assertIn('node.py follow box1 %s -C "%s" --artifact "out/*.txt" --artifact "a.bin"'
                       % (JOB, self.top), ' '.join(self.said))
 
-    def test_no_such_job_on_the_node_is_exit_10(self):
+    def test_no_such_job_on_the_node_is_the_after_start_exit(self):
         nj = self.node_job()
         with self.assertRaises(job.JobError) as cm:
             nj.follow()
-        self.assertEqual(cm.exception.code, job.EXIT_NODE)
+        self.assertEqual((cm.exception.code, cm.exception.fallback), (job.EXIT_AFTER_START, False))
 
 
 class Artifacts(Base):
