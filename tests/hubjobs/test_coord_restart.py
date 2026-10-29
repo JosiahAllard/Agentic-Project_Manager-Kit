@@ -712,6 +712,12 @@ class WakeParts(WakeFixture):
         self.assertIs(C.wake_of(None, WAKE), WAKE)
         self.assertIsNone(C.wake_of(None, None))
 
+    def test_the_wake_prompt_names_the_entry_state_note(self):
+        self.assertEqual(C.wake_prompt(WAKE, 'C:/notes/state-kit.md'),
+                         'Started by the hub: its repo has new startable records: EX-B. '
+                         'Read your state note (C:/notes/state-kit.md), then run backlog next.')
+        self.assertTrue(C.wake_prompt(WAKE, '').endswith('Read your state note, then run backlog next.'))
+
     def test_a_wake_start_passes_a_short_prompt_and_a_plain_start_none(self):
         argv = C.start_argv('K', 'kit', '2', C.wake_prompt(WAKE))
         self.assertEqual(argv[-2], '--prompt')
@@ -774,7 +780,7 @@ class Offered(unittest.TestCase):
         with mock.patch.object(opener, 'open_store', open_store), \
                 mock.patch.object(plan, 'offer_for', offer_for), \
                 mock.patch.object(omod, 'in_flight_split', lambda snap, root, remote: (['pull'], [], None)), \
-                mock.patch.object(bstore, 'pm_data_live_store', lambda root: pm):
+                mock.patch.object(bstore, 'pm_data_live_store', pm if callable(pm) else lambda root: pm):
             return C.offered_ids(self.settings, key, entry)
 
     def test_a_session_tagged_coordinator_reads_its_own_session_only(self):
@@ -803,6 +809,13 @@ class Offered(unittest.TestCase):
         self.opened = []
         self.offered('kit', {'repo': 'kitrepo'}, pm=(os.path.join(self.tmp, 'pm'), None, None))
         self.assertEqual(self.opened[0][0], self.repo)                # its PM data names none either
+
+    def test_a_bug_in_the_pm_data_lookup_is_not_taken_for_unread(self):
+        def bug(root):
+            raise KeyError('a bug')
+        with self.assertRaises(KeyError):
+            self.offered('kit', {'repo': 'kitrepo'}, pm=bug)
+        self.assertEqual(self.opened, [])
 
     def test_what_cannot_be_read_is_unread_and_opens_nothing(self):
         with self.assertRaises(C.BacklogUnread):
@@ -872,15 +885,17 @@ class WakeJob(JobBase):
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.calls[0][-4:], ['--account', '1', '--prompt',
                                               'Started by the hub: its repo has new startable records: '
-                                              'EX-B. Read your state note, then run backlog next.'])
+                                              'EX-B. Read your state note (x.md), then run backlog '
+                                              'next.'])
         self.assertIn('kit: started on account 1 (woken: its repo has new startable records: EX-B)', note)
         self.assertEqual(self.ctx.events, [('restarted-unchecked', 'kit:a1')])
 
     def test_a_coordinator_that_stops_again_is_not_woken_for_the_same_records(self):
         self.offer = set()
         self.held_run()
-        self.now += 300
-        self.run_job()                                            # baseline: nothing offered
+        for _ in range(2):                                        # down 1 of 2: not read
+            self.now += 300
+            self.run_job()                                        # then the baseline: nothing offered
         self.offer = {'EX-B'}
         self.now += 300
         self.run_job()
@@ -913,6 +928,61 @@ class WakeJob(JobBase):
         self.assertIn('on purpose', result.note)
         self.assertEqual(self.calls, [])
         self.assertNotIn('held', self.records()['kit'])           # no baseline from a failed read
+
+    def test_a_bug_in_the_backlog_read_fails_the_run(self):
+        self.held_run()
+        self.offer = KeyError('a bug')                            # not BacklogUnread
+        self.now += 300
+        self.run_job()                                            # down 1 of 2: not read
+        self.now += 300
+        with self.assertRaises(KeyError):
+            self.run_job()
+
+    def test_an_autostart_off_entry_reads_nothing_and_keeps_no_baseline(self):
+        self.held_run()
+        self.sessions['kit'] = dict(ENTRY, autostart=False)
+        self.write('sessions.json', self.sessions)
+        self.offer = {'EX-A'}
+        for _ in range(3):
+            self.now += 300
+            self.run_job()
+        self.offer = {'EX-A', 'EX-B'}
+        self.now += 300
+        result = self.run_job()
+        self.assertEqual((self.reads, self.calls), ([], []))
+        self.assertNotIn('held', self.records().get('kit', {}))
+        self.assertIsInstance(result, jobs.Skip)                  # down_entries leaves it out
+
+    def test_the_cheap_holds_come_before_the_read(self):
+        self.held_run()
+        self.now += 300
+        self.run_job()                                            # down 1 of 2
+        self.assertEqual(self.reads, [])
+        rec = self.records()
+        rec['kit']['starts'] = [self.now - 60]                    # in its backoff
+        self.write(C.STATE_FILE, rec)
+        self.now += 300
+        self.run_job()
+        self.assertEqual(self.reads, [])
+        self.assertNotIn('held', self.records()['kit'])
+
+    def test_a_new_stop_with_no_sighting_between_resets_the_baseline(self):
+        self.held_run()
+        for _ in range(2):
+            self.now += 300
+            self.run_job()                                        # baseline: nothing offered
+        first = self.records()['kit']['held']['stop_at']
+        self.offer = {'EX-B'}
+        self.stop()                                               # stopped again, never seen up
+        self.now += 300
+        self.run_job()
+        held = self.records()['kit']['held']
+        self.assertNotEqual(held['stop_at'], first)
+        self.assertEqual(held['ids'], ['EX-B'])                   # the new stop's baseline
+        self.assertEqual(self.calls, [])
+        self.now += 300
+        self.run_job()
+        self.assertEqual(self.calls, [])                          # EX-B was there at the new stop
 
     def test_the_backlog_is_read_only_for_a_deliberate_stop(self):
         self.live = ['kit-coord-a1']

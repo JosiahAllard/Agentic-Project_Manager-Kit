@@ -38,12 +38,14 @@ CAP_WINDOW_S already; a start sooner than BACKOFF_S after the last.
 A wake lifts the deliberate-stop hold, and only it (every other hold still applies): the repo has
 gained startable records, meaning `backlog.py next --all` for the coordinator's session (its
 sessions.json key, and no session too when the key is its repo's name, the repo's main coordinator)
-offers a record id that it did not offer on the first run that saw that stop (the baseline, kept as
-`held` {stop_at, ids}). So a coordinator woken for some records that stops again is not woken for
-them again. The offer is read only for an entry held on a deliberate stop, through kitlib.backlog
+offers a record id that it did not offer on the first run after that stop that read it (the
+baseline, kept as `held` {stop_at, ids}). So a coordinator woken for some records that stops again
+is not woken for them again. The offer is read only for an entry held on a deliberate stop whose
+autostart and pace_hold (DOWN_RUNS, the cap, the backoff) pass, through kitlib.backlog
 (opener.open_store with no fetch, plan.offer_for), from the store the repo's .kit.json names, else
 the PM data worktree's (store.pm_data_live_store). A store that cannot be read wakes nothing and is
-a note, not a failure. A wake start passes `--prompt` with the reason and the new ids.
+a note, not a failure. A wake start passes `--prompt` with the reason, the new ids and the
+entry's state note path.
 
 The account: accounts.restart_pick, the signed-in account with a reading no older than
 pmwatch.STALE_MINUTES under accounts.HEADROOM_LIMIT of both windows whose week resets first (a
@@ -194,9 +196,28 @@ def wake_of(*wakes):
     return next((w for w in wakes if w is not None), None)
 
 
-def wake_prompt(wake):
-    """The first message of a wake start: why, and what to do first."""
-    return ('Started by the hub: %s. Read your state note, then run backlog next.' % wake.reason)
+def wake_prompt(wake, state=None):
+    """The first message of a wake start: why, and what to do first. `state`: the entry's state
+    note path when sessions.json names one (as launcher.start's default prompt names it)."""
+    note = 'your state note' if not state else 'your state note (%s)' % state
+    return 'Started by the hub: %s. Read %s, then run backlog next.' % (wake.reason, note)
+
+
+def pace_hold(record, down_runs, now):
+    """The hold Decision of the cheap holds that do not depend on why it is down (DOWN_RUNS,
+    the start cap, the backoff), or None when they pass. RestartJob reads the backlog for a
+    wake only when this is None and autostart is on."""
+    if down_runs < DOWN_RUNS:
+        return _hold('down %d of %d runs needed' % (down_runs, DOWN_RUNS))
+    starts = recent_starts(record, now)
+    if len(starts) >= START_CAP:
+        return _hold('%d starts in %d h already: left for the PM' % (len(starts), CAP_WINDOW_S // 3600),
+                     'gave-up')
+    if starts:
+        wait = BACKOFF_S[min(len(starts), len(BACKOFF_S)) - 1]
+        if now - starts[-1] < wait:
+            return _hold('backoff: next start at most every %d s' % wait)
+    return None
 
 
 def decide(key, entry, live, record, last_stop, down_runs, accounts, now, wake=None):
@@ -220,16 +241,9 @@ def decide(key, entry, live, record, last_stop, down_runs, accounts, now, wake=N
     elif wake is None:
         return _hold('stopped on purpose (stop.log, no successor): left down')
     woke = '' if wake is None else 'woken (%s): ' % wake.reason
-    if down_runs < DOWN_RUNS:
-        return _hold('down %d of %d runs needed' % (down_runs, DOWN_RUNS))
-    starts = recent_starts(record, now)
-    if len(starts) >= START_CAP:
-        return _hold('%d starts in %d h already: left for the PM' % (len(starts), CAP_WINDOW_S // 3600),
-                     'gave-up')
-    if starts:
-        wait = BACKOFF_S[min(len(starts), len(BACKOFF_S)) - 1]
-        if now - starts[-1] < wait:
-            return _hold('backoff: next start at most every %d s' % wait)
+    held = pace_hold(record, down_runs, now)
+    if held is not None:
+        return held
     acct = last_account(entry, record)
     when = datetime.datetime.fromtimestamp(now, datetime.timezone.utc)
     pick = A.restart_pick(accounts, when, acct, pmwatch.STALE_MINUTES, A.HEADROOM_LIMIT)
@@ -361,9 +375,9 @@ def store_root(settings, repo):
         raise BacklogUnread('its .kit.json cannot be read (%s)' % type(exc).__name__)
     if cfg.written('backlog', 'store') is not None:
         return root
-    try:
-        pm_root, named, why = bstore.pm_data_live_store(root)
-    except Exception as exc:                         # noqa: BLE001 - any failure is unread
+    try:                                # its expected failures come back as `why`; anything else
+        pm_root, named, why = bstore.pm_data_live_store(root)   # is a bug and fails the run
+    except (kconfig.ConfigError, OSError) as exc:
         raise BacklogUnread('its PM data worktree cannot be found (%s)' % type(exc).__name__)
     if why:
         raise BacklogUnread('its PM data worktree cannot be found or read')
@@ -485,7 +499,8 @@ class RestartJob(object):
                 stops, accts = self._read_stops(), self._accounts()
             last_stop = stem_stop(stops, entry['stem'])
             wake = None
-            if deliberate_stop(records.get(key), last_stop):
+            if (entry.get('autostart') is not False and deliberate_stop(records.get(key), last_stop)
+                    and pace_hold(records.get(key), self._down[key], now) is None):
                 wake, note, moved = self._wake(key, entry, records, last_stop)
                 changed = changed or moved
                 if note:
@@ -500,14 +515,14 @@ class RestartJob(object):
             if ctx.stop.is_set():
                 notes.append('%s: start left for the next run (the hub is closing)' % key)
                 continue
-            started = (key, d)
+            started = (key, d, entry)
         if started is not None:
-            key, d = started
+            key, d, entry = started
             rec = records.setdefault(key, {})
             rec['starts'] = recent_starts(rec, now) + [now]
             self._write_records(records)    # before the start: a crash mid-start still counts
             changed = False
-            self._start(key, d)
+            self._start(key, d, entry)
             notes.insert(0, '%s: started on account %s%s' % (
                 key, d.account, '' if d.wake is None else ' (woken: %s)' % d.wake.reason))
             if self._fails >= jobs.FAIL_PUSH:
@@ -554,9 +569,10 @@ class RestartJob(object):
 
     def _wake(self, key, entry, records, last_stop):
         """(Wake or None, note or None, records changed) for an entry held on the deliberate stop
-        `last_stop`. The first run that sees that stop keeps the offer as its baseline and wakes
-        nothing; a later run wakes on an id outside it (backlog_wake). A store that cannot be read
-        is a note, never a failure, and leaves the baseline as it was."""
+        `last_stop` whose autostart and pace_hold pass (a held entry reads nothing). The first
+        such run after that stop keeps the offer as its baseline and wakes nothing; a later run
+        wakes on an id outside it (backlog_wake). A store that cannot be read is a note, never a
+        failure, and leaves the baseline as it was."""
         try:
             offered = self.backlog(key, entry)
         except BacklogUnread as e:
@@ -568,8 +584,9 @@ class RestartJob(object):
             return None, None, True
         return wake_of(backlog_wake(offered, held.get('ids'))), None, False
 
-    def _start(self, key, d):
-        argv = start_argv(self.kit, key, d.account, wake_prompt(d.wake) if d.wake else None)
+    def _start(self, key, d, entry):
+        prompt = wake_prompt(d.wake, entry.get('state')) if d.wake else None
+        argv = start_argv(self.kit, key, d.account, prompt)
         try:
             code, lines = self.child(argv, self.kit)
         except subprocess.TimeoutExpired:
