@@ -6,7 +6,9 @@
                                      the whole restart decision, pure: no file, process or clock
                                      is read (the account-pick and sole-restarter work reuse it)
   last_account(entry, record)        the account a coordinator last ran on, or None
-  RestartJob(settings, ...)          its run(ctx): read the state, decide each entry, start one
+  RestartJob(settings, ...)          its run(ctx): the boot one-shot, then read the state, decide
+                                     each entry, start one
+  boot_action(record, uptime_s, now) RUN, MARK or None: what the boot one-shot does, pure
 
 Every EVERY_S the job lists the processes, reads sessions.json, stop.log and the usage files, and
 runs decide() for each coordinator entry (an agent entry) that kitlib.pmstart.down_entries lists.
@@ -27,17 +29,28 @@ Held, never started: a live session of the entry's stem (any account or recycle,
 stop.log line with no successor for a session of the stem (`launch.py stop --name X` without
 --successor, the PM's step on a `ready to stop:` reply) newer than the last time the job saw the
 coordinator alive, or with no sighting at all; a coordinator seen down on fewer than DOWN_RUNS runs
-in a row (the after-reboot task and a hand-off get time to start it first); START_CAP starts in
+in a row (a hand-off gets time to start it first); START_CAP starts in
 CAP_WINDOW_S already; a start sooner than BACKOFF_S after the last; no known account; an account
 not signed in; an account at or over accounts.HEADROOM_LIMIT of a window that has not reset.
 
+The hub is the only thing that restarts agents (the launcher's sign-in task is retired,
+kitlib.launcher.autostart). After a boot it also runs, once, `launch.py after-reboot` as a
+detached windowless child: it starts the plain sessions and resumes the PM, and leaves the
+coordinators to this job. It runs once per boot, at any uptime: on the hub process's first run
+whose boot (now - uptime) is not the one kept, so a late sign-in still gets it and a hub restart in
+the same boot does not. With no boot kept at all (a first install, a lost file) and the machine up
+BOOT_S or more, the boot is only kept: that hub start is not a boot's. A bad state file is read as
+no boot kept and nothing is written. after-reboot logs to after-reboot.log itself.
+
 State kept across hub restarts, in <launcher.state_dir>/coord-restart.json:
 {key: {seen_at, account, starts}}: the last time a session of the stem was seen running, the
-account it ran on, and the epoch seconds of the job's own starts. The down count and what was
-pushed are in memory only, so a hub restart waits DOWN_RUNS runs again.
+account it ran on, and the epoch seconds of the job's own starts; and BOOT_KEY: {boot_at}, the
+boot (epoch seconds) after-reboot last ran for. The down count and what was pushed are in memory
+only, so a hub restart waits DOWN_RUNS runs again.
 """
 import collections
 import datetime
+import math
 import os
 import re
 import subprocess
@@ -53,7 +66,13 @@ from kitlib.proc import spawn
 
 NAME = 'coord-restart'
 EVERY_S = 300
-FIRST_S = 120                  # after the hub starts: after-reboot has waited its 60 s by then
+FIRST_S = 120                  # after the hub starts
+BOOT_S = 30 * 60               # no boot kept and up this long: keep the boot, do not run
+BOOT_SAME_S = 120              # two boot times this close are one boot (uptime and clock jitter)
+BOOT_DRIFT = 1e-3              # ... or within this share of the uptime: NTP slews the wall clock,
+                               # not the tick count, so now - uptime drifts ~10-100 ppm
+RUN, MARK = 'run', 'mark'      # boot_action: start after-reboot, or only keep the boot
+BOOT_KEY = '_after_reboot'     # coord-restart.json's record of the boot after-reboot ran for
 DOWN_RUNS = 2                  # runs in a row a coordinator must be seen down before a start
 BACKOFF_S = (600, 1800, 5400)  # after the 1st, 2nd, 3rd start in the window
 START_CAP = 3                  # starts per entry in CAP_WINDOW_S
@@ -200,6 +219,45 @@ def stem_stop(stops, stem):
     return max(hits) if hits else None
 
 
+def boot_action(record, uptime_s, now):
+    """What the boot one-shot does on this run, once per boot. `record` is the kept {boot_at} (or
+    None), `uptime_s` seconds since boot (inf when unknown). None when the uptime is unknown or the
+    kept boot is within boot_slack(uptime_s) of this one (now - uptime_s); RUN when a different boot is kept,
+    at any uptime, or none is and the machine has been up less than BOOT_S; MARK (keep this boot,
+    do not run) when none is kept and it has been up longer. Reads nothing itself."""
+    if not isinstance(uptime_s, (int, float)) or not math.isfinite(uptime_s):
+        return None
+    done = (record or {}).get('boot_at')
+    if isinstance(done, (int, float)) and not isinstance(done, bool):
+        return None if abs(done - (now - uptime_s)) <= boot_slack(uptime_s) else RUN
+    return RUN if uptime_s < BOOT_S else MARK
+
+
+def boot_slack(uptime_s):
+    """How far two boot times may be apart and still be one boot: BOOT_SAME_S, or BOOT_DRIFT of
+    the uptime when that is more (a long uptime gathers clock drift). A real reboot differs by the
+    whole of the boot before it, far past either."""
+    return max(BOOT_SAME_S, uptime_s * BOOT_DRIFT)
+
+
+def uptime_s():
+    """Seconds since boot (kitlib.launcher.host.Host.uptime_minutes), inf when unknown."""
+    from kitlib.launcher import host
+    return host.Host().uptime_minutes() * 60.0
+
+
+def after_reboot_argv(kit):
+    return [sys.executable, os.path.join(kit, 'tools', 'launch.py'), 'after-reboot']
+
+
+def spawn_detached(argv, cwd):
+    """Start one windowless child and do not wait: after-reboot waits 60 s and opens a window per
+    session, longer than a run should take. Its outcome is in after-reboot.log."""
+    return spawn.popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, env=dict(os.environ, PYTHONIOENCODING='utf-8'),
+                       creationflags=_NOWIN)
+
+
 def start_argv(kit, key, account):
     return [sys.executable, os.path.join(kit, 'tools', 'launch.py'), 'start', '--session', key,
             '--account', str(account)]
@@ -231,14 +289,19 @@ def make(sources):
 class RestartJob(object):
     """run(ctx) is the job. The parts a test replaces: `procs()` the process rows (default
     kitlib.pmstart.list_processes), `child(argv, cwd)` -> (exit code, lines) (default
-    run_child), `clock` epoch seconds, `kit` the kit checkout whose tools/launch.py runs."""
+    run_child), `clock` epoch seconds, `kit` the kit checkout whose tools/launch.py runs,
+    `uptime()` seconds since boot (default uptime_s), `detached(argv, cwd)` the after-reboot
+    start (default spawn_detached)."""
 
-    def __init__(self, settings, procs=None, child=None, clock=None, kit=None):
+    def __init__(self, settings, procs=None, child=None, clock=None, kit=None, uptime=None, detached=None):
         self.settings = settings
         self.procs = procs or pmstart.list_processes
         self.child = child or run_child
         self.clock = clock or time.time
         self.kit = kit or pmstart.KIT_ROOT
+        self.uptime = uptime or uptime_s
+        self.detached = detached or spawn_detached
+        self._boot_checked = False      # this hub process has asked once whether after-reboot is due
         self._down = {}                 # key: runs in a row seen down
         self._told = {}                 # key: the word pushed while it has been down
         self._fails = 0                 # failures in a row, the framework's count (Skips keep it)
@@ -256,10 +319,15 @@ class RestartJob(object):
 
     def _run(self, ctx):
         now = self.clock()
+        try:
+            records = self._read_records()
+        except LaunchError:
+            self._after_reboot(None, now)   # a bad state file: no boot kept, nothing written
+            raise
+        booted = self._after_reboot(records, now)     # first: a bad sessions.json must not stop it
         sessions = state.read_sessions(self.settings)
         live = {lookup.rc_name(p.get('CommandLine')) for p in lookup.launched(self.procs())}
         live.discard(None)
-        records = self._read_records()
         changed = self._note_sightings(sessions, live, records, now)
         down = {k: e for k, e in pmstart.down_entries(sessions, live)
                 if not k.startswith('_') and e.get('agent') and e.get('stem')}
@@ -268,7 +336,7 @@ class RestartJob(object):
                 self._down.pop(key, None)
                 self._told.pop(key, None)
         stops = accts = None
-        notes, started, owed = [], None, []
+        notes, started, owed = ([booted] if booted else []), None, []
         for key in sorted(down):
             entry = down[key]
             if any(n.startswith(entry['stem']) for n in live):    # another session of the stem runs
@@ -312,9 +380,35 @@ class RestartJob(object):
         self._tell(ctx, owed)
         if changed:
             self._write_records(records)
-        if started is None:
+        if started is None and not booted:
             return jobs.Skip('; '.join(notes) or 'every coordinator is running')
         return '; '.join(notes)
+
+    def _after_reboot(self, records, now):
+        """The boot one-shot, by boot_action: start `launch.py after-reboot` (RUN), then keep the
+        boot in `records` and write them; MARK only keeps it. A child that cannot start is a job
+        failure, tried again on the next run. `records` None is a state file that could not be
+        read: no boot is kept and nothing is written. Asked until it is settled on this hub
+        process's first run: a later run would only see the same boot. The note, or None."""
+        if self._boot_checked:
+            return None
+        up = self.uptime()
+        action = boot_action((records or {}).get(BOOT_KEY), up, now)
+        if action == RUN:
+            argv = after_reboot_argv(self.kit)
+            try:
+                self._boot_child = self.detached(argv, self.kit)
+            except OSError as e:
+                raise StartFailed('launch.py after-reboot could not start: %s' % e)
+        self._boot_checked = True
+        if action is None:
+            return None
+        if records is not None:
+            records[BOOT_KEY] = {'boot_at': now - up}
+            self._write_records(records)
+        if action == MARK:
+            return None
+        return 'after a boot: launch.py after-reboot started (plain sessions and the PM; after-reboot.log)'
 
     def _start(self, key, d):
         argv = start_argv(self.kit, key, d.account)

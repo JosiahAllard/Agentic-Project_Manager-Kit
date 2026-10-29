@@ -101,7 +101,7 @@ class EveryKind(unittest.TestCase):
         self.assertEqual(role_of(text), 'consultant')
         self.assertIn("-n 'consultant-alpha'", text)
 
-    def test_after_reboot_marks_coordinators_plain_entries_and_the_pm(self):
+    def test_after_reboot_marks_plain_entries_and_the_pm_and_leaves_coordinators_to_the_hub(self):
         self.h.write_state('sessions.json', {
             '_note': 'skipped',
             'alpha': {'repo': 'alpha', 'agent': True, 'stem': 'alpha-coord', 'state': 's.md', 'account': 1,
@@ -112,7 +112,7 @@ class EveryKind(unittest.TestCase):
                                                'pm_account': 2})
         reboot.run(self.h.settings, self.host)
         roles = sorted(role_of(t) for t in self.host.opened)
-        self.assertEqual(roles, ['coordinator', 'plain', 'pm'])
+        self.assertEqual(roles, ['plain', 'pm'])
         pm = [t for t in self.host.opened if role_of(t) == 'pm'][0]
         self.assertIn("--resume 'abc-123'", pm)
         self.assertEqual(self.host.slept, [reboot.WAIT_SECONDS])

@@ -1,5 +1,5 @@
 {
-    "_note": "Copy to <launcher.state_dir>/sessions.json (machine state, not in git). launch.py handoff and after-reboot rewrite account and name. agent: true runs launcher.coordinator_agent, a string runs that agent, false is a plain session. repo is a name in launcher.repos. brief is named in the first message. handoff --recycle names the successor <stem>-a<N>-r<k>. autostart false: after-reboot skips the entry. docs/launcher.md 'State files'.",
+    "_note": "Copy to <launcher.state_dir>/sessions.json (machine state, not in git). launch.py handoff rewrites account and name; after-reboot does so only for the plain entries it starts (coordinators are the hub's coord-restart job's). agent: true runs launcher.coordinator_agent, a string runs that agent, false is a plain session. repo is a name in launcher.repos. brief is named in the first message. handoff --recycle names the successor <stem>-a<N>-r<k>. autostart false: after-reboot skips the entry. docs/launcher.md 'State files'.",
     "app": {
         "repo": "app",
         "agent": true,

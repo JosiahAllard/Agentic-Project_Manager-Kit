@@ -11,7 +11,7 @@
   launch.py usage
   launch.py after-reboot [--test] [--dry-run]
   launch.py pm-relaunch --name NEW [--wait SECONDS]
-  launch.py install-autostart [--what-if]
+  launch.py install-autostart [--what-if]   retired: refuses (the hub restarts agents)
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.launcher, prints and exits.
 Settings come from the `launcher` object of the machine config. Every launched session
@@ -141,7 +141,7 @@ def parser():
 
     sub.add_parser('usage', help="every account's usage")
 
-    r = sub.add_parser('after-reboot', help='start every session, then resume the PM')
+    r = sub.add_parser('after-reboot', help='start every plain session, then resume the PM (the hub runs it after a boot)')
     r.add_argument('--test', action='store_true', help="start only an 'autostart-test' session")
     r.add_argument('--dry-run', action='store_true')
 
@@ -150,7 +150,7 @@ def parser():
     f.add_argument('--wait', type=int, default=relaunch.WAIT_S,
                    help="seconds to wait for the fork's own session id (default %(default)s)")
 
-    i = sub.add_parser('install-autostart', help='register the after-reboot scheduled task')
+    i = sub.add_parser('install-autostart', help='retired: refuses, registers nothing (the hub restarts agents)')
     i.add_argument('--what-if', action='store_true')
     return p
 
@@ -221,7 +221,7 @@ def run(a, settings, host):
             raise S.LaunchError('--wait must be at least 1 second.')
         return relaunch.relaunch(settings, host, a.name, push_delivery(settings), a.wait)
     if a.cmd == 'install-autostart':
-        return autostart.install(os.path.abspath(__file__), whatif=a.what_if)
+        return autostart.install(os.path.abspath(__file__), whatif=a.what_if)     # always refuses
     raise AssertionError(a.cmd)
 
 
