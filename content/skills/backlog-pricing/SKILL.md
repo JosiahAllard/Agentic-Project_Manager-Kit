@@ -34,3 +34,4 @@ Ties: the focus area first, then the smaller item. Never raise a record because 
 
 - A coordinator retires an unpriced record that fails A, citing the check (`retire <ID> --why "<check>"`; one already done is closed with `close`, not retired).
 - An owner- or PM-priced record that fails A goes to the PM, who decides; a coordinator never retires it.
+- A speed record closes only with before and after seconds from the next daily or full run (an agent's own local timing is not enough), and only after every lever it names but does not take is filed as its own record.
