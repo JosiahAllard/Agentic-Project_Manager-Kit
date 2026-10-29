@@ -67,6 +67,16 @@ class NodeFits(unittest.TestCase):
         self.assertEqual(route.node_fits(n, ok('n1', mem_free=None), 'my-repo', NEED), '')
         self.assertIn('no gpu', route.node_fits(n, ok('n1'), 'my-repo', {'cpu': 1, 'gpu': 1}))
 
+    def test_verbs_names_the_ones_the_job_needs_and_none_keeps_the_run_verbs(self):
+        n, land = node('n1'), (box.LAND_VERB,)
+        self.assertEqual(route.node_fits(n, ok('n1'), 'my-repo', NEED, None),
+                         route.node_fits(n, ok('n1'), 'my-repo', NEED))
+        self.assertEqual(route.node_fits(n, ok('n1', verbs=['status']), 'my-repo', NEED),
+                         'its kit serves no run verbs (update it)')
+        self.assertEqual(route.node_fits(n, ok('n1'), 'my-repo', NEED, land),
+                         'its kit serves no land verb (update it)')
+        self.assertEqual(route.node_fits(n, ok('n1', verbs=['land']), 'my-repo', NEED, land), '')
+
     def test_a_heavy_kind_takes_the_whole_node(self):
         self.assertEqual(route.node_fits(node('n1'), ok('n1', cpu_free=4), 'my-repo',
                                          {'cpu': 12, 'gpu': 0}), '')
@@ -104,6 +114,15 @@ class Choose(unittest.TestCase):
         c = route.choose([node('n1')], [ok('n1')], 'my-repo',
                          lock(cpu_free=12, cpu_slots=12, waiting=2), NEED)
         self.assertEqual(c.where, 'n1')
+
+    def test_verbs_passes_over_a_node_that_does_not_serve_them(self):
+        nodes, land = [node('n1'), node('n2')], (box.LAND_VERB,)
+        res = [ok('n1', cpu_free=4), ok('n2', cpu_free=3, verbs=list(box.RUN_VERBS) + ['land'])]
+        main = lock(cpu_free=0, cpu_slots=12)
+        self.assertEqual(route.choose(nodes, res, 'my-repo', main, NEED).where, 'n1')
+        c = route.choose(nodes, res, 'my-repo', main, NEED, verbs=land)
+        self.assertEqual(c.where, 'n2')
+        self.assertIn('n1: its kit serves no land verb', c.why)
 
     def test_no_nodes_is_main(self):
         self.assertEqual(route.choose([], [], 'my-repo', lock(), NEED).where, route.MAIN)
