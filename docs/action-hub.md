@@ -192,14 +192,17 @@ no kind.
      a long `wait` does not hold it) and no timed job is running.
   5. It starts a detached restarter, which runs `hub.py restart --port <port>`: the server's clean
      close, then the task started again (the `restart` bullet below). Before it starts it, the server
-     logs one line with the old and new code stamps and the restarter's pid (`restarting itself: code
-     <old> -> <new>; restarter pid <pid> ...`).
+     logs `restarting itself: code <old> -> <new>` (the old and new code stamps) to the hub log;
+     once it has started, it logs the same line with the restarter's pid (`...; restarter pid <pid>
+     ...`).
 
   The restarter's output goes to `<PM repo>/.pm-kit/hub/self-restart.log`, beside the token
-  files (`hub.py setup` prints that folder; git-ignored), overwritten by each attempt. Read it when a restart left no hub. A failed self-check,
-  a restarter that cannot be started, or a server still running 6 minutes after its restarter started,
-  keeps the old server and shows the warning below; that code is never tried again by that server, so
-  a broken tree does not loop, and only newer code is tried. While a restart is under way the warning
+  files (`hub.py setup` prints that folder; git-ignored), overwritten by each attempt. Read it when
+  a restart left no hub. A failed self-check or a restarter that cannot be started keeps the old
+  server and shows the warning below; that code is never tried again by that server, so a broken
+  tree does not loop, and only newer code is tried. Once a restarter has started, that server tries
+  no more restarts at all, newer code included; one still running 6 minutes later keeps the old code
+  and shows the warning, and the restart is then the owner's. While a restart is under way the warning
   stays hidden, so no restart to-do is filed for it; 15 minutes after the first change with no restart
   started (the code still changing, or a request always in flight) it shows, and the restart still
   happens when it can.

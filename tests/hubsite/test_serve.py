@@ -1239,18 +1239,22 @@ class ReasonCase(ServeCase):
                 mock.patch.object(selfrestart, 'eligible', lambda port, store: None), \
                 mock.patch.object(selfrestart, 'check', lambda: (True, None)), \
                 mock.patch.object(selfrestart, 'launch',
-                                  lambda argv: started.append(argv) or (4242, None)):
+                                  lambda argv: started.append((argv, list(self.lines)))
+                                  or (4242, None)):
             hub = self.build()
             hub.start()
             stamp[0] = (('serve.py', 2, 12),)
             for _ in range(3):          # asked, checked, restarted: one turn each
                 hub.watch()
             log = os.path.join(self.tokens, selfrestart.LOG_NAME)
-            self.assertEqual(started, [selfrestart.restarter_argv(log, hub.port)])
+            self.assertEqual([argv for argv, _ in started],
+                             [selfrestart.restarter_argv(log, hub.port)])
             self.assertEqual(self.lines[0], ('note', selfrestart.CHANGED))
-            self.assertEqual(self.lines[-1], ('note', selfrestart.LAUNCHED % (
-                selfrestart.digest((('serve.py', 1, 10),)), selfrestart.digest(stamp[0]), 4242,
-                hub.port, log)))
+            old, new = selfrestart.digest((('serve.py', 1, 10),)), selfrestart.digest(stamp[0])
+            before = ('note', selfrestart.RESTARTING % (old, new))
+            self.assertEqual(started[0][1][-1], before, 'logged to the hub log before the start')
+            self.assertEqual(self.lines[-2:], [before, ('note', selfrestart.LAUNCHED % (
+                old, new, 4242, hub.port, log))])
             self.assertEqual(self.errors(), [])
             self.assertEqual(get(hub.port, HEALTH, self.owner).json()['code'],
                              {'stale': False, 'restart': None})

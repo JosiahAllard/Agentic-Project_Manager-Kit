@@ -66,6 +66,7 @@ class Case(unittest.TestCase):
 
     def launch(self, argv):
         self.launched.append(argv)
+        self.before_launch = list(self.lines)
         if isinstance(self.launch_says, Exception):
             raise self.launch_says
         return self.launch_says
@@ -116,6 +117,10 @@ class RestartCase(Case):
         self.assertEqual(said, ('note', selfrestart.LAUNCHED % (old, new, PID, PORT, log)))
         for part in (old, new, 'pid %d' % PID, log):
             self.assertIn(part, said[1])
+        before = ('note', selfrestart.RESTARTING % (old, new))
+        self.assertEqual(self.before_launch[-1], before, 'the hub log says it before the start')
+        self.assertNotIn('pid', before[1])
+        self.assertEqual(self.lines[-2:], [before, said])
         with open(log, encoding='utf-8') as f:
             head = f.read()
         self.assertIn('port %d restarting itself: code %s -> %s' % (PORT, old, new), head)
@@ -469,6 +474,42 @@ class SelfCheckCase(unittest.TestCase):
         with mock.patch.object(sys, 'path', list(sys.path)):    # hub.py's top level adds to it
             selfrestart.self_check(make_settings=self.make_settings,
                                    make_sources=self.make_sources)
+
+    def test_the_default_scratch_hub_is_the_machines_on_a_temp_store_and_tokens_with_no_parts(self):
+        from kitlib.hubsite import settings as settings_module
+        machine = hub_settings.settings(None)._replace(
+            port=8790, store=os.path.join(tempfile.gettempdir(), 'the-machine-store'), push=True)
+        asked, built = [], []
+
+        def machine_sources(**kw):
+            asked.append(kw)
+            return serve.Sources(tokens=os.path.join(tempfile.gettempdir(), 'machine-tokens'),
+                                 backlog=object(), lock=object(), push=object(),
+                                 push_dir='push', jobs=[object()])
+
+        class Built(Exception):
+            pass
+
+        def build(settings, src, log=None):
+            built.append((settings, src))
+            raise Built()
+        with mock.patch.object(settings_module, 'load', lambda: machine), \
+                mock.patch.object(serve, 'machine_sources', machine_sources), \
+                mock.patch.object(serve, 'build', build), \
+                mock.patch.object(sys, 'path', list(sys.path)):
+            with self.assertRaises(Built):
+                selfrestart.self_check()
+        self.assertEqual(asked, [{'sync': False}])
+        settings, src = built[0]
+        tmp = os.path.dirname(settings.store)
+        self.assertTrue(os.path.basename(tmp).startswith('hub-self-check-'))
+        self.assertEqual(settings.store, os.path.join(tmp, 'store'))
+        self.assertEqual(src.tokens, os.path.join(tmp, 'tokens'))
+        self.assertEqual((settings.port, settings.push, settings.access),
+                         (0, False, hub_settings.Access()))
+        self.assertEqual((src.backlog, src.lock, src.push, src.push_dir, src.jobs),
+                         (None, None, None, None, []))
+        self.assertFalse(os.path.exists(tmp), 'its temp folder is removed')
 
     def test_the_new_code_imports_builds_starts_and_answers_health(self):
         self.run_self_check()

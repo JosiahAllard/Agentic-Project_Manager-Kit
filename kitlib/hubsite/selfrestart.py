@@ -19,19 +19,22 @@ What look() does, in turns, all on the caller's thread except the work marked (t
      port 0 with no tunnel, sync, push, backlog or jobs. Exit 0 within CHECK_TIMEOUT_S passes.
      A failure logs CHECK_FAILED and the stale warning shows; that stamp is never tried again.
   4. With the check passed for the stamp still on disk, and no request in flight (`quiet`: every
-     listener drained but its counted waits, no timed job running), the server writes the first
-     line of LOG_NAME in its token folder (overwritten each attempt), starts the restarter
-     detached (kitlib.lock.detach: WMI and the carrier, so it is in neither this process's tree
-     nor the task's job) and logs LAUNCHED with the old and new stamps and the restarter's pid.
+     listener drained but its counted waits, no timed job running), the server logs RESTARTING
+     (the old and new stamps) to the hub log, writes the first line of LOG_NAME in its token
+     folder (overwritten each attempt), starts the restarter detached (kitlib.lock.detach: WMI
+     and the carrier, so it is in neither this process's tree nor the task's job) and logs
+     LAUNCHED with the stamps and the restarter's pid.
      The restarter (RESTARTER_SNIPPET, `restarter`) runs `hub.py restart --port <port>` with its
      output appended to that file: kitlib.hubsite.control stops this server with its clean
      close, waits for its port and process, waits for the task to leave Running, starts the task
      and waits for the new server's GET health. A restarter that cannot be started logs
      LAUNCH_FAILED and the stale warning shows.
 A server still running LAUNCH_WAIT_S after its restarter started logs NOT_RESTARTED and the stale
-warning shows. One attempt per stamp, ever, in one process: a stamp whose check failed, whose restarter failed
-to start or whose restarter was started is not tried again; only a newer stamp, settled again,
-is. The new server starts on the stamp now on disk, so it has nothing to restart for. Until a
+warning shows. Once a restarter was started, look() does nothing more in that process, for any
+stamp, newer ones too: the owner's restart is the way on. Before that, one attempt per stamp: a
+stamp whose check failed or whose restarter failed to start is not tried again; only a newer
+stamp, settled again, is. The new server starts on the stamp now on disk, so it has nothing to
+restart for. Until a
 restart is given up the stale warning stays hidden, so no restart to-do is filed for a restart
 that is about to happen; past GIVE_UP_S from the first difference with no restarter started it
 shows (STILL_TRYING), and the restart is still made when the turns allow.
@@ -77,6 +80,7 @@ CHECK_FAILED = ('the new hub code failed its self-check, so this server keeps th
                 'does not restart itself for this code: %s')
 LAUNCH_FAILED = ('the restarter could not be started, so this server keeps the old code and does '
                  'not restart itself for this code: %s')
+RESTARTING = 'restarting itself: code %s -> %s'
 LAUNCHED = ('restarting itself: code %s -> %s; restarter pid %d runs python hub.py restart --port '
             '%d, its output in %s')
 STILL_TRYING = ('the hub code changed %d s ago and this server has not restarted itself yet (the '
@@ -434,6 +438,7 @@ class Watcher(object):
     def _restart(self, stamp):
         path = self.log_path
         old, new = digest(self.started), digest(stamp)
+        self._say(RESTARTING % (old, new), 'note')
         try:
             with open(path, 'w', encoding='utf-8') as f:
                 f.write('%s hub server on port %d restarting itself: code %s -> %s\n'
