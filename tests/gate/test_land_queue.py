@@ -515,6 +515,7 @@ class Entry(unittest.TestCase):
                      ['--queue', 'kit/x'], ['--queue', '--submit'],
                      ['kit/x'] + tip + ['--wait', '-1'],
                      ['kit/x'] + tip + ['--submit', '--submitted', 'payload'],
+                     ['kit/x'] + tip + ['--reviewed-by', 'agent-r1'],
                      ['kit/x', 'kit/y'] + tip + ['--submit']):
             r = self.run_tool(*args)
             self.assertEqual(r.returncode, G.USAGE, (args, r.stdout, r.stderr))

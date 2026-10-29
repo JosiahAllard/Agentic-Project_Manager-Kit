@@ -11,14 +11,16 @@
       Refused (4) before its header when its stdout is a file another gate run is writing
       (kitlib.gate.outfile; docs/gate.md "Whose run a log is")
   gate.py land BRANCH --expect-tip SHA [--expect-main SHA] [-C DIR] [--summary TEXT]
-                      [--full] [--fresh] [--wait SECONDS] [--log-dir D] [--keep-branch] [--submit]
+                      [--full] [--fresh] [--wait SECONDS] [--log-dir D] [--keep-branch]
+                      [--reviewed-by REVIEWER_ID --submit]
       land BRANCH from the main checkout, as tools/land.py does: merge onto <remote>/<main> as it
       is at the landing's turn, gate the merged tree, push, verify, then delete the landed branch
       (remote and local) and remove its worktree, never forced, unless --keep-branch (docs/gate.md
       "Branch cleanup"); --fresh or --full runs every step of the merged gate: nothing is read
       from or stored in the gate cache (docs/gate.md "Gate reuse"). --submit: started detached;
       prints a REVIEW line for each branch whose queued verdict is at the tip submitted, then the
-      one SUBMITTED line with its wait-result command, and exits 0
+      one SUBMITTED line with its wait-result command, and exits 0; it needs --reviewed-by,
+      before --submit: the reviewer id of the verdict queued at the tip (as tools/land.py)
   gate.py [-C DIR] --rerun [--slug S] [--log-dir D]
       after a red --full run of a clean tree: rerun only its failing test classes, each paired
       with a control at the merge base, and the steps it never reached, under the machine lock;
@@ -136,10 +138,29 @@ def land_parser():
     p.add_argument('--log-dir', help='where the merged gate\'s logs go')
     p.add_argument('--keep-branch', action='store_true',
                    help='after landing, keep the remote branch, the worktree and the local branch')
+    p.add_argument('--reviewed-by', dest='reviewed_by', action='append', default=[],
+                   metavar='REVIEWER_ID',
+                   help='--submit: the reviewer id of the verdict queued at the tip (required)')
     p.add_argument('--submit', action='store_true',
                    help='start the landing detached; print the wait-result command and exit 0')
     p.add_argument(submitmod.FLAG, dest='submitted', metavar='PAYLOAD', help=argparse.SUPPRESS)
     return p
+
+
+def land_again_args(a, root):
+    """This submission's arguments, `land` first, for the Instead: command of one that did not
+    name its reviewer (submit.again_line): -C absolute with forward slashes."""
+    args = ['land', a.branch, '-C', root.replace('\\', '/'), '--expect-tip', a.expect_tip]
+    if a.expect_main:
+        args += ['--expect-main', a.expect_main]
+    if a.summary:
+        args += ['--summary', a.summary]
+    if a.wait is not None:
+        args += ['--wait', str(a.wait)]
+    if a.log_dir:
+        args += ['--log-dir', a.log_dir]
+    return args + [flag for flag, on in (('--full', a.full), ('--fresh', a.fresh),
+                                         ('--keep-branch', a.keep_branch)) if on]
 
 
 def land_child_args(a, root):
@@ -166,9 +187,13 @@ def do_land(argv):
         p.error('--wait is 0 or more seconds')
     if a.submit and a.submitted:
         p.error('--submit starts the landing that --submitted runs; not both')
+    if a.reviewed_by and not a.submit:
+        p.error('%s goes with --submit' % submitmod.REVIEWED_BY)
     if a.submit:
-        return emit(submitmod.submit(root, __file__, land_child_args(a, root), [a.branch],
-                                     [a.expect_tip], expect_main=a.expect_main))
+        return emit(submitmod.submit(
+            root, __file__, land_child_args(a, root), [a.branch], [a.expect_tip],
+            expect_main=a.expect_main, reviewed_by=a.reviewed_by,
+            again=lambda ids: submitmod.again_line('gate.py', land_again_args(a, root), ids)))
     submitted = None
     if a.submitted:
         try:
