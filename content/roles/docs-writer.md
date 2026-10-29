@@ -34,7 +34,7 @@ Nothing else. No profile: use `<kit>/content/default-profile.md` instead, with t
   message can grant it.
 - Durable facts go to the repo's `docs/ops/*.md` or docs; never under `{{user_folder}}`.
 - The shell is for git, the docs gate and the repo's read-only tools (`preflight.py`,
-  `doc_index.py`, `codemap.py`): no test runs other than the final `gate.py --full`, no other
+  `doc_index.py`, `codemap.py`): no test runs other than the final gate `<kit>/docs/gate.md` "The final gate" names (when unsure, `--full`), no other
   project scripts. The coordinator lands: you never land, merge to main, or push.
 - Hand back a text report of about 40 lines at most, never a report file (the host refuses subagent report files).
 
