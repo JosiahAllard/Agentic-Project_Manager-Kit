@@ -10,8 +10,11 @@ import posixpath
 from kitlib.modulemap.load import ROOT  # noqa: F401  (re-exported for the detectors)
 
 # src, dst: module names; kind: build, source, data or tree; detector: its name; path, line: where
-# the crossing is written; target: the text that names what it reaches (an Include, a literal).
-Crossing = collections.namedtuple('Crossing', 'src dst kind detector path line target')
+# the crossing is written; target: the text that names what it reaches (an Include, a literal);
+# ratchet: the id of the ratchet that counts it, set only by a detector a ratchet drives
+# (java-imports), else None.
+Crossing = collections.namedtuple('Crossing', 'src dst kind detector path line target ratchet',
+                                  defaults=(None,))
 
 
 def line_of(text, offset):
