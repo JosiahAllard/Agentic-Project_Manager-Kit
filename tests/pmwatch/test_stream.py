@@ -101,10 +101,11 @@ class HeartbeatTest(unittest.TestCase):
             p = os.path.join(d, "sub", "state.json.beat")
             self.assertIsNone(W.read_heartbeat(p))
             W.write_heartbeat(p, 42, 12.5, True)
-            self.assertEqual(W.read_heartbeat(p), {"pid": 42, "beat": 12.5, "stream": True, "started": None})
+            self.assertEqual(W.read_heartbeat(p), {"pid": 42, "beat": 12.5, "stream": True, "started": None,
+                                                    "yielded": False})
             W.write_heartbeat(p, 42, 12.5, False, 1700000000.25)
             self.assertEqual(W.read_heartbeat(p), {"pid": 42, "beat": 12.5, "stream": False,
-                                                   "started": 1700000000.25})
+                                                   "started": 1700000000.25, "yielded": False})
             with open(p, "w", encoding="utf-8") as f:
                 json.dump({"pid": 42, "beat": 1}, f)     # an older watcher's heartbeat
             self.assertIsNone(W.read_heartbeat(p)["started"])
