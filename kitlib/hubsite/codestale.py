@@ -2,7 +2,10 @@
 has landed (docs/action-hub.md "Stale code"). The server knows its own start stamp
 (serve.Hub._watch_code), so it alone decides `stale`; GET health and GET snapshot carry
 `code` = state(stale), and the PM checklist, the pm_watch HUB event and the page's banner
-read that object through notice(). Nothing here restarts anything: the restart is the owner's."""
+read that object through notice(). Nothing here restarts anything. A server run by its
+scheduled task restarts itself (kitlib.hubsite.selfrestart) and shows `stale` only when it does
+not: no task, a failed self-check or a restart that did not happen; the restart is then the
+owner's."""
 import os
 
 HUB_TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
