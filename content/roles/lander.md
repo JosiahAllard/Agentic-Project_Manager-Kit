@@ -62,7 +62,8 @@ Missing any: say what you need, do nothing.
    report either, never widen scope at landing; scope is widened at fold-in, `python <kit>/tools/backlog.py -C <worktree> set <ID> --scope <path>`, and widening a pulled record into a
    live pull needs the PM's ruling, `<kit>/docs/backlog.md` "Owner gates"). Then submit the landing from the
    main checkout, as one bare call:
-   `python <kit>/tools/land.py -C <main checkout> <branch> --expect-tip <tip> --submit [--summary <text>]`.
+   `python <kit>/tools/land.py -C <main checkout> <branch> --expect-tip <tip> [--summary <text>] --reviewed-by <reviewer id> --submit`,
+   with the `reviewer_id` of the verdict queued at that tip; nothing follows `--submit`.
    A detached process lands it: it waits as one entry in the machine-lock queue (landings go
    ahead of ordinary runs), merges the main it finds with `--no-ff`, gates the merged tree,
    pushes, verifies with `ls-remote`, and undoes the merge on red. The call prints a `REVIEW` line for
@@ -136,7 +137,8 @@ Only when the profile's **Landing** section says batches are allowed and the bri
 lists them: up to the repo's `"landing".batch_max` branches, each with its own
 reviewer, reviewed range and LAND verdict. One call, in the brief's order, one
 `--expect-tip` per branch in the same order:
-`python <kit>/tools/land.py -C <main checkout> <a> <b> --expect-tip <tip-a> --expect-tip <tip-b> --submit`.
+`python <kit>/tools/land.py -C <main checkout> <a> <b> --expect-tip <tip-a> --expect-tip <tip-b> --reviewed-by <reviewer-a> --reviewed-by <reviewer-b> --submit`,
+one `--reviewed-by` per branch in the same order.
 The tool merges each with its own merge commit, gates the result once, and pushes
 once; a conflict or a red gate undoes the whole batch and lands nothing. Verify
 each branch tip is an ancestor of the remote main. Not landed: report; the

@@ -53,8 +53,8 @@ Only the coordinator or the project manager submits a landing to the land queue;
 There is no standing landing approval here: each landing needs the owner's go for that branch
 (a ruling in the ledger or typed in that session), with the reviewer's verdict. Missing either: do not
 land; say what is missing. From the main checkout, on the main branch:
-`python <kit>/tools/gate.py land <branch> --expect-tip <sha> -C <repo>` (with `--submit` it queues the
-landing and prints the `gate.py wait-result ... -C <repo>` command to wait with; its `RESULT` line
+`python <kit>/tools/gate.py land <branch> --expect-tip <sha> -C <repo>` (with `--reviewed-by <reviewer id> --submit`, naming the
+queued verdict's reviewer, it queues the landing and prints the `gate.py wait-result ... -C <repo>` command to wait with; its `RESULT` line
 carries the same verdict line).
 It queues, locks, merges onto the main it finds, gates the merged tree, pushes and verifies
 (`<kit>/docs/gate.md` "Landing"). Success: a `LANDED ` line and exit 0. A red gate leaves main untouched (the merge is made in the

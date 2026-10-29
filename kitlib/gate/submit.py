@@ -1,7 +1,11 @@
 """A submitted landing (docs/gate.md "Submitting a landing"): `land.py --submit` and `gate.py land
 --submit` start the same landing as a detached, windowless process and return at once.
 
-  submit    check the arguments (USAGE); refuse, writing nothing, while a branch's landing runs
+  submit    check the arguments (USAGE); with `reviewed_by` (both tools pass it), check that each
+            branch has a verdict queued at its tip and that the submission names its reviewer
+            (named_review: a missing or miscounted --reviewed-by is USAGE with an `Instead:`
+            line, a wrong id or no usable verdict REFUSED, nothing written); refuse, writing
+            nothing, while a branch's landing runs
             in a live process or once a branch landed at its tip (blocked); write each branch's
             `running` land record (one run_id for the batch, no pid yet), start the tool again,
             detached, with `--submitted <payload>`, wait for it to record itself (claim), and
@@ -86,6 +90,10 @@ from kitlib.lock import run as lockrun
 from kitlib.proc import process
 
 FLAG = '--submitted'
+# The submission's naming of the review each branch lands on (named_review): shown on the command
+# line, where the host's permission check reads it; the verdict itself is in the queue.
+REVIEWED_BY = '--reviewed-by'
+ID_SPLIT = re.compile(r'[/,;\s]+')
 # 2: the token's hash (token_sha256) and restore's checks (Trust, above). A schema-1 payload, an
 # older kit's, is a SubmitError: its records are finished refused, and it is submitted again.
 SCHEMA = 2
@@ -296,14 +304,87 @@ def blocked(root, branches, tips):
     return None
 
 
+def reviewer_ids(entry):
+    """The ids a verdict entry's `reviewer_id` lists, split as kitlib.gate.land.is_author splits
+    it (on `/`, `,`, `;` or white space); the whole value when that leaves none."""
+    ids = [i for i in ID_SPLIT.split(entry['reviewer_id'].strip()) if i]
+    return ids or [entry['reviewer_id']]
+
+
+def again_line(tool, args, ids, kit=None):
+    """The `Instead:` command of a submission that did not name its reviewers: `python
+    <kit>/tools/<tool> <args> --reviewed-by <id> ... --submit`, in the land permission rule's form
+    (docs/allow-rules.md: --submit last, nothing after it). Forward slashes in the script's path,
+    since the rules deny a backslash; an argument holding a space is double-quoted."""
+    kit = (kit or pluginsource.live_root()).replace('\\', '/').rstrip('/')
+    words = list(args)
+    for i in ids:
+        words += [REVIEWED_BY, i]
+    return 'python %s/tools/%s %s --submit' % (kit, tool, ' '.join(_arg(w) for w in words))
+
+
+def named_review(root, branches, tips, given, again=None):
+    """None when every branch has a verdict queued at its tip (kitlib.gate.verdicts) and `given`,
+    the submission's --reviewed-by ids, names each one's reviewer, in order: an id the entry's
+    `reviewer_id` lists, or that whole value, case aside (reviewer_ids). Else an Outcome, with
+    nothing read beyond the queue and nothing written: REFUSED for the first branch, in order,
+    whose entry is missing, cannot be used, is marked failed or is at another tip (the landing
+    would refuse it too: docs/gate.md "Strict paths"), then USAGE when `given` is not one id per
+    branch, its `Instead:` line `again(ids)` with the first id each entry lists, then REFUSED for
+    the first id that is not its branch's reviewer, with no `Instead:` line (the review named is
+    not the one on record: the caller finds out which is meant). This shows the review on the
+    command line; the landing's own checks still decide (Lander.verdict_check)."""
+    common, why = repo.common_dir(root)
+    if not common:
+        return G.Outcome(G.REFUSED, ['REFUSED: the verdict queue cannot be found: %s; nothing '
+                                     'was changed' % why])
+    entries = []
+    for b, t in zip(branches, tips):
+        try:
+            e = verdicts._load(verdicts.entry_path(common, b), b)
+        except verdicts.VerdictError as x:
+            return _refused([], 'the verdict entry of %s cannot be used: %s' % (b, x))
+        if e is None:
+            return _refused([], '%s lands only with a verdict queued at its tip, and none is '
+                                'queued for it: queue it with tools/verdict.py add' % b)
+        if e['state'] != verdicts.QUEUED:
+            return _refused([], 'the verdict of %s is marked failed (%s): queue it again with '
+                                'tools/verdict.py add' % (b, e['last_result']))
+        if e['tip'].lower() != t.lower():
+            return _refused([], 'the verdict of %s was given at %s, and the submission names %s: '
+                                'review and queue that tip, or carry the verdict (tools/verdict.py '
+                                'carry) when a main sync is all that changed' % (b, e['tip'], t))
+        entries.append(e)
+    if len(given) != len(branches):
+        lines = ['USAGE: a submission names the review each branch lands on: one %s <reviewer '
+                 'id> per branch, in --expect-tip\'s order, the reviewer_id of its verdict queued '
+                 'at its tip (%d given for %d branch%s); nothing was changed' % (
+                     REVIEWED_BY, len(given), len(branches), '' if len(branches) == 1 else 'es')]
+        if again is not None:
+            lines.append('Instead: %s' % again([reviewer_ids(e)[0] for e in entries]))
+        return G.Outcome(G.USAGE, lines)
+    for b, e, g in zip(branches, entries, given):
+        names = [i.casefold() for i in reviewer_ids(e)] + [e['reviewer_id'].strip().casefold()]
+        if g.strip().casefold() not in names:
+            return _refused([], '%s %s for %s is not the reviewer of its verdict queued at %s: '
+                                '%s by %s/%s (%s); name the review that verdict records, or queue '
+                                'the one you mean (tools/verdict.py add)' % (
+                                    REVIEWED_BY, g, b, e['tip'], e['verdict'], e['reviewer'],
+                                    e['reviewer_model'], e['reviewer_id']))
+    return None
+
+
 def submit(root, tool_file, child_args, branches, tips, expect_main=None, environ=None,
            detach_fn=None, kit=None, now=None, claim_wait_s=CLAIM_WAIT_S,
-           clock=time.monotonic, sleep=time.sleep, landing_of=None):
+           clock=time.monotonic, sleep=time.sleep, landing_of=None, reviewed_by=None,
+           again=None):
     """Start the landing of `branches` at `tips` detached: `tool_file` (tools/land.py or
     tools/gate.py) again with `child_args` (the landing's own arguments, -C absolute) and
     `--submitted <payload>`. An Outcome: OK with the REVIEW lines (review_lines) and the
     SUBMITTED line last, once old submissions' files are pruned (prune), USAGE for arguments the
-    landing would refuse as usage (nothing written), REFUSED with nothing written when a
+    landing would refuse as usage (nothing written), with `reviewed_by` (the --reviewed-by ids;
+    None checks nothing, for a caller other than the two tools) named_review's USAGE or REFUSED
+    with `again` its Instead: command (nothing written), REFUSED with nothing written when a
     branch's landing is running or it landed at its tip already (blocked), REFUSED when the
     records or the payload cannot be written or the start fails (records written are finished
     `refused`), or when the detached landing died before it recorded itself (claim: its
@@ -316,6 +397,10 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
     why = land.Lander(root, branches, expect_main, tips).usage()
     if why:
         return G.Outcome(G.USAGE, ['USAGE: %s' % why])
+    if reviewed_by is not None:
+        out = named_review(root, branches, tips, list(reviewed_by), again)
+        if out is not None:
+            return out
     run_id = secrets.token_hex(8)
     try:
         payload, output = files(root, branches, run_id)
