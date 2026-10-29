@@ -2148,6 +2148,31 @@ class ClientCase(ServeCase):
                                              'backlog_at': None}, NOW),
                          ['revision 1', 'git: no answer', 'backlog: not read yet'])
 
+    def test_status_lines_say_the_code_and_the_jobs_before_the_tunnel(self):
+        from kitlib.hubsite import codestale
+        base = {'revision': 2, 'git': None, 'backlog': None, 'tunnel': 'on'}
+        health = dict(base, code=codestale.state(False), jobs=None)
+        self.assertEqual(serve.status_lines(health, NOW)[3:],
+                         ['code: current', 'jobs: none', 'tunnel: on'])
+        health['code'] = codestale.state(True)
+        self.assertEqual(serve.status_lines(health, NOW)[3], 'code: stale: ' + codestale.text())
+        long_note = 'n' * 100
+        health['jobs'] = {
+            'zeta': {'runs': 4, 'failures': 2, 'running': True, 'note': 'old note',
+                     'error': 'RefreshFailed: exited 1\nat https://user:pw@example.invalid/x'},
+            'alpha': {'runs': 1, 'failures': 0, 'running': False, 'note': long_note,
+                      'error': None},
+            'beta': {'runs': 0, 'failures': 0, 'running': False, 'note': None, 'error': None}}
+        self.assertEqual(serve.status_lines(health, NOW)[4], 'jobs: ' + '; '.join([
+            'alpha runs 1, failures 0: ' + 'n' * (serve.JOB_NOTE_MAX - 3) + '...',
+            'beta runs 0, failures 0',
+            'zeta runs 4, failures 2, running: RefreshFailed: exited 1 at '
+            'https://example.invalid/x']))
+        # an older server's answer, without the fields: neither line
+        self.assertEqual(serve.status_lines(base, NOW),
+                         ['revision 2', 'git: no answer', 'backlog: no source on this server',
+                          'tunnel: on'])
+
 
 class _Keys(object):
     """A key source holding the test key: get(kid), and of itself what a test tells it to say
@@ -2446,6 +2471,8 @@ class TunnelCase(ServeCase):
                     self.assertEqual([s for s in said if s.startswith('tunnel')], [line], said)
                     # after the backlog line, the last line of a server with nothing missing
                     self.assertEqual(said[-1], line, said)
+                    # a real server's `code` and `jobs` (none built here) read as these lines
+                    self.assertEqual(said[-3:-1], ['code: current', 'jobs: none'], said)
                 self.assertIs(hub.close(), True)
         self.assertEqual(self.errors(), [])
 
