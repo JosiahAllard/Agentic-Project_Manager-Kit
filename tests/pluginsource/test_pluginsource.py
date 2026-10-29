@@ -405,24 +405,24 @@ class DefaultExportDirTest(unittest.TestCase):
 
     def test_linux_is_under_the_profile_from_the_password_database(self):
         self.on('linux', lambda: '/home/kit')
-        self.assertEqual(P.default_export_dir({}), self.LINUX)
         s = P.settings(None, environ={})
         self.assertEqual(s, P.Settings(os.path.normpath(self.LINUX), False, 'origin'))
+        self.assertEqual(P.default_export_dir({}), self.LINUX)
 
     def test_linux_reads_no_environment(self):
         self.on('linux', lambda: '/home/kit')
         env = {'XDG_DATA_HOME': '/elsewhere/data', 'HOME': '/elsewhere/home',
-               'LOCALAPPDATA': r'C:\lad'}
-        self.assertEqual(P.default_export_dir(env), self.LINUX)
+               'LOCALAPPDATA': os.path.join(os.path.abspath(os.sep), 'lad')}
         with mock.patch.dict(os.environ, env):
-            self.assertEqual(P.default_export_dir(), self.LINUX)
             self.assertEqual(P.settings(None).export_dir, os.path.normpath(self.LINUX))
+            self.assertEqual(P.default_export_dir(), self.LINUX)
+        self.assertEqual(P.default_export_dir(env), self.LINUX)
 
     def test_linux_without_a_profile_names_the_config_key(self):
         def gone():
             raise KeyError('uid 4242')
         self.on('linux', gone)
-        with self.assertRaisesRegex(P.RefreshError, 'plugin.export_dir'):
+        with self.assertRaisesRegex(P.RefreshError, 'profile folder .*plugin.export_dir'):
             P.settings(None, environ={})
 
     def test_an_explicit_export_dir_wins_on_either_platform(self):
@@ -436,10 +436,12 @@ class DefaultExportDirTest(unittest.TestCase):
     def test_windows_is_unchanged(self):
         self.on('windows')
         lad = os.path.join(os.path.abspath(os.sep), 'lad')
-        self.assertEqual(P.default_export_dir({'LOCALAPPDATA': lad, 'XDG_DATA_HOME': '/x'}),
-                         os.path.join(lad, 'pm-kit', 'plugin'))
+        env = {'LOCALAPPDATA': lad, 'XDG_DATA_HOME': '/x'}
+        self.assertEqual(P.settings(None, environ=env).export_dir,
+                         os.path.normpath(os.path.join(lad, 'pm-kit', 'plugin')))
         with self.assertRaisesRegex(P.RefreshError, 'LOCALAPPDATA is not set'):
             P.settings(None, environ={'XDG_DATA_HOME': '/x'})
+        self.assertEqual(P.default_export_dir(env), os.path.join(lad, 'pm-kit', 'plugin'))
 
 
 class CurrentLinesTest(Base):
