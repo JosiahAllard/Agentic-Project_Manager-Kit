@@ -15,8 +15,9 @@ from kitlib.git import cmd as gitcmd
 KEY = "pm_watch"
 WEEK_BANDS = (95, 98, 99)
 FIVE_BANDS = (95, 98, 99)         # 95 no new work, 98 landings only; no PM headroom
-LINE = re.compile(r"account (\d+|codex): five_hour=(reset|\d+|\?)%?.*?seven_day=(reset|\d+|\?)%?")
-NO_FILE = re.compile(r"account (\d+|codex): no usage (?:file|data)")
+ACCOUNT = r"account (\d+|codex): "
+LINE = re.compile(ACCOUNT + r"five_hour=(reset|\d+|\?)%?.*?seven_day=(reset|\d+|\?)%?")
+NO_FILE = re.compile(ACCOUNT + r"no usage (?:file|data)")
 AGE = re.compile(r"\[updated (\d+|\?) min ago\]")
 STALE_MINUTES = 60               # a reading older than this is shown as stale (docs/launcher.md "Usage")
 
