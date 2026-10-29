@@ -46,7 +46,7 @@ A `gate.steps` entry that runs the check, as a warning until the map settles:
   ],
   "ratchets": [
     {"id": "brain-source-node", "from": "brain", "to": "node", "kinds": ["source"], "goal": 0,
-     "record": "R-12"}
+     "record": "EX-12"}
   ],
   "test_sources": ["*Tests/*", "*/tests/*", "*Tests.cs"],
   "root_markers": ["REPO_ROOT.marker"]
