@@ -245,7 +245,9 @@ class Run(Base):
             def call(self, verb, payload, timeout_s=None):
                 self.calls.append((verb, payload))
                 raise subprocess.TimeoutExpired(['ssh'], timeout_s)
-        self.assert_start_unknown(self.node_job(Slow(self.box)), 'start on box1: no reply')
+        self.assert_start_unknown(self.node_job(Slow(self.box)), 'start on box1: no reply in %s s; '
+                                  'ssh was stopped' % job.CALL_TIMEOUT_S)
+        self.assertNotIn("['ssh']", ' '.join(self.said))      # not the TimeoutExpired's command
 
     def test_an_ssh_that_does_not_start_sent_nothing_and_falls_back(self):
         class NoSsh(FakeLink):

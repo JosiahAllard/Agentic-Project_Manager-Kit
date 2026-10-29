@@ -193,10 +193,13 @@ class NodeJob(object):
         except OSError as e:                          # ssh did not start: nothing went out
             raise JobError(EXIT_NODE, '%s on %s: %s' % (verb, self.node.name, e), fallback)
         except Exception as e:                        # timed out: ssh was killed
+            # a TimeoutExpired's text is the whole ssh command line: say only how long
+            why = ('no reply in %s s; ssh was stopped' % CALL_TIMEOUT_S
+                   if type(e).__name__ == 'TimeoutExpired'
+                   else 'no reply (%s)' % (str(e) or type(e).__name__))
             if sent:
-                raise sent('%s on %s: no reply (%s)'
-                           % (verb, self.node.name, str(e) or type(e).__name__))
-            raise JobError(EXIT_NODE, '%s on %s: %s' % (verb, self.node.name, e), fallback)
+                raise sent('%s on %s: %s' % (verb, self.node.name, why))
+            raise JobError(EXIT_NODE, '%s on %s: %s' % (verb, self.node.name, why), fallback)
         line = out.decode('utf-8', 'replace').strip().splitlines()
         try:
             d = json.loads(line[-1]) if line else None
