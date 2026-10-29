@@ -25,7 +25,6 @@ import os
 import time
 
 from kitlib import pluginsource
-from kitlib.pluginsource import claude
 from kitlib.proc import process     # noqa: F401 - loaded now: refresh.pid reads it mid-run
 from kitlib.hubsite import jobs
 
@@ -42,6 +41,12 @@ class RefreshFailed(Exception):
 def make(sources):
     return jobs.Job(NAME, EVERY_S, PluginJob(copies=getattr(sources, 'plugin_copies', None),
                                           home=getattr(sources, 'home', None)))
+
+
+def _host():
+    """The plugin's host module (account_folders, Runner), through kitlib.pluginsource's own seam,
+    so this module names no host (tests/host test_leaks)."""
+    return pluginsource._host()
 
 
 def _kit():
@@ -64,7 +69,7 @@ class PluginJob(object):
     checkout this kit runs from, or the one its export's marker names), `load(kit)` the plugin
     Settings, `folders()` the account folders, `refresh(kit, s, folders)` -> (exit code, lines),
     the refresh with apply (default kitlib.pluginsource.refresh with `runner`, default
-    claude.Runner(home), the in-use reader and the copy steps), `alive` refresh.pid's liveness
+    the plugin host's Runner(home), the in-use reader and the copy steps), `alive` refresh.pid's liveness
     test, `clock` epoch seconds, `in_use(root)` the in-use reader the prune reads (default
     kitlib.pluginsource.read_in_use; None: none, so the prune keeps its 7-day rule)."""
 
@@ -73,10 +78,10 @@ class PluginJob(object):
         self.copies = copies
         self.in_use = in_use
         self.home = home
-        self.runner = runner            # None: a claude.Runner(home), made at each refresh
+        self.runner = runner            # None: the host's Runner(home), made at each refresh
         self.kit = kit
         self.load = load or (lambda kit: pluginsource.load(home, kit=kit))
-        self.folders = folders or (lambda: claude.account_folders(home))
+        self.folders = folders or (lambda: _host().account_folders(home))
         self.refresh = refresh or self._refresh
         self.alive = alive
         self.clock = clock or time.time
@@ -144,7 +149,7 @@ class PluginJob(object):
             lines.append(line)
             log.write(line)
         try:
-            runner = self.runner or claude.Runner(self.home)
+            runner = self.runner or _host().Runner(self.home)
             reader = self.in_use
             in_use = None if reader is None else (lambda: reader(s.export_dir))
             code = pluginsource.refresh(kit, s, folders, out, apply=True, runner=runner,

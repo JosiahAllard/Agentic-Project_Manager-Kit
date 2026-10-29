@@ -219,7 +219,7 @@ class WiredTest(ServeCase):
             return jobs.Job('demo', 300, run, first_s=0)
         hub = self.build(jobs=[maker])
         self.assertEqual(len(made), 1)
-        self.assertIn('timed jobs on: demo', hub.notes)
+        self.assertEqual(hub.jobs.names(), ['demo'])
         self.assertEqual(run.calls, 0, 'build starts nothing')
         hub.start()
         self.assertTrue(run.ran.wait(WAIT_S))

@@ -59,8 +59,8 @@ text is for the owner's console (it may name a folder):
   6. the push-notification worker (kitlib.hubsite.push.PushWorker), only when Sources.push and
      Sources.push_dir are both set, with a line in `Hub.notes`. It is made here and started by
      start(); one that fails to start is an 'error' line and the hub serves without it.
-  7. the timed jobs (kitlib.hubsite.jobs.Jobs), one per maker in Sources.jobs, with a line in
-     `Hub.notes` naming them; a maker that raises is a line there and the hub serves without
+  7. the timed jobs (kitlib.hubsite.jobs.Jobs), one per maker in Sources.jobs (GET health
+     `jobs` names them); a maker that raises is a line in `Hub.notes` and the hub serves without
      that job. Their events are pushed through the push worker when there is one, their
      failures are 'error' lines of the log, and GET health's `jobs` reads them. Started by
      start(), before the listeners.
@@ -1180,7 +1180,6 @@ def _make_jobs(sources, pusher, notes, log):
                          % (getattr(make, '__module__', '?'), type(e).__name__, e))
     if not made:
         return None
-    notes.append('timed jobs on: %s' % ', '.join(j.name for j in made))
     return _jobs.Jobs(made, notify=pusher.job_event if pusher is not None else None,
                       log=functools.partial(_job_line, log))
 
