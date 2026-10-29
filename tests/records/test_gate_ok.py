@@ -471,6 +471,35 @@ class ImportTest(GateOkCase):
                      rec=self.node_record(config_rev=first))
 
 
+class RanOnTest(GateOkCase):
+    """build/record_pass `ran_on`: a landing's merged gate checked on a load node is recorded on
+    main with the node it ran on, and with no input_keys, so no later gate serves a step from it."""
+
+    def test_a_record_with_ran_on_is_written_and_verifies_with_it(self):
+        path, rec = self.passed(full=True, config_rev=self.head, ran_on=RAN_ON)
+        self.assertEqual((rec['ran_on'], rec['input_keys']), (RAN_ON, None))
+        self.assertIsNot(rec['ran_on'], RAN_ON)
+        self.assertEqual(gate_ok.verify(self.repo.root, self.head), (rec, None))
+
+    def test_ran_on_with_input_keys_is_refused(self):
+        with self.assertRaises(gate_ok.RecordError) as cm:
+            self.passed(ran_on=RAN_ON, input_keys=KEYS_SET)
+        self.assertIn('has no input_keys', str(cm.exception))
+
+    def test_a_ran_on_that_is_not_the_three_strings_is_refused(self):
+        for ran_on in ({}, dict(RAN_ON, node=''), dict(RAN_ON, job=7), dict(RAN_ON, extra='x'),
+                       'box1'):
+            with self.subTest(ran_on=ran_on):
+                with self.assertRaises(gate_ok.RecordError) as cm:
+                    gate_ok.build(self.repo.root, self.head, GATE, KIT, 'kit-test',
+                                  '2026-10-06T10:00:00Z', STEPS, ran_on=ran_on)
+                self.assertIn('ran_on is {node, host_key, job}', str(cm.exception))
+
+    def test_no_ran_on_writes_no_key(self):
+        _path, rec = self.passed()
+        self.assertNotIn('ran_on', rec)
+
+
 class VerifyUnchangedTest(GateOkCase):
     """verify() after the import_record refactor: a record this machine's gate wrote reads back
     exactly as written, and verify writes nothing."""
