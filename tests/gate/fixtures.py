@@ -94,7 +94,9 @@ def test_env():
 # tools/kit_tests.py's pool it is the unit's unit-<n>.out (kitlib.tooldeps.pool_worker), and it is
 # so even when unittest's buffer has replaced sys.stderr. The slowest gate test takes well under
 # DUMP_S, and TakeTurns (tests/gate/test_land.py) waits HANG_S = 600 before it fails a hang.
-DUMP_S = 300
+# DUMP_S is well under the pool's whole-unit kitlib.tooldeps.selfrun.UNIT_TIMEOUT (300), since a
+# test starts some way into its unit: a dump at 300 never fired before the unit was killed.
+DUMP_S = 120
 DUMP_FD = 2
 
 

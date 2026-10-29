@@ -64,6 +64,10 @@ class StackDump(unittest.TestCase):
         time.sleep(AFTER_S)
         self.assertEqual(self.dumped(), '')
 
+    def test_the_deadline_fires_well_inside_the_pools_unit_timeout(self):
+        from kitlib.tooldeps import selfrun
+        self.assertLessEqual(fixtures.DUMP_S, selfrun.UNIT_TIMEOUT / 2)
+
     def test_an_unusable_fd_skips_the_dump(self):
         self.addCleanup(faulthandler.cancel_dump_traceback_later)     # should it arm after all
         case = mock.Mock()

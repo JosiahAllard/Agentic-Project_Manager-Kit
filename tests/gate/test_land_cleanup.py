@@ -145,8 +145,11 @@ class AfterLanding(CleanupCase):
             self.repo.write('b.py', 'later\n', root=wt)
             moved.append(self.repo.commit('later work', 'b.py', cwd=wt))
             self.repo.git('push', '-q', 'origin', BRANCH)
+            # In the landing's own slot, as Lander.gate runs it: a second booking can wait
+            # forever when confine(1) leaves one fake slot (under a gate's machine-lock run).
             return runner.merged_gate(lander.root, lander.cfg, lander.expect_main,
-                                      log_dir=lander.log_dir, book_kw=lander.book_kw)
+                                      log_dir=lander.log_dir, book_kw=lander.book_kw,
+                                      slot=lander.slot)
         out = self.lander(BRANCH, self.main, tip, merged_gate=merged_gate).run()
         entry = self.assert_landed(out)[BRANCH]
         self.assertEqual((entry['remote_branch'], entry['worktree'], entry['local_branch']),
