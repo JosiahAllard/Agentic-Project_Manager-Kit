@@ -385,7 +385,7 @@ def _created(p):
         return None
 
 
-def watcher(cfg, procs, beat=None, now=None):
+def watcher(cfg, procs, beat=None, now=None, job=None):
     """Steps: empty while pm_watch is alive and not streaming, else the step that (re)starts it.
 
     Alive means all of: the heartbeat pm_watch writes every pass (beat(), default read_heartbeat)
@@ -397,7 +397,10 @@ def watcher(cfg, procs, beat=None, now=None):
     its events, and the PM starts it again at once, then handles them (docs/pm-watch.md). A live
     watcher whose heartbeat says it streams, and a pm_watch_cmd with --stream, each add a line:
     a streaming watcher never exits, so its events reach no one. The configured command is
-    printed as written, never changed."""
+    printed as written, never changed. The hub's session-watch job stands in for pm_watch: while
+    its health block (job(), default kitlib.pmwatch.hub_session_job_block) covers
+    (kitlib.pmwatch.session_job_healthy: not failing, a success at most 300 s old) the watcher
+    counts as up and no (re)start step is given (docs/pm-watch.md "Hub session-watch job")."""
     running = {}
     for p in procs:
         name = (p.get("Name") or "").lower()
@@ -407,6 +410,10 @@ def watcher(cfg, procs, beat=None, now=None):
     now = time.time() if now is None else now
     cmd = _pm_watch_cmd(cfg)
     lines = _watcher_state(hb, running, now, cmd)
+    if lines:                       # the hub is asked only when pm_watch alone is not up
+        from kitlib import pmwatch
+        if pmwatch.session_job_healthy((job or pmwatch.hub_session_job_block)(), now):
+            lines = []
     if _STREAM_FLAG.search(cmd):
         lines.append("pm_start.pm_watch_cmd has --stream: a watcher started with it never exits, so "
                      "a background run reports no event; remove --stream from pm_watch_cmd")

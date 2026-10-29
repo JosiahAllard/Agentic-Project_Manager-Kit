@@ -170,6 +170,30 @@ class YieldsToPmWatch(Base):
         j(self.ctx())
         self.assertEqual(self.pushed, [('bgfail', 'r2')])
 
+    def test_a_fresh_beat_that_yielded_does_not_hold_the_push(self):
+        j = self.job()
+        j(self.ctx())
+        W.write_heartbeat(W.heartbeat_file(self.state), 4242, self.now - 10, False, yielded=True)
+        self.alert('r1')
+        self.now += 60
+        j(self.ctx())
+        self.assertEqual(self.pushed, [('bgfail', 'r1')], 'a pm_watch that stepped aside is not waited for')
+
+    def test_a_fresh_beat_not_yielded_or_from_an_older_pm_watch_holds_the_push(self):
+        j = self.job()
+        j(self.ctx())
+        hb = W.heartbeat_file(self.state)
+        W.write_heartbeat(hb, 4242, self.now - 10, False, yielded=False)
+        self.alert('r1')
+        self.now += 60
+        self.assertIsInstance(j(self.ctx()), jobs.Skip)
+        with open(hb, 'w', encoding='utf-8') as f:  # an older pm_watch: no "yielded" field
+            json.dump({'pid': 4242, 'beat': self.now - 10, 'stream': False, 'started': None}, f)
+        self.alert('r2')
+        self.now += 60
+        self.assertIsInstance(j(self.ctx()), jobs.Skip)
+        self.assertEqual(self.pushed, [])
+
     def test_stale_heartbeat_does_not_hold_the_push(self):
         j = self.job()
         j(self.ctx())

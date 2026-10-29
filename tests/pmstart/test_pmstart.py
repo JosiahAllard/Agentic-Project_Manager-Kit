@@ -84,8 +84,23 @@ class WatcherTest(unittest.TestCase):
     without --stream, so a streaming one is a line (docs/pm-start.md)."""
     T = 1000000.0
 
-    def run_it(self, procs, hb, cfg=CFG):
-        return pmstart.watcher(cfg, procs, beat=lambda: hb, now=self.T)
+    def run_it(self, procs, hb, cfg=CFG, job=None):
+        return pmstart.watcher(cfg, procs, beat=lambda: hb, now=self.T, job=lambda: job)
+
+    def test_a_covering_session_watch_job_counts_as_up(self):
+        job = {"failures": 0, "ok_at": self.T - 60, "every_s": 60}
+        self.assertEqual(self.run_it([], None, job=job), [], "no pm_watch at all, the job covers")
+        stale = {"pid": 42, "beat": self.T - pmstart.BEAT_STALE - 120, "stream": False}
+        self.assertEqual(self.run_it([wproc(42)], stale, job=job), [])
+        for bad in ({"failures": 3, "ok_at": self.T - 60}, {"failures": 0, "ok_at": None},
+                    {"failures": 0, "ok_at": self.T - 301}, None):
+            (s,) = self.run_it([], None, job=bad)
+            self.assertTrue(s.startswith("pm_watch.py is not running"), (bad, s))
+
+    def test_the_hub_is_not_asked_while_pm_watch_is_up(self):
+        hb = {"pid": 42, "beat": self.T - 30, "stream": False}
+        self.assertEqual(pmstart.watcher(CFG, [wproc(42)], beat=lambda: hb, now=self.T,
+                                         job=lambda: self.fail("asked the hub")), [])
 
     def test_fresh_heartbeat_and_live_pid_is_running(self):
         hb = {"pid": 42, "beat": self.T - 30, "stream": False}
@@ -208,7 +223,8 @@ class WatcherTest(unittest.TestCase):
             try:
                 self.assertIsNone(_orig_beat())
                 pmwatch.write_heartbeat(pmwatch.heartbeat_file(state), 42, 5.0, True)
-                self.assertEqual(_orig_beat(), {"pid": 42, "beat": 5.0, "stream": True, "started": None})
+                self.assertEqual(_orig_beat(), {"pid": 42, "beat": 5.0, "stream": True, "started": None,
+                                                  "yielded": False})
                 pmwatch.write_heartbeat(pmwatch.heartbeat_file(state), 42, 5.0, True, 3.5)
                 self.assertEqual(_orig_beat()["started"], 3.5)
             finally:
