@@ -30,9 +30,9 @@ def inside_repo(path):
 
 
 def names():
-    return ('csproj', 'paths', 'gradle', 'python')
+    return ('csproj', 'paths', 'gradle', 'python', 'java-imports')
 
 
 def all_detectors():
-    from . import csproj, gradle, paths, python
-    return (csproj, paths, gradle, python)
+    from . import csproj, gradle, java_imports, paths, python
+    return (csproj, paths, gradle, python, java_imports)
