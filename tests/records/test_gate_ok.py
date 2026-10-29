@@ -1,7 +1,9 @@
 """kitlib.records.gate_ok: the gate-OK record written and verified against real throwaway repos."""
+import contextlib
 import hashlib
 import json
 import os
+import time
 import unittest
 from unittest import mock
 
@@ -13,6 +15,27 @@ GATE = {'steps': [{'name': 'unit', 'run': ['python', '-m', 'unittest']}], 'fail'
 KIT = {'version': '0.1', 'commit': 'a' * 40}
 STEPS = [{'name': 'unit', 'result': 'pass', 'seconds': 1.5}, {'name': 'docs'}]
 AUTHOR = '%s <%s>' % (gitfixture.NAME, gitfixture.EMAIL)
+
+
+class FakeClock(object):
+    """time.monotonic and time.sleep for the `with` of patched(): a sleep is recorded and moves
+    the clock on at once, so a retry loop's tries and pauses are counted exactly."""
+
+    def __init__(self):
+        self.now, self.sleeps = 1000.0, []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, s):
+        self.sleeps.append(s)
+        self.now += s
+
+    def patched(self):
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.object(time, 'monotonic', self.monotonic))
+        stack.enter_context(mock.patch.object(time, 'sleep', self.sleep))
+        return stack
 
 
 class GateOkCase(unittest.TestCase):
@@ -101,24 +124,68 @@ class WriteTest(GateOkCase):
         self.assertEqual(gate_ok.read(self.repo.root, self.head)[0]['gate_config'], second['gate_config'])
         self.assertNotEqual(first['gate_config'], second['gate_config'])
 
-    def test_a_replace_held_open_is_retried_and_the_temp_file_is_removed_on_failure(self):
-        real = os.replace
-        calls = []
+    def test_a_replace_held_open_is_tried_five_times_0_2_s_apart_then_a_record_error(self):
+        # The equivalence test of _write_file's move onto kitlib.fs.replace: the loop it replaced
+        # tried RETRIES (5) times, sleeping RETRY_SLEEP (0.2 s) between, then raised the
+        # PermissionError (a RecordError here), the temp file removed. The record folder's write
+        # comes first and is the one held; its .git copy then replaces at once. The clock is
+        # faked, so the count is exact.
+        folder_rec = os.path.normcase(gate_ok.record_path(self.repo.root, self.head))
+        copy = gate_ok.legacy_path(self.repo.root, self.head)
+        for fails, tries, written in ((2, 3, True), (4, 5, True), (5, 5, False), (9, 5, False)):
+            with self.subTest(fails=fails):
+                for p in (folder_rec, copy):
+                    if os.path.exists(p):
+                        os.remove(p)
+                real, calls, others, clock = os.replace, [], [], FakeClock()
 
-        def flaky(a, b):
-            calls.append(a)
-            if len(calls) < 2:
-                raise PermissionError('held open')
-            real(a, b)
+                def flaky(a, b):
+                    if os.path.normcase(b) != folder_rec:
+                        others.append(b)
+                        return real(a, b)
+                    calls.append(b)
+                    if len(calls) <= fails:
+                        raise PermissionError('held open')
+                    return real(a, b)
+                with clock.patched(), mock.patch.object(gate_ok.os, 'replace', flaky):
+                    if written:
+                        self.passed()
+                    else:
+                        with self.assertRaises(gate_ok.RecordError) as cm:
+                            self.passed()
+                self.assertEqual(len(calls), tries)
+                self.assertEqual(clock.sleeps, [0.2] * (tries - 1))
+                self.assertEqual((os.path.exists(folder_rec), os.path.exists(copy), len(others)),
+                                 (written, written, 1 if written else 0))
+                if not written:
+                    self.assertIn('held open', str(cm.exception))
+                for folder in (os.path.dirname(folder_rec), os.path.dirname(copy)):
+                    self.assertEqual([n for n in os.listdir(folder) if n.endswith('.tmp')], [])
 
-        with mock.patch.object(gate_ok.time, 'sleep'), mock.patch.object(gate_ok.os, 'replace', flaky):
+    def test_the_replace_goes_through_kitlib_fs_replace_with_the_old_bounds(self):
+        real, seen = gate_ok.fsreplace.replace, []
+
+        def spy(src, dst, wait=None, pause=None):
+            seen.append((os.path.normcase(dst), wait, pause))
+            return real(src, dst, wait=wait, pause=pause)
+        with mock.patch.object(gate_ok.fsreplace, 'replace', spy):
             path, _ = self.passed()
-        self.assertEqual(len(calls), 3)         # the .git copy's two, then the record's one
-        with mock.patch.object(gate_ok.time, 'sleep'), \
-                mock.patch.object(gate_ok.os, 'replace', side_effect=PermissionError('held open')):
-            with self.assertRaises(gate_ok.RecordError):
+        bounds = (gate_ok.REPLACE_WAIT, 0.2)
+        self.assertEqual(seen, [(os.path.normcase(path),) + bounds,
+                                (os.path.normcase(gate_ok.legacy_path(self.repo.root, self.head)),) + bounds])
+        self.assertAlmostEqual(gate_ok.REPLACE_WAIT, 0.7)
+
+    def test_a_replace_refused_otherwise_is_not_retried(self):
+        calls, clock = [], FakeClock()
+
+        def refused(a, b):
+            calls.append(b)
+            raise OSError('disk said no')
+        with clock.patched(), mock.patch.object(gate_ok.os, 'replace', refused):
+            with self.assertRaises(gate_ok.RecordError) as cm:
                 self.passed()
-        self.assertEqual(os.listdir(os.path.dirname(path)), [self.head + '.json'])
+        self.assertIn('disk said no', str(cm.exception))
+        self.assertEqual((len(calls), clock.sleeps), (1, []))
 
     def test_a_write_that_fails_part_way_leaves_no_temp_file(self):
         rec = gate_ok.build(self.repo.root, self.head, GATE, KIT, 'kit-test', 'x', STEPS)
