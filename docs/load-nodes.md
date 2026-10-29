@@ -68,14 +68,16 @@ The job is the checkout's HEAD:
 1. Main checks the job as the node will (a `--note` of at most 200 characters, waits of at most
    7 days) and then pushes HEAD to `refs/node/<job>` on the node's mirror of the repository,
    through the pinned ssh. No remote is added to the checkout. A start the node refuses drops
-   that ref again.
+   that ref again; a ref whose start never came (main stopped, or ssh failed before the start
+   went out) is dropped by a later start on that node once its job id is 7 days old.
 2. The node checks the ref, makes a worktree at that commit, and starts the command under its own
    machine lock, detached from the ssh call.
 3. The output streams back as it comes.
 4. The files matching each `--artifact` glob (relative to the checkout's top) are copied back to
    the same paths in the checkout. A glob is ASCII, has `/` between its parts and no `..` or
    `.git` part, and is not absolute (`kitlib.loadnode.box.glob_ok`); another is usage, exit 2.
-5. The node removes the job.
+5. The node removes the job: its worktree, with everything the command wrote that no
+   `--artifact` glob copied back.
 
 With `--node NAME`, the checkout must have no uncommitted tracked changes (the node runs HEAD) and
 the node must list the repository in `repos`.
@@ -135,6 +137,64 @@ node.py stop NODE JOB                                   ask the node to stop it
 The follow line said on LOST already names the checkout and the globs: a follow without them
 cleans the job and its artifacts with it.
 
+## Gating a branch on a node
+
+```
+node.py gate [--node auto|NAME] [--note TEXT] [--reattach S] [-C DIR]
+```
+
+The checkout's HEAD is gated `--full` on a node, and the gate-OK record it writes there is taken
+into main's record folder (docs/gate.md "Gate-OK record"), so the branch lands as if gated here.
+
+1. Main reads what its own gate would: the repository name (`.kit.json` "repo" "name", else the
+   checkout's folder name: `kitlib.gate.runner.repo_name`), the gate's lock kind, and the default
+   base (docs/gate.md "Default base") as a commit.
+2. Main pushes HEAD to `refs/node/<job>` and the base to `refs/node/<job>-base`, then asks the
+   node's `gate` verb. Main sends no command.
+3. The node gives the job its own bare repository, `jobs/<job>/repo.git` (the mirror's objects
+   through its alternates, no hooks), with `<main>` and `refs/remotes/<remote>/<main>` at the
+   base, and a detached worktree of it at HEAD named `gate/<repo>`: the gate there measures
+   against the same base and names the same repository. The job runner runs the node kit's own
+   `tools/gate.py -C <worktree> --full`, which books the node's machine lock for the gate's kind
+   itself. Ctrl+C or `node.py stop` reaches it as a Ctrl+C, then a kill after 60 seconds.
+4. The output streams back. When the gate passes, the node reads the gate-OK record it wrote
+   (`gate_ok.verify_full`) and puts it in the job's result.
+5. Main takes the record only through `gate_ok.import_record`: every check `verify` makes, with
+   the gate config main's own kit reads at the commit (the record's `config_rev` must be the
+   commit itself and its `gate_config` hash that config's), a `--full` pass, and the record's
+   `repo` main's name. Main adds `ran_on` (the node's name, its pinned host key's fingerprint and
+   the job id, from main's registry), sets `input_keys` to null (a landing serves no step from
+   another machine's run), writes it, says its path and cleans the job. With no `dev_drive` only
+   the .git copy is written, with a warning, as the gate itself does. A node kit at another commit
+   than main's is a warning only: the config hash check is what refuses.
+6. A gate that fails or is stopped ends with its own exit code; no record is read.
+
+A record main does not take is exit 15. The job stays on the node, and main says why and the
+follow and stop lines; the follow line names the checkout, `node.py follow NODE JOB -C "<dir>"`,
+and takes the record into it again once the cause is fixed (a follow with `-C` takes the commit
+from the node's result, not from HEAD now).
+
+`--node auto` (the default) chooses as "Choosing a machine" does, sized by the gate's kind, among
+the nodes that opted the repository in and list the `gate` verb (a node whose kit is older is
+named and passed over). When none qualifies, for each reason auto runs on main there, and when
+the checkout's config or default base cannot be read, main runs its own
+`gate.py -C <checkout> --full` and says why. A node that fails before its job starts gives way to
+main; once it has started the job, nothing does. `--node NAME`: that node or nothing; an unknown
+node, a repository not opted in, uncommitted tracked changes or a config that cannot be read is
+usage, exit 2, and a node whose kit serves no `gate` verb is exit 10.
+
+A kit checkout (this repository) is gated only by its own `tools/gate.py`: a node's installed kit
+would gate it with other code than the checkout's. Auto keeps it on main and says so;
+`--node NAME` is usage, exit 2. No lock-window notices are written for a gate job.
+
+Known limits:
+
+- Unproven on a live box: tested against the real node code and real git on the main machine
+  only. The live proof follows the machine-setup proofs.
+- The node's own copy of the record (in its record folder, when its machine config names a
+  `dev_drive`) and its gate logs and result folder stay on the node; the job folder goes.
+- `gate.py` itself does not send a gate to a node; `node.py gate` is the only way in.
+
 ## Lock runs on a node
 
 ```
@@ -159,7 +219,8 @@ lock holds it, and its exit code comes back as the run's.
   lock that cannot be read.
 - A node runs committed HEAD from the checkout's top, as `node.py run` does: an untracked or
   git-ignored file the command needs (a new test file not committed yet, data, build output) is
-  not there, and what the command writes stays on the node unless `--artifact` names it.
+  not there, and what the command writes is removed with the job unless `--artifact GLOB`
+  copies it back.
 - A Windows command stays on main: its first word ends in `.bat`, `.cmd`, `.ps1`, `.exe`, `.com`
   or `.vbs`, or is `powershell`, `pwsh`, `cmd` or `py`, or an argument holds a drive letter (`C:`
   followed by a slash or the end) or a backslash (`kitlib.loadnode.dispatch.windows_only`). The
@@ -173,8 +234,9 @@ lock holds it, and its exit code comes back as the run's.
   here instead`). Once the node has started the job no failure sends it to main: a LOST
   connection is exit 9 with the follow and stop lines, and a job that ended with no exit code of
   its own or could not be followed is exit 14. A start request that went out with no reply back
-  (its ssh timed out or the link dropped) counts as started: the node may have taken the job, so
-  it is exit 14 with the follow and stop lines, never a run on main and never exit 10.
+  (its ssh timed out or the link dropped) counts as started: the node may have taken the job and
+  may still be running it, so it is exit 14 with the follow and stop lines, never a run on main
+  and never exit 10. Neither 9 nor 14 is ever run again: follow or stop the job with those lines.
 - Ctrl+C before the job starts is exit 130 and nothing ran on a node. After it starts, main asks
   the node to stop the job, says the `node.py follow` line, and exits 130. A second Ctrl+C while
   it asks says the follow and stop lines and exits 130.
@@ -183,17 +245,19 @@ lock holds it, and its exit code comes back as the run's.
 
 ## Exit codes
 
-| Code | `run` and `follow` | `list`, `status` and `stop` |
+| Code | `run`, `gate` and `follow` | `list`, `status` and `stop` |
 |---|---|---|
-| 0 and up | the command's own exit code | 0 every node answered; for stop, asked |
+| 0 and up | the command's own exit code (`gate`: the gate's) | 0 every node answered; for stop, asked |
 | 1 | | a node did not answer; for stop, the node refused |
-| 2 | usage: an unknown node or kind, a repository not opted in, uncommitted changes for `--node NAME`, a bad glob, a start main checks as the node would refuse (a `--note` over 200 characters, a wait over 7 days) | usage, or a registry that is missing, invalid or not ignored by git |
+| 2 | usage: an unknown node or kind, a repository not opted in, uncommitted changes for `--node NAME`, a bad glob, a start main checks as the node would refuse (a `--note` over 200 characters, a wait over 7 days), a kit checkout gated with `--node NAME` | usage, or a registry that is missing, invalid or not ignored by git |
 | 6 | the node was busy (with `--node NAME`) | |
 | 9 | LOST: the connection did not come back; the job runs on | |
-| 10 | the node could not be used before the job started: unreachable, host key, push, start refused, a kit too old for the run verbs; nothing ran | |
+| 10 | the node could not be used before the job started: unreachable, host key, push, start refused, a kit too old for the run verbs (or for `gate`, the gate verb); nothing ran | |
 | 13 | the job succeeded but its artifacts did not all come, or could not all be copied into the checkout (none was) | |
-| 14 | the node started the job, but it ended there with no exit code of its own (its runner vanished, the node lost it) or could not be followed; or the start request went out and no reply came back, so the job may run there (the follow and stop lines are said); it is not run again on main | |
+| 14 | the node started the job, but it ended there with no exit code of its own (its runner vanished, the node lost it) or could not be followed; or the start request went out and no reply came back, so the job may still be running there; the follow and stop lines are said, as for 9, and it is never run again, on main or by a rerun | |
+| 15 | `gate` and `follow`: the gate passed on the node, but main did not take its gate-OK record; the job stays there and the follow line, with `-C`, takes it again | |
 | 130 | Ctrl+C; a started job is asked to stop and the follow line is said | |
 
 `machine_lock.py run` on a node gives the same codes: 2, 6 and 10 only with `--node NAME` (auto
-runs the job on main instead), and 9, 13, 14 and 130 as above.
+runs the job on main instead), and 9, 13, 14 and 130 as above. `node.py gate` gives 2 and 10
+only with `--node NAME` too (auto gates on main instead).

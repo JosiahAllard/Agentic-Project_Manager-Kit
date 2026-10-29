@@ -13,20 +13,28 @@
       has the kind's slots free now; its output streams here, its artifacts (the files matching
       each GLOB, relative to the checkout's top, ASCII) are copied back into the checkout, all
       or none
+  node.py gate [--node auto|NAME] [--note TEXT] [--reattach S] [-C DIR]
+      the checkout's HEAD gated `--full` on a node by the node's own kit, against the default base;
+      the gate-OK record it writes is checked here and taken into this machine's record folder
+      (auto: the main machine's own gate runs when no node that serves `gate` has the gate's
+      kind free; a kit checkout always gates on main, with its own tools/gate.py)
   node.py follow NODE JOB [--artifact GLOB]... [-C DIR] [--reattach S]
-      stream a job's output from its start to its end, then fetch its artifacts and clean it
+      stream a job's output from its start to its end, then fetch its artifacts (a gate job: take
+      its record into the checkout -C names) and clean it
   node.py stop NODE JOB
       ask a node to stop a job
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.loadnode, prints and exits.
 Exit codes, list and status: 0 every node asked answered; 1 at least one did not (every node is
 still listed); 2 usage, or a registry that is missing, invalid or not ignored by git.
-run and follow: the command's own exit code; 2 usage (an unknown node or kind, a repository the
-node has not opted in, tracked changes not committed for --node NAME); 6 the node was busy; 9 the
+run, gate and follow: the command's own exit code (gate: the gate's); 2 usage (an unknown node or
+kind, a repository the node has not opted in, tracked changes not committed for --node NAME, a
+kit checkout gated on a named node); 6 the node was busy; 9 the
 connection was lost (the job runs on: the follow and stop lines are said); 10 the node could not
 be used (nothing ran); 13 the job succeeded but its artifacts did not all come or could not all be
 copied in (none was); 14 the node started the job but it ended there with no exit code of its own
-or could not be followed; 130 Ctrl+C (a started job is asked to stop). With --node auto a node
+or could not be followed; 15 a gate passed on the node but its gate-OK record was not taken here
+(the job is kept: the follow line, with -C, takes it again); 130 Ctrl+C (a started job is asked to stop). With --node auto a node
 that fails before its job starts, or is busy, gives way to the main machine; a job the node
 started never runs again on main. stop: 0 asked, 1 refused.
 """
@@ -103,7 +111,8 @@ def _name(what):
 def parser():
     p = Parser(prog='node.py', allow_abbrev=False, description='The load nodes.')
     p.add_argument('--registry', help=argparse.SUPPRESS)     # tests: a registry file of their own
-    sub = p.add_subparsers(dest='verb', metavar='{list,status,run,follow,stop}', parser_class=Parser)
+    sub = p.add_subparsers(dest='verb', metavar='{list,status,run,gate,follow,stop}',
+                           parser_class=Parser)
     sub.required = True
     sub.add_parser('list', help='the registry, no network', allow_abbrev=False)
     s = sub.add_parser('status', help='ask each node over ssh', allow_abbrev=False)
@@ -126,6 +135,10 @@ def parser():
     r.add_argument('--expect', dest='expect_s', type=_seconds, metavar='D')
     r.add_argument('--note')
     _follow_args(r)
+    g = sub.add_parser('gate', help='gate HEAD --full on a node, or on main', allow_abbrev=False)
+    g.add_argument('--node', default='auto', help='a node\'s name, or auto (default)')
+    g.add_argument('--note')
+    _follow_args(g)
     f = sub.add_parser('follow', help='stream a job to its end, then fetch and clean it',
                        allow_abbrev=False)
     f.add_argument('node', metavar='NODE')
@@ -196,20 +209,45 @@ def _run_main(a, cmd, top):
         return e.code
 
 
+def _is_kit(top):
+    from kitlib.content import oncommit
+    return oncommit.is_kit(top)
+
+
+def _gate_facts(top):
+    return job.gate_facts(top)
+
+
+def _repo_of(top):
+    return job.repo_of(top)
+
+
+def _run_gate_main(top):
+    """The main machine's own `gate.py -C top --full` (it books the machine lock itself): its exit
+    code. A kit checkout's gate is its own tools/gate.py, else this kit's."""
+    import subprocess
+    kit = top if _is_kit(top) else KIT_ROOT
+    try:
+        return subprocess.call([sys.executable, os.path.join(kit, 'tools', 'gate.py'), '-C', top,
+                                '--full'])
+    except KeyboardInterrupt:
+        return 130
+
+
 # -- the verbs -------------------------------------------------------------------------------------
 
 def _load(a):
     return registry.load(a.registry if a.registry else registry.path())
 
 
-def _node_job(a, node, link, co, cmd=None, job_id=None):
+def _node_job(a, node, link, co, cmd=None, job_id=None, gate=None):
     return job.NodeJob(node, link, co.top if co else None, co.sha if co else None,
                        getattr(a, 'repo', None), getattr(a, 'slug', None), getattr(a, 'kind', None),
                        cmd or [], a.artifact, wait_s=getattr(a, 'wait_s', None),
                        expect_s=getattr(a, 'expect_s', None), no_wait=getattr(a, 'no_wait', False),
                        note=getattr(a, 'note', None), say=_say, out=_out,
                        notice_dir=_notice_dir(a.kind) if cmd else None, reattach_s=a.reattach,
-                       job=job_id, tool=TOOL)
+                       job=job_id, tool=TOOL, gate=gate)
 
 
 def _on_node(a, node, co, cmd):
@@ -279,6 +317,101 @@ def cmd_run(a, cmd, runner=None):
     return code
 
 
+def cmd_gate(a, runner=None):
+    try:
+        co = job.checkout(os.path.abspath(a.cwd or os.getcwd()))
+    except job.JobError as e:
+        _err('USAGE: %s' % e.message)
+        return USAGE
+    if _is_kit(co.top):
+        if a.node != 'auto':
+            _err('USAGE: %s is a kit checkout: its gate is its own tools/gate.py, never a node\'s '
+                 'installed kit; run node.py gate without --node' % co.top)
+            return USAGE
+        _say('gating on main: a kit checkout gates with its own tools/gate.py')
+        return _run_gate_main(co.top)
+    try:
+        facts = _gate_facts(co.top)
+    except job.JobError as e:
+        if a.node != 'auto':
+            _err('USAGE: %s' % e.message)
+            return USAGE
+        _say('gating on main: %s' % e.message)
+        return _run_gate_main(co.top)
+    a.repo, a.slug, a.kind, a.artifact = facts['repo'], facts['slug'], facts['kind'], []
+    a.wait_s, a.expect_s, a.no_wait = None, None, False
+    gate = {k: facts[k] for k in ('base', 'remote', 'main')}
+    try:
+        nodes = _load(a)
+    except registry.RegistryError as e:
+        if a.node != 'auto':
+            _err('REFUSED: %s' % e)
+            return USAGE
+        _say('no load node (%s); gating on main' % e)
+        return _run_gate_main(co.top)
+    if not registry.repo_ok(a.repo):
+        if a.node != 'auto':
+            _err('USAGE: %r is not a repo name a node takes (letters, digits, "_", "." and "-")'
+                 % a.repo)
+            return USAGE
+        _say('gating on main: %r is not a repo name a node takes' % a.repo)
+        return _run_gate_main(co.top)
+    if a.node != 'auto':
+        node = next((n for n in nodes if n.name == a.node), None)
+        if node is None:
+            _err('USAGE: no node named %s in the registry' % a.node)
+            return USAGE
+        if a.repo not in node.repos:
+            _err('USAGE: %s has not opted in %s: add it to the node\'s "repos" in the registry'
+                 % (node.name, a.repo))
+            return USAGE
+        if co.dirty:
+            _err('USAGE: %s has tracked changes not committed; a node gates HEAD: commit first'
+                 % co.top)
+            return USAGE
+        return _on_gate(a, node, co, gate)[0]
+    takers = [n for n in nodes if a.repo in n.repos]
+    if co.dirty or not takers:
+        _say('gating on main: %s' % ('tracked changes are not committed' if co.dirty
+                                     else 'no node has opted in %s' % a.repo))
+        return _run_gate_main(co.top)
+    try:
+        need = _need(a.kind)
+    except Exception as e:
+        _say('the gate\'s kind %s cannot be sized here (%s); gating on main' % (a.kind, e))
+        return _run_gate_main(co.top)
+    results = remote.query_all(takers, runner=runner or remote.default_runner)
+    by_name = {r.name: r for r in results}
+    gaters = []
+    for n in takers:
+        r = by_name.get(n.name)
+        if r is not None and r.reply and box.GATE_VERB not in (r.reply.get('verbs') or ()):
+            _say('%s: its kit serves no gate verb (update it)' % n.name)
+            continue
+        gaters.append(n)
+    try:
+        main_lock = _main_lock()
+    except Exception as e:
+        _say('the main machine\'s lock cannot be read (%s); gating on main' % type(e).__name__)
+        return _run_gate_main(co.top)
+    choice = route.choose(gaters, results, a.repo, main_lock, need)
+    _say('%s: %s' % ('gating on main' if choice.node is None else 'gating on ' + choice.where,
+                     choice.why))
+    if choice.node is None:
+        return _run_gate_main(co.top)
+    code, fallback = _on_gate(a, choice.node, co, gate)
+    if fallback:
+        _say('gating on main instead')
+        return _run_gate_main(co.top)
+    return code
+
+
+def _on_gate(a, node, co, gate):
+    """(exit code, fallback) of a gate job on `node`: kitlib.loadnode.dispatch.on_node."""
+    return dispatch.on_node(node, _link, lambda link: _node_job(a, node, link, co, None, gate=gate),
+                            _say)
+
+
 def _named(a):
     """The registry Node named a.node, or None (said)."""
     try:
@@ -301,12 +434,14 @@ def cmd_follow(a):
     if node is None:
         return USAGE
     co = None
-    if a.artifact:
+    if a.artifact or a.cwd:         # -C: a gate job's record is taken into this checkout
         try:
             co = job.checkout(os.path.abspath(a.cwd or os.getcwd()))
         except job.JobError as e:
             _err('USAGE: %s' % e.message)
             return USAGE
+        co = co._replace(sha=None)  # the job's commit is the node's to say, not HEAD now
+        a.repo = _repo_of(co.top)
     a.kind = None
     try:
         with _link(node) as link:
@@ -354,6 +489,8 @@ def main(argv=None, runner=None):
     a = parser().parse_args(head)
     if a.verb == 'run':
         return cmd_run(a, cmd, runner)
+    if a.verb == 'gate' and not cmd:
+        return cmd_gate(a, runner)
     if cmd:
         _err('USAGE: only run takes a command after --')
         return USAGE
