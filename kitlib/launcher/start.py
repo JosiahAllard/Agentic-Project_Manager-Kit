@@ -45,8 +45,9 @@ def pm_ref(settings):
     if not isinstance(name, str) or not name or name.startswith('<'):
         return PM_REF
     return PM_REF_RELAUNCHED % (name, PM_DESKTOP_NAME, PM_NAME)
-DEFAULT_PROMPT = ('Start up now: run your start-up routine, read your state note (in the <repo slug>-coordinator subfolder of the '
-                  'agent temp folder, AGENT_TEMP else TEMP, as state-<your session name>.md), check in with %s, '
+DEFAULT_PROMPT = ('Start up now: run your start-up routine, read your state note (in the '
+                  '<repo slug>-coordinator subfolder of the agent temp folder, AGENT_TEMP else TEMP, as '
+                  'state-<your session name>.md), check in with %s, '
                   'then continue the queue in the state note.' % PM_REF)
 HOME_NOTE = (' Your start folder %s is a home worktree of the main checkout %s, and a relative path resolves in '
              'it: do not write there; your branch work goes in your own worktree, and the main checkout, by '
