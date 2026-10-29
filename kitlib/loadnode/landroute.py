@@ -45,6 +45,14 @@ def _main(why, quiet=False, nodes=(), need=None):
     return Route(route.MAIN, None, why, quiet, list(nodes), need)
 
 
+def need_of(kind, store):
+    """The slots a run of the lock kind `kind` books here (route.need_of on `store`): what plan
+    sizes the merged gate's kind with, and what a landing sizes again when its base's config
+    names another kind (kitlib.gate.land Lander.route_need). KeyError for a kind the kinds
+    table does not name."""
+    return route.need_of(kind, store=store)
+
+
 def plan(root, repo, kind, store=None, merged_gate_fn=None, registry_file=None, runner=None,
          need=None, lock=None, is_kit=None):
     """A Route for the merged gate of a landing in the checkout `root` of the repository `repo`
@@ -77,7 +85,7 @@ def plan(root, repo, kind, store=None, merged_gate_fn=None, registry_file=None, 
     if not nodes:
         return _main('no node has opted in %s' % repo, quiet=True)
     try:
-        want = (need or (lambda k, s: route.need_of(k, store=s)))(kind, store)
+        want = (need or need_of)(kind, store)
     except KeyError:                    # an unknown kind: main's lock refuses it
         return _main('no kind %s' % kind, quiet=True)
     except Exception as e:

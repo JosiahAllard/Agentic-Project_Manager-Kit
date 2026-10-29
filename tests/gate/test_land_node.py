@@ -5,6 +5,7 @@ second gate, and every fallback to main releasing the 1-slot run before it books
 The node side is a stand-in for kitlib.loadnode.landroute; the landing, git, the remote and the
 scratch lock store are real."""
 import collections
+import json
 import threading
 import time
 import unittest
@@ -22,6 +23,7 @@ Node = collections.namedtuple('Node', 'name')
 N1, N2 = Node('n1'), Node('n2')
 NEED = {'cpu': 2, 'gpu': 0}
 RAN_ON = {'node': 'n1', 'host_key': 'SHA256:pinned', 'job': 'j-0001'}
+NEED_BASE = {'cpu': 4, 'gpu': 0}
 SAME = 'the tip has the merge\'s tree; main reuses its steps and a load node never does'
 
 
@@ -55,6 +57,7 @@ class Routes(object):
 
     def __init__(self, where=N1, pick=N1, same=None, run=passing):
         self.where, self.pick, self.same, self.run = where, pick, same, run
+        self.need = NEED_BASE
         self.calls = []
 
     def names(self):
@@ -66,6 +69,12 @@ class Routes(object):
             return landroute.Route(route.MAIN, None, 'n1: busy', False, [N1], NEED)
         return landroute.Route(self.where.name, self.where, '%s has 3 cpu slots free'
                                % self.where.name, False, [N1, N2], NEED)
+
+    def need_of(self, kind, store):
+        self.calls.append(('need_of', kind))
+        if isinstance(self.need, Exception):
+            raise self.need
+        return self.need
 
     def recheck(self, nodes, repo, need):
         self.calls.append(('recheck', [n.name for n in nodes], repo, need))
@@ -420,6 +429,103 @@ class GivesTheTurnBack(NodeCase):
         self.assertEqual(out.code, G.BUSY, out.lines)
         self.assertEqual(len(self.landing_books()), 1)
         self.assertFalse([s for s in self.said if s.startswith('the landing holding')], self.said)
+
+
+
+class BaseNamesAnotherKind(NodeCase):
+    """Main moved on before the landing's turn to a base whose config names another
+    "gate".kind than the one the landing booked with (the config at preconditions): the merged
+    gate runs at the base's kind (Lander.follow, Lander.rebook_kind)."""
+
+    def setUp(self):
+        NodeCase.setUp(self)
+        self.checks.append(self.nothing_held)   # one landing: nobody else holds the resource
+
+    def move_main(self, kind):
+        """Push to the remote's main a commit whose .kit.json books `kind` (unchanged: the
+        same .kit.json and another file): the moved main."""
+        other = self.repo.worktree('other')
+        with open(self.repo.path('.kit.json'), encoding='utf-8') as f:
+            kit = json.load(f)
+        kit['gate']['kind'] = kind
+        self.repo.write('.kit.json', json.dumps(kit, indent=1) + '\n', root=other)
+        self.repo.write('o.py', 'o\n', root=other)
+        moved = self.repo.commit('move main', '.kit.json', 'o.py', cwd=other)
+        self.repo.git('push', '-q', 'origin', '%s:refs/heads/main' % moved)
+        return moved
+
+    def test_a_main_routed_landing_releases_then_books_the_bases_kind(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        moved = self.move_main('cpu-eval')
+        routes = Routes(where=None)
+        lander = self.node_lander(routes, tip)
+        out = lander.run()
+        self.assert_landed_here(out)
+        self.assertEqual(self.repo.git('rev-parse', out.merge + '^1'), moved)
+        first, second = self.landing_books()
+        self.assertEqual((first['kind'], second['kind']), ('engine-test', 'cpu-eval'))
+        self.assertNotIn('cores', second)       # the base's kind at its own size
+        self.assertEqual(second['resource'], land.queue_key(lander.lock.common))
+        self.assertEqual(second['priority'], 'land')
+        self.assertIsNone(second['wait_s'])
+        self.assertFalse(second['no_wait'])
+        line = [s for s in self.said if s.startswith('the base %s books' % moved[:10])]
+        self.assertEqual(len(line), 1, self.said)
+        self.assertIn("releasing the landing's engine-test run and booking a cpu-eval run",
+                      line[0])
+        self.assertLess(self.said.index(line[0]), second['said'])
+        self.assertEqual(routes.names(), ['plan'])
+
+    def test_a_base_kind_the_machine_lock_refuses_is_not_landed(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        moved = self.move_main('build')        # not in the scratch store's kinds table
+        self.main = moved                       # assert_untouched: main stays at the base
+        out = self.node_lander(Routes(where=None), tip).run()
+        self.assertTrue(out.lines[0].startswith(
+            'the machine lock did not give the merged gate its build run: '), out.lines)
+        self.assertIn('NOT LANDED: the merge of kit/feature was undone', out.lines[-1])
+        self.assertEqual(out.code, G.FAILED, out.lines)
+        self.assertEqual(self.remote_main(), moved)
+        self.assertIsNone(self.lock().read())
+        self.assertEqual(self.records(), [])
+
+    def test_a_base_with_the_same_kind_books_once(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        self.move_main('engine-test')
+        out = self.node_lander(Routes(where=None), tip).run()
+        self.assert_landed_here(out)
+        self.assertEqual([b['kind'] for b in self.landing_books()], ['engine-test'])
+
+    def test_a_node_routed_landing_asks_the_nodes_again_at_the_bases_kind(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        self.move_main('cpu-eval')
+        routes = Routes()
+        self.no_main_gate()
+        out = self.node_lander(routes, tip).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(routes.names(), ['plan', 'same_tree', 'need_of', 'recheck', 'run'])
+        self.assertEqual([c[1] for c in routes.calls if c[0] == 'need_of'], ['cpu-eval'])
+        [recheck] = [c for c in routes.calls if c[0] == 'recheck']
+        self.assertEqual(recheck[3], NEED_BASE)
+        [run] = [c for c in routes.calls if c[0] == 'run']
+        self.assertEqual(run[6]['kind'], 'cpu-eval')
+        [b] = self.landing_books()              # the node gates: the 1-slot run stays
+        self.assertEqual((b['kind'], b['cores']), ('engine-test', 1))
+
+    def test_a_base_kind_that_cannot_be_sized_gates_here_at_that_kind(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        self.move_main('cpu-eval')
+        routes = Routes()
+        routes.need = KeyError('cpu-eval')
+        lander = self.node_lander(routes, tip)
+        out = lander.run()
+        self.assert_landed_here(out)
+        self.assertNotIn('recheck', routes.names())
+        why = [s for s in self.said if s.startswith('gating here: the base')]
+        self.assertEqual(len(why), 1, self.said)
+        self.assertIn('cpu-eval cannot be sized here', why[0])
+        self.assert_full_rebook(lander)
+        self.assertEqual([b['kind'] for b in self.landing_books()], ['engine-test', 'cpu-eval'])
 
 
 if __name__ == '__main__':

@@ -305,7 +305,9 @@ A kit checkout is never gated on a node, by a landing or by `node.py gate`.
 - A plan that raises is said as `gating here: the load-node plan failed: <error>` and the
   landing gates on main.
 - The plan and the 1-slot booking use the config read before the landing's turn. A base whose
-  config names another `"gate".kind` is not booked again at that size.
+  config names another `"gate".kind` is asked of the nodes again at that kind's size, and main's
+  gate books that kind again (docs/gate.md "Landing", step 6), but a node's gate keeps the 1-slot
+  run booked at the old kind.
 - A 1-slot landing run's held time goes into the `land` mode of the kind's expected times
   (`history_expect`), beside the full runs.
 - Not yet proven on a live machine with a real node: the tests use a stand-in for

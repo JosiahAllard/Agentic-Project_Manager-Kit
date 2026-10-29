@@ -129,6 +129,18 @@ class Plan(unittest.TestCase):
                                                               '(OSError)')
 
 
+class NeedOf(unittest.TestCase):
+    def test_it_sizes_the_kind_on_the_store_as_plan_does(self):
+        store, asked = object(), []
+
+        def need_of(kind, store=None):
+            asked.append((kind, store))
+            return NEED
+        with mock.patch.object(route, 'need_of', need_of):
+            self.assertEqual(landroute.need_of('cpu-eval', store), NEED)
+        self.assertEqual(asked, [('cpu-eval', store)])
+
+
 class Recheck(unittest.TestCase):
     """At the landing's turn the nodes are asked again; main's own lock no longer counts."""
 

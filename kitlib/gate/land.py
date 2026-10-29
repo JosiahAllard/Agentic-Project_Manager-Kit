@@ -99,7 +99,13 @@
                  full run of the kind booked as in step 3 with no wait limit, and the gate run
                  in it as above. Else the land job runs it there (landroute.run_on_node, docs
                  included): a pass is this step's green; any other end is NOT LANDED, never
-                 gated again on main, and so is any exception
+                 gated again on main, and so is any exception.
+                 The base's config (step 4, follow) names another "gate".kind than step 3
+                 booked: on main, `the base <b> books "gate".kind <k>, not <k0> ...`, the slot
+                 released first, then the base's kind booked at its own size with no wait limit
+                 (rebook_kind), the lock file still held; the lock refusing it is NOT LANDED.
+                 Routed to a node, recheck asks for the base's kind's slots (route_need; a kind
+                 that cannot be sized gates here as above), and the 1-slot run stays
   7b unchanged   green: the landing tree's HEAD still the merge, no tracked change, no untracked
                  file there, the stash stack still empty; else NOT LANDED as on red and nothing
                  pushed (the pushed commit is the gated one). What the owner does in the main
@@ -491,6 +497,7 @@ class Lander(object):
                                     # None again once a fallback gates on main (rebook_here)
         self.holder = None          # the landing lock file's record when another holds it
         self.yielded_to = None      # the holder yield_turn last gave the turn back to
+        self.booked_kind = None     # the "gate".kind of the last booking (book_slot)
         self.tree_given = tree      # Lander(tree=), or None: the default place (tree_path)
         self.tree = None            # the landing tree's path, once prepare_tree placed it
         self.branches, self.tips = _as_list(branch), _as_list(expect_tip)
@@ -692,8 +699,10 @@ class Lander(object):
         if self.submitted:
             kw['detached'] = True   # its launcher's ancestry is in ORIGIN_ENV (kitlib.gate.submit)
         book = self.book_fn or lockrun.book
-        self.slot = book(self.cfg.section('gate')['kind'], runner.repo_name(self.cfg, self.root),
+        kind = self.cfg.section('gate')['kind']
+        self.slot = book(kind, runner.repo_name(self.cfg, self.root),
                          runner.slug_of('+'.join(self.branches)), **kw)
+        self.booked_kind = kind
         self.say(self.slot.held_text())
 
     def rebook_here(self, why):
@@ -1789,13 +1798,56 @@ class Lander(object):
             out = self.node_gate()
             if out is not None:
                 return out
+        out = self.rebook_kind()
+        if out is not None:
+            return out
         return self.main_gate()
+
+    def rebook_kind(self):
+        """Step 7 on main, just before main's merged gate: None when the slot held is of the
+        base config's "gate".kind. Main moved on before the turn to a base whose config (read
+        again by follow, step 4) names another kind than book_turn booked (the config read at
+        preconditions): it says so, releases the slot first, then books the base's kind at its
+        own size with no wait limit, as rebook_here does and for the same reason (booked while
+        the old run is held, a kind of every slot, an owner whole hold or a gpu pool would wait
+        on itself). The landing lock file stays held, so no other landing merges meanwhile.
+        None once booked; the machine lock not giving it: a FAILED Outcome (NOT LANDED, the
+        merge undone). After a node-routed fallback rebook_here booked the base's kind already:
+        nothing to do."""
+        kind, booked = self.cfg.section('gate')['kind'], self.booked_kind
+        if booked is None or booked == kind:
+            return None
+        self.say('the base %s books "gate".kind %s, not %s as this landing did: releasing the '
+                 "landing's %s run and booking a %s run for the merged gate, waiting with no "
+                 'limit' % (self.expect_main[:10], kind, booked, booked, kind))
+        self.drop_slot(0, 'done')
+        try:
+            self.book_slot(None)
+        except LockError as e:
+            line = ('the machine lock did not give the merged gate its %s run: %s'
+                    % (kind, e.message))
+            return G.Outcome(G.FAILED, [line], verdict=line, results=[])
+        return None
+
+    def route_need(self, lr, kind):
+        """The slots the merged gate's kind `kind` needs on a node, for recheck: `(need, None)`,
+        the plan's when the base's config names the kind booked (book_turn); else `kind` sized
+        again (lr.need_of), or `(None, why)` when it cannot be, and the landing gates here."""
+        if self.booked_kind in (None, kind):
+            return self.route.need, None
+        try:
+            return lr.need_of(kind, self.queue_store()), None
+        except Exception as e:      # noqa: BLE001 - gate here, at the base's kind
+            return None, ('the base %s books "gate".kind %s, not %s, and %s cannot be sized '
+                          'here (%s)' % (self.expect_main[:10], kind, self.booked_kind, kind,
+                                         _what(e)))
 
     def node_gate(self):
         """Step 7 for a node-routed landing: the land job's Outcome (landroute.run_on_node), or
         None once it fell back to main (rebook_here booked main's full run): the tip's --full
-        record has the merge's tree (same_tree_why), no node qualifies now (recheck; another
-        node that does takes it), or nothing ran on the node (Fallback). Only those fall back:
+        record has the merge's tree (same_tree_why), no node qualifies now (recheck, for the
+        slots of the base's kind: route_need; another node that does takes it), or nothing ran
+        on the node (Fallback). Only those fall back:
         any other exception goes on up (recover: NOT LANDED). The machine lock not giving the
         full run: a FAILED Outcome."""
         lr, kind = self.routes(), self.cfg.section('gate')['kind']
@@ -1803,9 +1855,11 @@ class Lander(object):
         why = lr.same_tree_why(self.tree, self.cfg, self.branches[0], self.tips[0],
                                self.expect_main, self.merge, batch=len(self.branches),
                                fresh=self.fresh, full=self.full)
-        node = None
+        node = need = None
         if not why:
-            c = lr.recheck(self.route.nodes, repo_name, self.route.need)
+            need, why = self.route_need(lr, kind)
+        if not why:
+            c = lr.recheck(self.route.nodes, repo_name, need)
             if c.node is None:
                 why = c.why
             else:
