@@ -117,6 +117,61 @@ class Pick(unittest.TestCase):
             A.pick(h.settings, NOW)
 
 
+def reading(five=10, week=10, week_reset=2 * DAY, age=datetime.timedelta(minutes=5), five_reset=DAY / 24):
+    """A usage-status.json dict as of NOW: `age` old, each window (pct, reset NOW + delta)."""
+    win = lambda pct, delta: {'used_percentage': pct, 'resets_at': (NOW + delta).isoformat()}
+    return {'updated_at': (NOW - age).isoformat(), 'five_hour': win(five, five_reset),
+            'seven_day': win(week, week_reset)}
+
+
+class RestartPick(unittest.TestCase):
+    """restart_pick: the hub's coordinator restart account (docs/launcher.md "Hub restart")."""
+
+    def pick(self, states, last=None):
+        return A.restart_pick({n: (True, d) for n, d in states.items()}, NOW, last, pmwatch.STALE_MINUTES)
+
+    def test_the_soonest_week_reset_among_the_fresh_ones_under_the_limit(self):
+        self.assertEqual(self.pick({'1': reading(week_reset=3 * DAY), '2': reading(week_reset=DAY),
+                                    '3': reading(week_reset=2 * DAY)}, last='1'), '2')
+
+    def test_a_stale_reading_is_never_under_the_limit(self):
+        m = datetime.timedelta(minutes=1)
+        states = {'1': reading(week_reset=3 * DAY), '2': reading(week_reset=DAY, age=(pmwatch.STALE_MINUTES + 1) * m)}
+        self.assertEqual(self.pick(states), '1')
+        states['2'] = reading(week_reset=DAY, age=pmwatch.STALE_MINUTES * m)
+        self.assertEqual(self.pick(states), '2')
+
+    def test_a_missing_file_an_unknown_window_or_no_updated_at_is_skipped(self):
+        no_pct = reading(week_reset=DAY)
+        no_pct['five_hour']['used_percentage'] = None
+        no_reset = reading(week_reset=DAY)
+        del no_reset['seven_day']['resets_at']
+        null_win = dict(reading(week_reset=DAY), five_hour=None)
+        no_upd = reading(week_reset=DAY)
+        del no_upd['updated_at']
+        bad_upd = dict(reading(week_reset=DAY), updated_at='not a time')
+        for bad in (None, no_pct, no_reset, null_win, no_upd, bad_upd):
+            self.assertEqual(self.pick({'1': reading(week_reset=3 * DAY), '2': bad}), '1', bad)
+            self.assertIsNone(self.pick({'2': bad}), bad)
+
+    def test_either_window_at_the_limit_is_skipped(self):
+        for over in (reading(week_reset=DAY, five=A.HEADROOM_LIMIT), reading(week_reset=DAY, week=A.HEADROOM_LIMIT)):
+            self.assertEqual(self.pick({'1': reading(week_reset=3 * DAY), '2': over}), '1')
+        self.assertEqual(self.pick({'2': reading(week_reset=DAY, five=A.HEADROOM_LIMIT - 0.5)}), '2')
+
+    def test_a_passed_reset_counts_as_0_and_the_week_moves_on(self):
+        passed = reading(five=99, five_reset=-DAY / 24, week=99, week_reset=-DAY / 2)   # resets again in 6.5 days
+        self.assertEqual(self.pick({'1': passed}), '1')
+        self.assertEqual(self.pick({'1': passed, '2': reading(week_reset=6 * DAY)}), '2')
+
+    def test_signed_out_is_skipped_and_ties_go_to_the_last_account_then_the_number(self):
+        r = reading(week_reset=DAY)
+        states = {'1': (False, reading(week_reset=DAY / 2)), '2': (True, r), '10': (True, r), '3': (True, r)}
+        self.assertEqual(A.restart_pick(states, NOW, '3', pmwatch.STALE_MINUTES), '3')
+        self.assertEqual(A.restart_pick(states, NOW, None, pmwatch.STALE_MINUTES), '2')
+        self.assertEqual(A.restart_pick(states, NOW, '1', pmwatch.STALE_MINUTES), '2')
+
+
 class Usage(unittest.TestCase):
     def test_the_lines_pm_watch_parses(self):
         h = Home(self, accounts=('1', '2', '3'))
