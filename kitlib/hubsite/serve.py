@@ -239,7 +239,7 @@ from . import api as _api
 from . import jobs as _jobs
 from . import push as _push
 from . import access, auth, backlog, codestale, derived, gitsync, httpd, recordwrite, tunnel
-from . import skilledits
+from . import selfrestart, skilledits
 from .store import HubError, Store, StoreBusy
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
@@ -1285,7 +1285,8 @@ def build(settings, sources, log=None):
         if timed is not None:
             api.jobs_status = timed.status   # GET health `jobs` (Api.jobs_seen)
         hub = Hub(settings, store, api, views, creds, listeners, sync, views_b, notes, log,
-                  tunnel=said, stopping=stopping, push=pusher, jobs=timed)
+                  tunnel=said, stopping=stopping, push=pusher, jobs=timed,
+                  tokens=sources.tokens)
         api.code_status = hub.code_state     # GET health and GET snapshot `code` (Api.code_seen)
         return hub
     except BaseException:
@@ -1296,10 +1297,12 @@ def build(settings, sources, log=None):
 
 
 def code_folders():
-    """The folders whose .py files are the hub's code: this package and the timed jobs'
-    (kitlib.hubjobs), so a job added or changed on disk is stale code too."""
+    """The folders whose .py files are the hub's code: this package, the timed jobs'
+    (kitlib.hubjobs), so a job added or changed on disk is stale code too, and the two packages
+    the server reads its machine settings through (kitlib.pmdata, kitlib.config)."""
     here = os.path.dirname(os.path.abspath(__file__))
-    return [here, os.path.dirname(os.path.abspath(hubjobs.__file__))]
+    return [here] + [os.path.dirname(os.path.abspath(m.__file__))
+                     for m in (hubjobs, pmdata, user)]
 
 
 def code_stamp(folders=None):
@@ -1325,10 +1328,14 @@ class Hub(object):
     `stopping` is the event the local listener's stop route sets (httpd.stop_route); run()
     closes the hub once it is set. A Hub made without one gets an event nothing sets. `push` is
     the push-notification worker (kitlib.hubsite.push.PushWorker: start, stop) or None; `jobs`
-    the timed jobs (kitlib.hubsite.jobs.Jobs: start, stop) or None."""
+    the timed jobs (kitlib.hubsite.jobs.Jobs: start, stop) or None. `tokens` is the token
+    folder (selfrestart.LOG_NAME goes there) or None; `self_restart` the selfrestart.Watcher,
+    made at the first look that finds the code changed unless one was set before."""
 
     def __init__(self, settings, store, api, views, creds, listeners, sync, backlog_views, notes,
-                 log=None, tunnel='', stopping=None, push=None, jobs=None):
+                 log=None, tunnel='', stopping=None, push=None, jobs=None, tokens=None):
+        self.tokens = tokens
+        self.self_restart = None
         self.push = push
         self.jobs = jobs
         self.settings = settings
@@ -1387,10 +1394,11 @@ class Hub(object):
     def watch(self):
         """Look at the git sync once and log what is new (module docstring, "The git sync's
         failures"): an 'error' line when its last pass failed at another step or for another
-        reason than the last look saw, a 'note' when it works again. Also an 'error' line, once,
-        when the hub package's code on disk is no longer what this process started on
-        (STALE_CODE: nothing is restarted for the owner). Never waits for a pass and never
-        raises. One caller at a time: run() is it."""
+        reason than the last look saw, a 'note' when it works again. Also the hub code's look
+        (_watch_code): a server whose code on disk changed restarts itself through its
+        scheduled task (kitlib.hubsite.selfrestart), and logs an 'error' line, once, when it
+        does not (STALE_CODE). Never waits for a pass and never raises. One caller at a time:
+        run() is it."""
         self._watch_code()
         if self.sync is None:
             return
@@ -1407,7 +1415,10 @@ class Hub(object):
             self._say('the git sync works again', 'note')
 
     def _watch_code(self):
-        if self._stale or self._code is None:
+        """At most every CODE_LOOK_S: the code stamp to the self-restart (selfrestart.Watcher,
+        made at the first look that finds the code changed), then STALE_CODE, once, when it
+        says the stale warning shows."""
+        if self._code is None:
             return
         at = time.monotonic()
         if at - self._looked < CODE_LOOK_S:
@@ -1417,9 +1428,34 @@ class Hub(object):
             now = code_stamp()
         except Exception:           # noqa: BLE001 - a look that fails is tried again next turn
             return
-        if now != self._code:
+        if self.self_restart is None:
+            if now == self._code:
+                return
+            self.self_restart = selfrestart.Watcher(self._code, self.port, self.store.root,
+                                                    self.tokens, self._say, self._quiet)
+        try:
+            self.self_restart.look(now)
+        except Exception as e:      # noqa: BLE001 - the warning shows, the server goes on
+            self._say('the self-restart look failed: %s: %s' % (type(e).__name__, e))
+            self.self_restart.stale = True
+        if self.self_restart.stale and not self._stale:
             self._stale = True
             self._say(STALE_CODE)
+
+    def _quiet(self):
+        """True when no request is in flight on any listener (its counted waits aside: they end
+        with the close) and no timed job is running: when a restart may begin."""
+        for lis in self.listeners:
+            if lis.drain(0) is not True:
+                return False
+        if self.jobs is not None:
+            try:
+                blocks = self.jobs.status()
+            except Exception:       # noqa: BLE001 - not known to be quiet
+                return False
+            if any(isinstance(b, dict) and b.get('running') for b in blocks.values()):
+                return False
+        return True
 
     def start(self):
         """Start the git sync, the backlog timer, the push-notification worker, the timed jobs

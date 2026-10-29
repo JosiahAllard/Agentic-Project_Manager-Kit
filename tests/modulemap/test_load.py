@@ -87,6 +87,27 @@ class RulesTest(unittest.TestCase):
         self.refuses({'modules': {'a': {'paths': ['shared/x']}, 'b': {'paths': ['Shared\\X/']}}},
                      'path Shared/X is named by more than one module (a, b)')
 
+    def test_a_java_imports_ratchet_needs_files_and_imports_and_no_kinds(self):
+        r = {'id': 'r', 'from': 'brain', 'to': 'brain', 'goal': 0, 'detector': 'java-imports',
+             'files': ['brain/src/api/*'], 'imports': ['org.x.internal']}
+        mm = ModuleMap(with_(ratchets=[r]))
+        self.assertEqual(mm.ratchets[0]['imports'], ['org.x.internal'])
+        nofiles = {k: v for k, v in r.items() if k != 'files'}
+        self.refuses(with_(ratchets=[nofiles]), 'ratchet r: a java-imports ratchet needs "files"')
+        self.refuses(with_(ratchets=[dict(r, files=[])]), 'ratchets[0].files must not be empty')
+        bare = {k: v for k, v in r.items() if k != 'imports'}
+        self.refuses(with_(ratchets=[bare]), 'a java-imports ratchet needs "imports"')
+        self.refuses(with_(ratchets=[dict(r, kinds=['data'])]), 'drop "kinds"')
+
+    def test_files_and_imports_belong_to_java_imports_only(self):
+        self.refuses(with_(ratchets=[{'id': 'r', 'from': 'brain', 'to': 'node', 'goal': 0,
+                                      'imports': ['org.x']}]),
+                     '"imports" is for a java-imports ratchet only')
+
+    def test_only_a_java_imports_ratchet_joins_a_module_to_itself(self):
+        self.refuses(with_(ratchets=[{'id': 'r', 'from': 'brain', 'to': 'brain', 'goal': 0}]),
+                     'ratchet r joins brain to itself')
+
     def test_a_note_key_in_modules_is_not_a_module(self):
         mm = ModuleMap(with_(modules=dict(MAP['modules'], _note='why these four', comment='c')))
         self.assertEqual(sorted(mm.modules), ['brain', 'node', 'protocol', 'worker'])

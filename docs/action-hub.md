@@ -172,18 +172,55 @@ no kind.
   `tunnel: bound, keys not fetched` (until the first request with a token; a failed fetch adds ` (reason)`,
   such as `keys-fetch`) or `tunnel: off: <why>`. `on` does not say that a tunnel program reaches the
   listener.
-- **Stale code.** A running `hub serve` compares the `.py` files of `kitlib/hubsite` and of the timed
-  jobs' `kitlib/hubjobs` (name, modified time, size; `serve.code_stamp`) with what they were at its start, at most every 30 seconds
-  (`CODE_LOOK_S`). When they differ it logs one error line and says so in a `code` object, `{"stale",
-  "restart"}`, in GET health (the local listener; the tunnel's fixed health carries none) and GET
-  snapshot (`kitlib.hubsite.codestale`). `restart` is the owner's to-do: `python <kit>/tools/hub.py
-  restart`, or, with no autostart task, `hub.py stop` then `hub.py serve`. Three places show it: the
-  page's banner (`#codeerr`), a `hub: WARN` line in the PM session-start checklist (docs/pm-start.md),
-  and a `HUB` event of pm_watch (docs/pm-watch.md), said once per stale episode. Nothing restarts the hub
-  by itself; `hub.py status` prints it as its `code:` line. Known limits: only those two packages' own
-  files are compared, so a landing that changes only
-  other packages the hub imports (`kitlib/pmdata`, `kitlib/config`) does not warn; `web/index.html` is
-  read from disk per request (`httpd.static_file`), so a page-only change needs no restart.
+- **Stale code.** A running `hub serve` compares the `.py` files of `kitlib/hubsite`, of the timed
+  jobs' `kitlib/hubjobs` and of the two packages it reads its machine settings through,
+  `kitlib/pmdata` and `kitlib/config` (name, modified time, size; `serve.code_stamp`,
+  `serve.code_folders`), with what they were at its start, at most every 30 seconds (`CODE_LOOK_S`).
+  When they differ, a server run by its autostart task restarts itself
+  (`kitlib.hubsite.selfrestart`):
+  1. It logs a note that the code changed and asks, once per new code, whether it is the task's
+     server: the machine config's `hub.port` and store are its own, and the scheduled task is
+     `Running`. A server started by hand, with no task, or on a scratch store or another port only
+     warns, as below.
+  2. It waits until the code has stayed the same for 90 s (`SETTLE_S`), so a landing that is still
+     writing the tree is not caught half way.
+  3. It runs a self-check in a child python, at most 120 s: it imports the new hub code (a timed job's
+     own module aside: the new server serves without a job that fails, with a start-up note), runs
+     `tools/hub.py`'s top level, and builds, starts and asks GET health of a hub on a temp store and
+     temp token folder.
+  4. It waits until no request is in flight on its listeners (an answer being written is let finish;
+     a long `wait` does not hold it) and no timed job is running.
+  5. It starts a detached restarter, which runs `hub.py restart --port <port>`: the server's clean
+     close, then the task started again (the `restart` bullet below). Before it starts it, the server
+     logs `restarting itself: code <old> -> <new>` (the old and new code stamps) to the hub log;
+     once it has started, it logs the same line with the restarter's pid (`...; restarter pid <pid>
+     ...`).
+
+  The restarter's output goes to `<PM repo>/.pm-kit/hub/self-restart.log`, beside the token
+  files (`hub.py setup` prints that folder; git-ignored), overwritten by each attempt. Read it when
+  a restart left no hub. A failed self-check or a restarter that cannot be started keeps the old
+  server and shows the warning below; that code is never tried again by that server, so a broken
+  tree does not loop, and only newer code is tried. Once a restarter has started, that server tries
+  no more restarts at all, newer code included; one still running 6 minutes later keeps the old code
+  and shows the warning, and the restart is then the owner's. While a restart is under way the warning
+  stays hidden, so no restart to-do is filed for it; 15 minutes after the first change with no restart
+  started (the code still changing, or a request always in flight) it shows, and the restart still
+  happens when it can.
+
+  The warning: one error line in the hub log and a `code` object, `{"stale", "restart"}`, in GET
+  health (the local listener; the tunnel's fixed health carries none) and GET snapshot
+  (`kitlib.hubsite.codestale`). `restart` is the owner's to-do: `python <kit>/tools/hub.py restart`,
+  or, with no autostart task, `hub.py stop` then `hub.py serve`. Three places show it: the page's
+  banner (`#codeerr`), a `hub: WARN` line in the PM session-start checklist (docs/pm-start.md), and a
+  `HUB` event of pm_watch (docs/pm-watch.md), said once per stale episode. `hub.py status` prints it as
+  its `code:` line. `web/index.html` is read from disk per request (`httpd.static_file`), so a
+  page-only change needs no restart. Known limits: a restarter that stops the server and then cannot
+  start the task, or whose new server never answers, leaves no hub (`self-restart.log` says why; start
+  it with `hub.py restart`, or as that log says). The self-check proves the new code builds and answers
+  on a scratch store, not that the machine's store and settings serve. The restarter runs with no
+  console window, so its output is only in that log. `tools/hub.py` itself is not in the stamp (a
+  change there alone neither warns nor restarts), nor are other packages the hub imports beyond those
+  four folders.
 - Remote access is only through the tunnel listener: with `hub.access` set (an Access `team`, the
   application's audience tag `aud` and the allowed `emails`; all three), the server also listens on
   `hub.tunnel_port` (default 8791, loopback too) for a Cloudflare tunnel, and every request there needs a
@@ -500,6 +537,12 @@ store's git push (the `push` setting).
   a detail is one more header field, `[hub push] job <name> <word> detail:<detail> route:pm
   attempt:<k>`, cut to the header alphabet like every field (a sha or a count, never prose). Each job
   owes at most one push: a newer event replaces one not yet written, its detail with it.
+  `session-watch` (`kitlib/hubjobs/session_watch.py`, docs/pm-watch.md "Hub session-watch job") runs
+  pm_watch's checks every 60 s, first at 30 s, and pushes at most once a run: one event as its kind
+  (`idle`, `stopped`, `usage`, `reset`, `bgfail`, `locknotice`, `remote`, `error`) with its subject
+  (session, account, run or notice id, check) as the detail, several as `events` with their count.
+  The event lines are free text, so they go in its health `note` (the last 20 pushed, with times), never
+  in a push.
 - Files, in `launcher.state_dir`: `push-outbox.json` (what is still to send, rewritten after each round
   that changed it, so a server ended without a clean close loses at most that round; read again at
   start: an entry whose item changed while the server was down fires afresh, one whose item is gone is
@@ -534,6 +577,9 @@ store's git push (the `push` setting).
     PM until it is consumed or expires.
   - A filed answer's live check is read once, when the filing is seen: an asker that ends after it is
     still tried (and reads it at its next start), and a coordinator started after it is not told.
+  - `session-watch` drops the events it saw while pm_watch's heartbeat was fresh, so those of the last
+    300 s before a pm_watch stopped are not pushed; it does not see a pm_watch run with its own
+    `--state`, so both push then; with no push worker its events are not pushed.
 
 Tests: tests/hubsite/test_push.py, tests/host/test_claude_peer.py, tests/launcher/test_pipes.py.
 

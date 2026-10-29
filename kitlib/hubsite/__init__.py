@@ -26,4 +26,5 @@
   autostart the opt-in scheduled task that starts the server at sign-in (hub.py setup --autostart)
   control  hub.py stop and restart: ask the server to close, wait for it, start the task again
   codestale the one restart text for a server whose hub code on disk is newer (health, page, checklist)
+  selfrestart a task-run server's restart on new code: settle, self-check, wait for quiet, restart
 """

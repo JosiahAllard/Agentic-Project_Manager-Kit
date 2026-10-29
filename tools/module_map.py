@@ -3,6 +3,7 @@
   module_map.py [-C DIR] --check                  every crossing allowed or under its ratchet's ceiling
   module_map.py [-C DIR] --baseline               print the ratchets and ceilings the current tree needs
   ... --map FILE [--ceilings FILE]                use these files instead of .kit.json "modules"
+  --check --base REV                              hold the ceilings to REV's (default: the main branch)
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.modulemap.check, prints and
 exits. --check reads the map .kit.json "modules".map names and refuses unless "owner".paths locks
@@ -43,6 +44,8 @@ def build_parser():
     mode.add_argument('--baseline', action='store_true', help='print the ratchets the tree needs')
     p.add_argument('--map', default=None, help='the map file (default: .kit.json "modules".map)')
     p.add_argument('--ceilings', default=None, help='the ceilings file (default: .kit.json "modules".ceilings)')
+    p.add_argument('--base', default=None,
+                   help='--check: the rev whose ceilings bound these (default: the main branch)')
     return p
 
 
@@ -55,7 +58,8 @@ def main(argv=None):
         cfg = load_config(top)
         out = C.run(top, cfg, 'check' if a.check else 'baseline',
                     map_path=os.path.abspath(a.map) if a.map else None,
-                    ceilings_path=os.path.abspath(a.ceilings) if a.ceilings else None)
+                    ceilings_path=os.path.abspath(a.ceilings) if a.ceilings else None,
+                    base_rev=a.base)
     except ConfigError as e:
         say('module_map: refused: kit configuration: %s' % e)
         return 2
