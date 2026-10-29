@@ -60,8 +60,9 @@ text is for the owner's console (it may name a folder):
      Sources.push_dir are both set, with a line in `Hub.notes`. It is made here and started by
      start(); one that fails to start is an 'error' line and the hub serves without it.
   7. the timed jobs (kitlib.hubsite.jobs.Jobs), one per maker in Sources.jobs (GET health
-     `jobs` names them); a maker that raises is a line in `Hub.notes` and the hub serves without
-     that job. Their events are pushed through the push worker when there is one, their
+     `jobs` names them); a maker that raises, or makes a job whose name an earlier one has, is
+     a line in `Hub.notes` and the hub serves without that job; one that gives None is left
+     out. Their events are pushed through the push worker when there is one, their
      failures are 'error' lines of the log, and GET health's `jobs` reads them. Started by
      start(), before the listeners.
 `Hub.listeners` is a list: the local listener first, then the tunnel's when there is one.
@@ -229,7 +230,7 @@ import socket
 import threading
 import time
 
-from kitlib import hubbacklog, pmdata, pmstart, pmwatch
+from kitlib import hubbacklog, hubjobs, pmdata, pmstart, pmwatch
 from kitlib.config import user
 from kitlib.config.types import ConfigError
 from kitlib.proc import process
@@ -391,8 +392,9 @@ class Sources(object):
       lock         the machine lock's door for the Api's lock routes (kitlib.hubsite.lockdoor
                    LockDoor, or its like: revision, view, stats); None: those routes answer
                    `unavailable`
-      jobs         the timed jobs (kitlib.hubsite.jobs): [make(sources) -> jobs.Job], one per job;
-                   machine_sources registers them, a scratch store gets none; [] or None: none
+      jobs         the timed jobs (kitlib.hubsite.jobs): [make(sources) -> jobs.Job or None],
+                   one per job; machine_sources gives kitlib.hubjobs.makers(), a scratch store
+                   none; [] or None: none
       home         the home folder machine_sources read the machine config under (None: the
                    user's), for a job that reads it again
     """
@@ -544,11 +546,10 @@ def machine_sources(home=None, sync=True):
                   notices=pmwatch.configured_notice_dir(path),
                   agents=agents_dir(), skills=skills_dir(),
                   sync=gitsync.GitSync if sync else None, home=home)
-    # The timed jobs, one registration line each (kitlib.hubsite.jobs). `sync` is false only for a
-    # scratch store (tools/hub.py serve --store), which runs no machine job.
+    # The timed jobs: every module of kitlib.hubjobs, found there (no line here per job). `sync`
+    # is false only for a scratch store (tools/hub.py serve --store), which runs no machine job.
     if sync:
-        from . import plugin_job
-        src.jobs.append(plugin_job.make)
+        src.jobs.extend(hubjobs.makers())
     if pm and pm.get('path'):
         from kitlib.maintlint import result as lint_result
         src.findings = os.path.join(pm['path'], lint_result.FOLDER)
@@ -1167,15 +1168,29 @@ def _job_line(log, text):
 
 def _make_jobs(sources, pusher, notes, log):
     """The timed jobs of `sources` (Sources.jobs) as one kitlib.hubsite.jobs.Jobs, their events
-    pushed through `pusher` when there is one; None with none. A job whose maker raises is left
-    out, with a line in `notes`: the hub serves without it."""
+    pushed through `pusher` when there is one; None with none. A job whose maker raises, gives
+    something other than a jobs.Job, or whose name a job made before it has, is left out with a
+    line in `notes`: the hub serves
+    without it. A maker that gives None (the job does not apply here) is left out silently."""
     made = []
     for make in sources.jobs:
+        where = getattr(make, '__module__', '?')
         try:
-            made.append(make(sources))
+            job = make(sources)
         except Exception as e:      # noqa: BLE001 - the hub serves without that job
-            notes.append('a timed job was not made (%s): %s: %s'
-                         % (getattr(make, '__module__', '?'), type(e).__name__, e))
+            notes.append('a timed job was not made (%s): %s: %s' % (where, type(e).__name__, e))
+            continue
+        if job is None:
+            continue
+        if not isinstance(job, _jobs.Job):
+            notes.append('a timed job was not made (%s): its make gave a %s, not a jobs.Job'
+                         % (where, type(job).__name__))
+            continue
+        if any(j.name == job.name for j in made):
+            notes.append('a timed job was not made (%s): a job named %r is made already'
+                         % (where, job.name))
+            continue
+        made.append(job)
     if not made:
         return None
     return _jobs.Jobs(made, notify=pusher.job_event if pusher is not None else None,
@@ -1280,15 +1295,23 @@ def build(settings, sources, log=None):
         raise
 
 
-def code_stamp():
-    """What the hub package's code is now: the name, modified time and size of each .py file in
-    this folder, sorted. A server that started on a different stamp runs older code (watch)."""
+def code_folders():
+    """The folders whose .py files are the hub's code: this package and the timed jobs'
+    (kitlib.hubjobs), so a job added or changed on disk is stale code too."""
     here = os.path.dirname(os.path.abspath(__file__))
+    return [here, os.path.dirname(os.path.abspath(hubjobs.__file__))]
+
+
+def code_stamp(folders=None):
+    """What the hub's code is now: the folder, name, modified time and size of each .py file in
+    `folders` (default code_folders()), sorted. A server that started on a different stamp runs
+    older code (watch)."""
     out = []
-    for name in sorted(os.listdir(here)):
-        if name.endswith('.py'):
-            st = os.stat(os.path.join(here, name))
-            out.append((name, st.st_mtime_ns, st.st_size))
+    for folder in folders or code_folders():
+        for name in sorted(os.listdir(folder)):
+            if name.endswith('.py'):
+                st = os.stat(os.path.join(folder, name))
+                out.append((os.path.basename(folder), name, st.st_mtime_ns, st.st_size))
     return tuple(out)
 
 
@@ -1719,9 +1742,36 @@ def _git_line(git):
     return ', '.join(parts)
 
 
+JOB_NOTE_MAX = 60               # characters of a job's note or error on the `jobs:` status line
+
+
+def _jobs_line(blocks):
+    """GET health `jobs` in one line: `none` for null, else per job (by name) `<name> runs R,
+    failures F` with `, running` while it runs and its error (while failures is not 0) or else
+    its last note, scrubbed and cut to JOB_NOTE_MAX characters."""
+    if not isinstance(blocks, dict) or not blocks:
+        return 'none'
+    parts = []
+    for name in sorted(blocks):
+        b = blocks[name] if isinstance(blocks[name], dict) else {}
+        text = '%s runs %s, failures %s' % (name, b.get('runs'), b.get('failures'))
+        if b.get('running'):
+            text += ', running'
+        said = b.get('error') if b.get('failures') else b.get('note')
+        if isinstance(said, str) and said:
+            said = ' '.join(scrub(said).split())     # one line, whatever the job wrote
+            text += ': ' + (said if len(said) <= JOB_NOTE_MAX else said[:JOB_NOTE_MAX - 3] + '...')
+        parts.append(text)
+    return '; '.join(parts)
+
+
 def status_lines(health, now=None):
     """The lines `hub status` prints for a GET health answer: the revision, the store (the
-    owner's answer has it), the git sync, each repository's backlog fetch age, the tunnel
+    owner's answer has it), the git sync, each repository's backlog fetch age, `code: current`
+    or `code: stale: ` and the restart (from health's `code`, codestale.notice), `jobs: ` and
+    each timed job's runs, failures and last note or error (_jobs_line; `jobs: none` when the
+    server runs none) (neither line when the answer lacks the field, as an older server's), the
+    tunnel
     listener in one line (`tunnel: on`, `tunnel: bound, keys not fetched` with the reason in
     brackets when health gave one, or `tunnel: off: ` and why; none when the answer has no such
     text, as an older server's) and what is unavailable. `now`: an aware datetime (default the
@@ -1747,6 +1797,12 @@ def status_lines(health, now=None):
     for key, what in (('backlog_error', 'backlog'), ('backlog_timer', 'backlog timer')):
         if health.get(key):
             lines.append('%s: %s' % (what, health[key]))
+    code = health.get('code')
+    if isinstance(code, dict):
+        stale = codestale.notice(code)
+        lines.append('code: %s' % ('stale: ' + stale if stale else 'current'))
+    if 'jobs' in health:
+        lines.append('jobs: %s' % _jobs_line(health['jobs']))
     said = health.get('tunnel')
     if isinstance(said, str) and said:
         lines.append('tunnel: %s' % scrub(said))    # fixed words; scrubbed all the same

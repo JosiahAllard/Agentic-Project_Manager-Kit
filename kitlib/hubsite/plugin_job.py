@@ -1,7 +1,7 @@
 """kitlib.hubsite.plugin_job: the hub server's plugin refresh job (docs/plugin-source.md "Hub
 refresh").
 
-  make(sources) -> jobs.Job      the job, registered in serve.machine_sources (Sources.jobs)
+  make(sources) -> jobs.Job      the job, found through kitlib/hubjobs/plugin_refresh.py
   PluginJob(home=None, ...)      its run(ctx): one check, and the refresh when it is due
 
 Every EVERY_S the job reads the kit's refs/remotes/<remote>/main and the export's state.json,
