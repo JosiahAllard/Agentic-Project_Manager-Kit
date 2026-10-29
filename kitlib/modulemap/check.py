@@ -4,17 +4,22 @@ The check scans the whole tree each run, so it keeps no state and needs no diff.
 detector reports is, in this order: into a messaging module (allowed), along an allowed edge of its
 kind (allowed), counted by a ratchet, or refused. A ratchet whose count is over its ceiling fails
 too; one under its ceiling gets a "lower the ceiling" line. A ceiling above the base's is refused
-unless the owner's map raises it (ratchet.py).
+unless the owner's map raises it (ratchet.py), and so is an architecture page that does not match
+the map (page.py). run() also prints or writes that page and the scope report (scope.py).
 """
 import collections
 import json
 import os
 import re
 
+from kitlib.git import checkout as gitcheckout
 from kitlib.git import cmd as gitcmd
 from kitlib.git import refs as gitrefs
+from kitlib.git import repo as gitrepo
 
 from . import detectors, ratchet
+from . import page as pagemod
+from . import scope as scopemod
 from .load import ROOT, MapError, load_ceilings, load_map
 
 SECTION = 'modules'
@@ -105,9 +110,20 @@ def where(c):
     return '%s:%d  (%s: %s)' % (c.path, c.line, c.detector, c.target)
 
 
-def check(mm, ceilings, files, read, base=None):
-    """Outcome of the edge check: 0 every crossing allowed or under its ratchet's ceiling and
-    every ceiling at or under the base's (`base`, a ratchet.Base; None: not compared), 1 not."""
+def page_lines(page_rel, current, expected):
+    """`(failed, lines)` for the architecture page at `page_rel`: `current` its text on disk (None
+    when missing), `expected` the text the map renders."""
+    if not pagemod.stale(current, expected):
+        return False, ['page %s matches the map' % page_rel]
+    why = 'does not exist' if current is None else 'does not match the map'
+    return True, ['PAGE STALE  %s %s: run module_map.py --page --write and commit it'
+                  % (page_rel, why)]
+
+
+def check(mm, ceilings, files, read, base=None, page=None):
+    """Outcome of the edge check: 0 every crossing allowed or under its ratchet's ceiling, every
+    ceiling at or under the base's (`base`, a ratchet.Base; None: not compared) and the page
+    current (`page`, `(rel, text on disk or None, rendered text)`; None: not checked), 1 not."""
     s = sort_crossings(mm, scan(mm, files, read))
     lines, failed = [], False
     total = len(s.messaging) + len(s.allowed) + sum(map(len, s.ratcheted.values())) + len(s.refused)
@@ -137,6 +153,10 @@ def check(mm, ceilings, files, read, base=None):
     if base is not None:
         raised, more = ratchet.compare(mm, ceilings, base)
         failed = failed or raised
+        lines.extend(more)
+    if page is not None:
+        stale, more = page_lines(*page)
+        failed = failed or stale
         lines.extend(more)
     lines.append('module_map: %s' % ('FAIL' if failed else 'OK'))
     return Outcome(FAIL if failed else OK, lines)
@@ -214,19 +234,74 @@ def base_of(root, cfg, rev, map_path, ceilings_path):
     return base, notes + more
 
 
-def run(root, cfg, mode, map_path=None, ceilings_path=None, files=None, base_rev=None):
-    """`mode` 'check' or 'baseline'. MapError when the map, the ceilings file, the base or the
-    tree listing cannot be used. A baseline needs no owner path (it writes nothing) and reads no
-    base."""
+def render_page(root, mm, map_path):
+    """The architecture page text for `mm`, its header naming the map repo-relative (by file name
+    when the map is outside the checkout)."""
+    return pagemod.render(mm, _rel(root, map_path) or os.path.basename(map_path))
+
+
+def _page_check(root, cfg, mm, map_path, given_map):
+    """`(page tuple for check() or None, notes)`."""
+    rel = cfg.section(SECTION).get('page')
+    if not rel:
+        return None, []
+    if given_map:
+        return None, ['note: the page %s is not checked: the map was given on the command line'
+                      % rel]
+    return (rel, reader(root)(rel.replace('\\', '/')), render_page(root, mm, map_path)), []
+
+
+def write_page(root, cfg, mm, map_path):
+    """Write the page `.kit.json` "modules".page names; Outcome. MapError when none is named or
+    the write is refused (kitlib.git.checkout.write_text: a linked worktree only)."""
+    rel = cfg.section(SECTION).get('page')
+    if not rel:
+        raise MapError('.kit.json has no "modules".page naming the architecture page '
+                       '(docs/module-map.md "The architecture page")')
+    try:
+        gitcheckout.write_text(rel, render_page(root, mm, map_path), root)
+    except (gitrepo.WriteRefused, OSError) as e:
+        raise MapError('cannot write the page %s: %s' % (rel, e))
+    return Outcome(OK, ['module_map: wrote the page %s' % rel])
+
+
+def scope_base(root, cfg, rev):
+    """`(rev, notes)`: `rev`, or the default base (docs/gate.md "Default base"). MapError when no
+    base is given and the default does not resolve."""
+    if rev:
+        return rev, []
+    rev, note = gitrefs.default_base(root, cfg.remote, cfg.main_branch)
+    sha, why = gitrefs.resolve(rev, root)
+    if not sha:
+        raise MapError('no base (%s): pass --base' % why)
+    return rev, ['note: %s' % note] if note else []
+
+
+def run(root, cfg, mode, map_path=None, ceilings_path=None, files=None, base_rev=None,
+        write=False):
+    """`mode` 'check', 'baseline', 'page' or 'scope'. MapError when the map, the ceilings file,
+    the base or the tree listing cannot be used. Only a check needs the owner path; a baseline
+    and a scope write nothing, and a page writes only the generated page (`write`)."""
+    given_map = bool(map_path)
     map_path, ceilings_path, notes = map_paths(root, cfg, map_path, ceilings_path,
                                                require_owner=(mode == 'check'))
     mm = load_map(map_path)
+    if mode == 'page':
+        if write:
+            return write_page(root, cfg, mm, map_path)
+        return Outcome(OK, render_page(root, mm, map_path).splitlines())
+    if mode == 'scope':
+        rev, more = scope_base(root, cfg, base_rev)
+        paths, mb = scopemod.changed_paths(root, rev)
+        lines = scopemod.report(scopemod.scope_of(mm, paths), '%s (%s)' % (rev, mb[:10]))
+        return Outcome(OK, more + lines)
     ceilings = load_ceilings(ceilings_path)
     if files is None:
         files = tree_files(root)
     if mode == 'check':
         base, more = base_of(root, cfg, base_rev, map_path, ceilings_path)
-        out = check(mm, ceilings, files, reader(root), base)
-        return Outcome(out.code, notes + more + out.lines)
+        page, pnotes = _page_check(root, cfg, mm, map_path, given_map)
+        out = check(mm, ceilings, files, reader(root), base, page)
+        return Outcome(out.code, notes + more + pnotes + out.lines)
     out = baseline(mm, ceilings, files, reader(root))
     return Outcome(out.code, notes + out.lines)

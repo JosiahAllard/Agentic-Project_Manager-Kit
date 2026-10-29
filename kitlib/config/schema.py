@@ -275,6 +275,7 @@ SECTIONS = {
     'modules': {
         'map': Field(RelPath(), None, 'the module map file: modules, messaging, allowed edges and ratchets (docs/module-map.md); --check refuses to run unless "owner".paths locks it; unset: no module map'),
         'ceilings': Field(RelPath(), None, 'the ratchet ceilings file, {ratchet id: ceiling} (docs/module-map.md "Ratchets"); unset: every ceiling is 0'),
+        'page': Field(RelPath(), None, 'the architecture page generated from the map (docs/module-map.md "The architecture page"); --page --write writes it and --check fails when it does not match the map; unset: no page'),
     },
     'pieces': {},
     'preflight': {
