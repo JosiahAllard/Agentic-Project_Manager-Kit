@@ -200,7 +200,8 @@ class RunWords(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(got['jobs'], 2)
         self.assertEqual(sorted(got['verbs']),
-                         sorted(['status', 'start', 'gate', 'follow', 'fetch', 'clean', 'stop']))
+                         sorted(['status', 'start', 'gate', 'land', 'follow', 'fetch', 'clean',
+                             'stop']))
 
     def test_job_is_never_served_over_ssh(self):
         with mock.patch('kitlib.loadnode.box.job_main', side_effect=AssertionError('ran')):
@@ -215,6 +216,32 @@ class RunWords(unittest.TestCase):
         self.assertEqual(jm.call_args[0][:2], (self.JOB, os.path.abspath(os.sep + 'b')))
         from kitlib.loadnode import gaterecord
         self.assertIs(jm.call_args[1]['verify'], gaterecord.read_record)   # a gate job's record
+
+    def test_the_runner_reads_a_land_jobs_record_with_landgate(self):
+        with mock.patch('kitlib.loadnode.box.job_main', return_value=0) as jm:
+            self.main(['job', self.JOB], None)
+        from kitlib.loadnode import landgate
+        self.assertIs(jm.call_args[1]['verify_land'], landgate.read_record)
+
+    def test_landgate_is_never_served_over_ssh(self):
+        with mock.patch('kitlib.loadnode.landgate.node_main', side_effect=AssertionError('ran')):
+            code, text, _d = self.main(['landgate', self.JOB], 'status')
+            self.assertEqual(code, 2)
+            self.assertEqual(json.loads(text)['error'], loadnode.REFUSED)
+            code, text, _d = self.main(['serve'], 'landgate ' + self.JOB)
+            self.assertEqual((code, json.loads(text)['error']), (2, loadnode.REFUSED))
+
+    def test_landgate_without_ssh_runs_the_land_jobs_merged_gate(self):
+        b = os.path.abspath(os.sep + 'b')
+        with mock.patch('kitlib.loadnode.landgate.node_main', return_value=4) as nm:
+            code, _t, _d = self.main(['landgate', self.JOB, '--base', b], None)
+        self.assertEqual(code, 4)
+        self.assertEqual(nm.call_args[0], (self.JOB, b))
+
+    def test_the_box_compares_land_specs_with_this_kits_files(self):
+        from kitlib.gate import reuse
+        with mock.patch.object(reuse, 'kit_files_hash', return_value='e' * 64):
+            self.assertEqual(loadnode._box(os.path.abspath(os.sep + 'b')).kit_files(), 'e' * 64)
 
     def test_base_must_be_one_absolute_folder(self):
         self.assertEqual(loadnode.split_base(['serve']), (['serve'], None))
