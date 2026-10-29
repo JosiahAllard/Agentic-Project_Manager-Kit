@@ -58,16 +58,22 @@ def node_need(need, lock):
             'gpu': min(need['gpu'], lock.get('gpu_slots', 0))}
 
 
-def node_fits(node, result, repo, need):
+def node_fits(node, result, repo, need, verbs=None):
     """'' when `node` (a registry Node, `result` its remote.Result) may take a job of `repo` with
-    main's `need` now, else why not."""
+    main's `need` now, else why not. `verbs`: the verbs the job needs the node to serve (None:
+    box.RUN_VERBS, a run's; a landing's merged gate names the land verb's)."""
     if repo not in node.repos:
         return 'not opted in for %s' % repo
     if result is None or result.state != remote.OK:
         return result.state if result else 'not asked'
     rep = result.reply
-    if not set(box.RUN_VERBS) <= set(rep.get('verbs') or ()):
-        return 'its kit serves no run verbs (update it)'
+    if verbs is None:
+        if not set(box.RUN_VERBS) <= set(rep.get('verbs') or ()):
+            return 'its kit serves no run verbs (update it)'
+    else:
+        missing = sorted(set(verbs) - set(rep.get('verbs') or ()))
+        if missing:
+            return 'its kit serves no %s verb (update it)' % ', '.join(missing)
     lock = rep['lock']
     if lock.get('unreadable') or lock.get('pending'):
         return 'its lock is not fully readable or a layout change is pending'
@@ -84,10 +90,10 @@ def node_fits(node, result, repo, need):
     return fits(lock, n)
 
 
-def choose(nodes, results, repo, main_lock, need):
+def choose(nodes, results, repo, main_lock, need, verbs=None):
     """A Choice for a job of `repo` that books `need` on main (need_of). `nodes` the registry's
     Nodes, `results` their remote.Results in any order, `main_lock` main's own reply lock dict
-    (kitlib.loadnode.reply.build of api.snapshot)."""
+    (kitlib.loadnode.reply.build of api.snapshot); `verbs` as node_fits."""
     by_name = {r.name: r for r in results}
     best = None
     why_main = fits(main_lock, need)
@@ -96,7 +102,7 @@ def choose(nodes, results, repo, main_lock, need):
     skipped = []
     for n in nodes:
         r = by_name.get(n.name)
-        why = node_fits(n, r, repo, need)
+        why = node_fits(n, r, repo, need, verbs)
         if why:
             skipped.append('%s: %s' % (n.name, why))
             continue
