@@ -377,9 +377,14 @@ class DiscoveryTest(ServeCase):
             'a_ok.py': JOB % ('ok', 'ran'),
             'b_broken.py': 'import no_such_module_anywhere\n',
             'c_none.py': 'def make(sources):\n    return None\n',
-            'd_twin.py': JOB % ('ok', 'twin')})
+            'd_twin.py': JOB % ('ok', 'twin'),
+            'e_tuple.py': 'def make(sources):\n    return ("not", "a job")\n',
+            'f_last.py': JOB % ('last', 'also ran')})
         hub = self.build(jobs=hubjobs.makers(fake.pkg))
-        self.assertEqual(hub.jobs.names(), ['ok'])
+        self.assertEqual(hub.jobs.names(), ['ok', 'last'])
+        odd = [n for n in hub.notes if fake.name + '.e_tuple' in n]
+        self.assertEqual(len(odd), 1, hub.notes)
+        self.assertIn('tuple, not a jobs.Job', odd[0])
         broken = [n for n in hub.notes if fake.name + '.b_broken' in n]
         self.assertEqual(len(broken), 1, hub.notes)
         self.assertIn('ModuleNotFoundError', broken[0])

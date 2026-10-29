@@ -1168,8 +1168,9 @@ def _job_line(log, text):
 
 def _make_jobs(sources, pusher, notes, log):
     """The timed jobs of `sources` (Sources.jobs) as one kitlib.hubsite.jobs.Jobs, their events
-    pushed through `pusher` when there is one; None with none. A job whose maker raises, or
-    whose name a job made before it has, is left out with a line in `notes`: the hub serves
+    pushed through `pusher` when there is one; None with none. A job whose maker raises, gives
+    something other than a jobs.Job, or whose name a job made before it has, is left out with a
+    line in `notes`: the hub serves
     without it. A maker that gives None (the job does not apply here) is left out silently."""
     made = []
     for make in sources.jobs:
@@ -1180,6 +1181,10 @@ def _make_jobs(sources, pusher, notes, log):
             notes.append('a timed job was not made (%s): %s: %s' % (where, type(e).__name__, e))
             continue
         if job is None:
+            continue
+        if not isinstance(job, _jobs.Job):
+            notes.append('a timed job was not made (%s): its make gave a %s, not a jobs.Job'
+                         % (where, type(job).__name__))
             continue
         if any(j.name == job.name for j in made):
             notes.append('a timed job was not made (%s): a job named %r is made already'
