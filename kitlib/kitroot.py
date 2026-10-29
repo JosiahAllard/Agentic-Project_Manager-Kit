@@ -14,6 +14,14 @@ A caller that prints a path quotes it itself: a kit path may hold a space.
 """
 import os
 
+from kitlib import platform
+
+
+def _python():
+    """The interpreter name a printed hint uses: stock Linux has only `python3`. (Same rule as
+    machinesetup.common.python_name; kept local so kitroot depends on nothing above platform.)"""
+    return 'python3' if platform.NAME == 'linux' else 'python'
+
 
 def root():
     """The folder that holds this kitlib: the checkout this module is in."""
@@ -27,9 +35,10 @@ def tool(name, kit=None):
 
 
 def command(name, checkout=None, kit=None):
-    """`python "<kit>/tools/<name>.py"`, plus ` -C "<checkout>"` when `checkout` is given, in
-    forward slashes: a hint printed for a repository names the kit's own tool."""
-    out = 'python "%s"' % tool(name, kit).replace('\\', '/')
+    """`python "<kit>/tools/<name>.py"` (`python3` on Linux), plus ` -C "<checkout>"` when
+    `checkout` is given, in forward slashes: a hint printed for a repository names the kit's own
+    tool."""
+    out = '%s "%s"' % (_python(), tool(name, kit).replace('\\', '/'))
     return out + (' -C "%s"' % checkout.replace('\\', '/') if checkout else '')
 
 
