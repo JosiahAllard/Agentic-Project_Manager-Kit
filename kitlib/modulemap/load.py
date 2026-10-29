@@ -95,6 +95,8 @@ class ModuleMap(object):
         self.where = where
         raw = {n: list(m['paths']) for n, m in data['modules'].items() if not is_note(n)}
         self.modules = {n: [_norm(p) for p in ps] for n, ps in raw.items()}
+        self.paths_as_written = raw
+        self.why = {n: m.get('why') for n, m in data['modules'].items() if not is_note(n)}
         self.messaging = list(data.get('messaging') or [])
         self.edges = list(data.get('edges') or [])
         self.ratchets = list(data.get('ratchets') or [])
