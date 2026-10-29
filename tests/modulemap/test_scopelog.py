@@ -55,7 +55,8 @@ class RepoCase(unittest.TestCase):
     def put(self, when, rec, name=None):
         """A record file stamped `when` in the scope folder; `rec` a dict, or text written as is."""
         os.makedirs(self.folder(), exist_ok=True)
-        name = name or '%s-1-%04x.json' % (when.strftime(scopelog.STAMP), len(os.listdir(self.folder())))
+        name = name or '%s-1-%04x.json' % (when.strftime(scopelog.STAMP),
+                                           len(os.listdir(self.folder())))
         with open(os.path.join(self.folder(), name), 'w', encoding='utf-8') as fh:
             fh.write(rec if isinstance(rec, str) else json.dumps(rec))
         return name
@@ -133,6 +134,28 @@ class WriteTest(RepoCase):
         self.assertEqual(got, (None, 'no dev_drive set'))
         self.assertFalse(os.path.exists(self.folder()))
 
+    def test_a_move_that_fails_keeps_no_record_and_leaves_no_temp_file(self):
+        s = scope.scope_of(self.mm, ['node/n.cs'])
+        with mock.patch.object(scopelog.fsreplace, 'replace',
+                               side_effect=PermissionError(13, 'Access is denied')):
+            path, why = scopelog.write(self.root, s, 'main', MB, now=NOW)
+        self.assertIsNone(path)
+        self.assertIn('Access is denied', why)
+        self.assertEqual(os.listdir(self.folder()), [])
+
+    def test_a_folder_that_cannot_be_made_is_a_line_and_exit_0(self):
+        os.makedirs(os.path.dirname(self.folder()), exist_ok=True)
+        with open(self.folder(), 'w', encoding='utf-8') as fh:     # a file where the folder goes
+            fh.write('x')
+        path, why = scopelog.write(self.root, scope.scope_of(self.mm, ['node/n.cs']), 'main', MB)
+        self.assertIsNone(path)
+        self.assertTrue(why)
+        self.repo.write('node/n.cs', 'class N2 {}')
+        code, out = self.cli('--scope', '--record')
+        self.assertEqual(code, 0, out)
+        self.assertIn('module_map scope: record not kept: ', out)
+        self.assertTrue(os.path.isfile(self.folder()))
+
     def test_the_tool_keeps_a_record_only_with_record(self):
         self.repo.write('node/n.cs', 'class N2 {}')
         code, out = self.cli('--scope')
@@ -207,6 +230,27 @@ class SummaryTest(RepoCase):
         self.assertEqual(notes, ['module scope: 2 record(s) could not be read'])
         self.assertEqual(scopelog.line(got), 'module scope: 4 gate run(s) in 7 days (3 head(s)), '
                                              '3 widened beyond the changed modules (75%)')
+
+    def test_a_record_of_the_wrong_shape_is_not_read_and_the_rest_are_summed(self):
+        hour = datetime.timedelta(hours=1)
+        self.put(NOW - hour, self.rec('h1', [('brain', 'node', EDGE_WHY)]))
+        for i, bad in enumerate([{'schema': 1, 'widen': 5},
+                                 {'schema': 1, 'head': []},
+                                 {'schema': 1, 'widen': ['x']},
+                                 {'schema': 1, 'widen': [{'module': 1, 'from': 'node',
+                                                          'why': 'via messaging'}]},
+                                 [1, 2]]):
+            self.put(NOW - (i + 2) * hour, bad)
+        got, notes = scopelog.summary(self.root, NOW)
+        self.assertEqual((got['runs'], got['widened']), (1, 1))
+        self.assertEqual(notes, ['module scope: 5 record(s) could not be read'])
+
+    def test_a_record_stamped_in_the_future_is_a_note_not_a_run(self):
+        self.put(NOW - datetime.timedelta(hours=1), self.rec('h1'))
+        self.put(NOW + datetime.timedelta(hours=1), self.rec('h2'))
+        got, notes = scopelog.summary(self.root, NOW)
+        self.assertEqual(got['runs'], 1)
+        self.assertEqual(notes, ['module scope: 1 record(s) stamped in the future, not summed'])
 
     def test_a_record_the_tool_kept_is_summed(self):
         self.repo.write('node/n.cs', 'class N2 {}')

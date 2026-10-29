@@ -156,6 +156,35 @@ def prune(where, now=None):
     return gone
 
 
+def _read(path):
+    """`(head, [(module, from, why)])` of the record at `path`, or None when it cannot be read or
+    is not a SCHEMA record of the shape the module docstring gives (any field of the wrong type
+    counts: one bad record never stops the sum)."""
+    try:
+        with open(path, encoding='utf-8') as fh:
+            rec = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(rec, dict) or rec.get('schema') != SCHEMA:
+        return None
+    head, widen = rec.get('head'), rec.get('widen')
+    if head is not None and not isinstance(head, str):
+        return None
+    if widen is None:
+        widen = []
+    if not isinstance(widen, list):
+        return None
+    out = []
+    for w in widen:
+        if not isinstance(w, dict):
+            return None
+        row = (w.get('module'), w.get('from'), w.get('why'))
+        if not all(isinstance(v, str) for v in row):
+            return None
+        out.append(row)
+    return head, out
+
+
 def summary(root, now=None, days=DAYS):
     """The sum of the records of the last `days` days for the checkout at `root`, as `(dict,
     notes)`; `(None, [])` when `.kit.json` names no module map, `(None, [note])` when the config
@@ -181,39 +210,35 @@ def summary(root, now=None, days=DAYS):
     except OSError as e:
         return None, ['module scope NOT CHECKED: %s' % ' '.join(str(e).split())]
     since = now - datetime.timedelta(days=days)
-    runs = widened = bad = 0
+    runs = widened = bad = future = 0
     heads, widened_heads, routes = set(), set(), {}
     for name in names:
         if not _NAME.fullmatch(name):
             continue
         at = stamp_of(name)
-        if at is None or not since <= at <= now:
+        if at is None or at < since:
             continue
-        try:
-            with open(os.path.join(where, name), encoding='utf-8') as fh:
-                rec = json.load(fh)
-        except (OSError, ValueError):
+        if at > now:
+            future += 1
+            continue
+        rec = _read(os.path.join(where, name))
+        if rec is None:
             bad += 1
             continue
-        if not isinstance(rec, dict) or rec.get('schema') != SCHEMA:
-            bad += 1
-            continue
+        head, widen = rec
         runs += 1
-        head = rec.get('head') or name
-        heads.add(head)
-        widen = [w for w in rec.get('widen') or () if isinstance(w, dict)]
+        heads.add(head or name)
         if not widen:
             continue
         widened += 1
-        widened_heads.add(head)
+        widened_heads.add(head or name)
         seen = set()
-        for w in widen:
-            key = (str(w.get('from')), str(w.get('why')))
-            r = routes.setdefault(key, {'from': key[0], 'why': key[1], 'modules': set(),
-                                        'runs': 0})
-            r['modules'].add(str(w.get('module')))
-            if key not in seen:
-                seen.add(key)
+        for module, src, why in widen:
+            r = routes.setdefault((src, why), {'from': src, 'why': why, 'modules': set(),
+                                               'runs': 0})
+            r['modules'].add(module)
+            if (src, why) not in seen:
+                seen.add((src, why))
                 r['runs'] += 1
     notes = []
     if not runs:
@@ -222,6 +247,8 @@ def summary(root, now=None, days=DAYS):
                      'the weekly sum")' % days)
     if bad:
         notes.append('module scope: %d record(s) could not be read' % bad)
+    if future:
+        notes.append('module scope: %d record(s) stamped in the future, not summed' % future)
     out = sorted(({'from': r['from'], 'why': r['why'], 'modules': sorted(r['modules']),
                    'runs': r['runs']} for r in routes.values()),
                  key=lambda r: (-r['runs'], r['from'], r['why']))

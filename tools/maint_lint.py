@@ -9,10 +9,10 @@ audit (7 days, no fetch) as counts, body, files and scope paths, the worktrees t
 leaves, the decision ledger as counts, and each gate step's median time over full gates against
 "maint_lint".gate_time.bound_s (kitlib.maintlint.gatetime), and, in a repository with a module
 map, one count line summing the gates' scope records (kitlib.modulemap.scopelog). No check
-flags anything for its age alone. Every finding prints the command that fixes it; nothing is run, and no ledger entry,
-worktree or git ref is written. The one write: a plain run files a backlog record for each step
-over the bound, when "maint_lint".gate_time.prefix is set and no live record of that step is in
-the store (one `gate time:` line each); --dry-run files nothing.
+flags anything for its age alone. Every finding prints the command that fixes it; nothing is
+run, and no ledger entry, worktree or git ref is written. The one write: a plain run files a
+backlog record for each step over the bound, when "maint_lint".gate_time.prefix is set and no
+live record of that step is in the store (one `gate time:` line each); --dry-run files nothing.
 
 Without --dry-run it writes the result (default `<pm_data>/maint-lint/<repo>/result.json`, beside
 the backlog's audit/ folder) and the page (--out, default page.html beside the result), and prints

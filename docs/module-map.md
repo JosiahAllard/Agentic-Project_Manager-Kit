@@ -250,6 +250,9 @@ Known limits:
 - Records outlive a map edit: a week's sum may mix routes from the old map and the new.
 - A repository that drops its map leaves its folder; no write comes to prune it.
 - With no dev drive set, nothing is kept.
+- Only a gate whose `gate.steps` runs the `--scope --record` step keeps a record; a repository
+  with a map but no such step shows zeros and a note.
+- A record stamped after the lint's own time (a clock set back) is not summed; a note counts it.
 
 ## Isolation runs
 
@@ -376,18 +379,21 @@ line per refused crossing, one line per ratchet (`count / ceiling / goal`), one 
 `module_map: OK` or `module_map: FAIL`. `--map` is a dry run: the map is not checked as an owner
 path, and the output says so.
 
-`--baseline` writes nothing; `--scope` writes only its record, with `--record`. It prints each ratchet's count, a new ratchet entry (goal 0) per
+`--baseline` writes nothing. It prints each ratchet's count, a new ratchet entry (goal 0) per
 `from`, `kind`, `to` of refused crossings for the owner to add to the map, and the ceilings
 file the current tree needs. It needs no owner path.
+
+`--scope` writes nothing but its scope record, and that only with `--record` ("Scope records and
+the weekly sum").
 
 Exit codes: 0 OK (a baseline, a page, a scope and an isolation plan always), 1 a refused
 crossing, a ratchet over its ceiling, a ceiling raised above the base's, a stale page or a module
 whose isolation run did not pass, 2 usage (`--write` without `--page`, `--base` without
-`--check` or `--scope`, `--record` without `--scope`, an isolation option without `--isolate`, `--isolate` with `--ceilings`,
-or with `--map` but no `--plan`), a refused `.kit.json`, an unusable map or ceilings file (here
-or at the base), a `--module` the map has no test for, a base git cannot read, a refused page
-write, the machine lock refusing an isolation run, or git could not list the tree
-(`module_map: NOT CHECKED: ...`).
+`--check` or `--scope`, `--record` without `--scope`, an isolation option without `--isolate`,
+`--isolate` with `--ceilings`, or with `--map` but no `--plan`), a refused `.kit.json`, an
+unusable map or ceilings file (here or at the base), a `--module` the map has no test for, a base
+git cannot read, a refused page write, the machine lock refusing an isolation run, or git could
+not list the tree (`module_map: NOT CHECKED: ...`).
 
 ## Remaining slices
 
