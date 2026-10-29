@@ -28,6 +28,7 @@ import time
 
 from kitlib import pmdata
 from kitlib.config import user as kuser
+from kitlib.fs import replace as fsreplace
 from kitlib.git import batch, cmd, refs
 from kitlib.git import repo as gitrepo
 
@@ -608,38 +609,27 @@ class _IndexLock(object):
 
     def install(self):
         """Move the lock file over the index ('' when done, else why not). A move Windows
-        refuses (a reader has the index open) is retried for REPLACE_WAIT seconds."""
-        deadline = time.monotonic() + REPLACE_WAIT
-        while True:
-            try:
-                os.replace(self.path, self.index)
-                self.held = False
-                return ''
-            except PermissionError as exc:
-                if time.monotonic() >= deadline:
-                    return 'cannot move %s over the index: %s' % (self.path, exc)
-            except OSError as exc:
-                return 'cannot move %s over the index: %s' % (self.path, exc)
-            time.sleep(0.05)
+        refuses (a reader has the index open) is retried for REPLACE_WAIT seconds
+        (kitlib.fs.replace)."""
+        try:
+            fsreplace.replace(self.path, self.index, wait=REPLACE_WAIT)
+        except OSError as exc:
+            return 'cannot move %s over the index: %s' % (self.path, exc)
+        self.held = False
+        return ''
 
     def release(self):
-        """Remove the lock file if this still holds it ('' when it is gone, else why not)."""
+        """Remove the lock file if this still holds it ('' when it is gone, else why not). A
+        removal Windows refuses is retried for REPLACE_WAIT seconds (kitlib.fs.replace)."""
         if not self.held:
             return ''
-        deadline = time.monotonic() + REPLACE_WAIT
-        while True:
-            try:
-                os.remove(self.path)
-                self.held = False
-                return ''
-            except FileNotFoundError:
-                self.held = False
-                return ''
-            except OSError as exc:
-                if not isinstance(exc, PermissionError) or time.monotonic() >= deadline:
-                    return ('git\'s index lock %s could not be removed (%s): no git command can '
-                            'write that index until it is; remove it by hand' % (self.path, exc))
-            time.sleep(0.05)
+        try:
+            fsreplace.remove(self.path, wait=REPLACE_WAIT)
+        except OSError as exc:
+            return ('git\'s index lock %s could not be removed (%s): no git command can '
+                    'write that index until it is; remove it by hand' % (self.path, exc))
+        self.held = False
+        return ''
 
 
 def _replace_file(full, data):
@@ -654,15 +644,7 @@ def _replace_file(full, data):
     try:
         with os.fdopen(fd, 'wb') as f:
             f.write(data)
-        deadline = time.monotonic() + REPLACE_WAIT
-        while True:
-            try:
-                os.replace(tmp, full)
-                return
-            except PermissionError:
-                if time.monotonic() >= deadline:
-                    raise
-            time.sleep(0.05)
+        fsreplace.replace(tmp, full, wait=REPLACE_WAIT)
     except BaseException as exc:
         try:
             os.remove(tmp)
