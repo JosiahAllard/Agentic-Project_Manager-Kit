@@ -155,13 +155,22 @@ class Manifests(unittest.TestCase):
         files = cc.renderer().manifests(kit, kcontent.load(ROOT))
         plugin = json.loads(files[cc.MANIFEST_REL])
         self.assertEqual((plugin['name'], plugin['version']), (kit['name'], kit['version']))
-        self.assertEqual(plugin['extensions']['com.openai']['hooks'], './hooks/hooks.json')
-        mcp = json.loads(files[cc.MCP_REL])['mcpServers']['machine-lock']
-        self.assertEqual(mcp['args'], ['${PLUGIN_ROOT}/mcp/lock_server.py'])
-        self.assertTrue(os.path.isfile(os.path.join(ROOT, *cc.SHELL_REL.split('/'), 'mcp', 'lock_server.py')))
-        hub = json.loads(files[cc.MCP_REL])['mcpServers']['hub']
-        self.assertEqual(hub['args'], ['${PLUGIN_ROOT}/mcp/hub_server.py'])
-        self.assertTrue(os.path.isfile(os.path.join(ROOT, *cc.SHELL_REL.split('/'), 'mcp', 'hub_server.py')))
+        # The manifest the export writes at .codex-plugin/plugin.json: every path from the plugin
+        # root, the export (no $schema and no extensions: the live Codex refuses that form).
+        self.assertEqual(sorted(plugin), ['description', 'hooks', 'mcpServers', 'name', 'skills', 'version'])
+        self.assertEqual(plugin['skills'], './content/skills/')
+        self.assertEqual(plugin['hooks'], './hosts/codex/shell/hooks/hooks.json')
+        self.assertEqual(plugin['mcpServers'], './hosts/codex/shell/mcp.json')
+        for key in ('skills', 'hooks', 'mcpServers'):
+            self.assertTrue(os.path.exists(os.path.join(ROOT, *plugin[key][2:].strip('/').split('/'))), key)
+        # Codex starts a plugin's MCP server in its cache copy and expands no ${PLUGIN_ROOT}.
+        servers = json.loads(files[cc.MCP_REL])
+        self.assertEqual(sorted(servers), ['mcpServers'])
+        for name, script in (('machine-lock', 'lock_server.py'), ('hub', 'hub_server.py')):
+            server = servers['mcpServers'][name]
+            self.assertEqual(server['args'], ['hosts/codex/shell/mcp/' + script])
+            self.assertEqual(server['cwd'], '.')
+            self.assertTrue(os.path.isfile(os.path.join(ROOT, *server['args'][0].split('/'))))
         hooks = json.loads(files[cc.HOOKS_REL])['hooks']
         self.assertEqual(sorted(hooks), sorted(registry.host('codex').capabilities.hook_events))
         for event, groups in hooks.items():
