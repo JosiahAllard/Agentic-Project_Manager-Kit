@@ -500,6 +500,12 @@ store's git push (the `push` setting).
   a detail is one more header field, `[hub push] job <name> <word> detail:<detail> route:pm
   attempt:<k>`, cut to the header alphabet like every field (a sha or a count, never prose). Each job
   owes at most one push: a newer event replaces one not yet written, its detail with it.
+  `session-watch` (`kitlib/hubjobs/session_watch.py`, docs/pm-watch.md "Hub session-watch job") runs
+  pm_watch's checks every 60 s, first at 30 s, and pushes at most once a run: one event as its kind
+  (`idle`, `stopped`, `usage`, `reset`, `bgfail`, `locknotice`, `remote`, `error`) with its subject
+  (session, account, run or notice id, check) as the detail, several as `events` with their count.
+  The event lines are free text, so they go in its health `note` (the last 20 pushed, with times), never
+  in a push.
 - Files, in `launcher.state_dir`: `push-outbox.json` (what is still to send, rewritten after each round
   that changed it, so a server ended without a clean close loses at most that round; read again at
   start: an entry whose item changed while the server was down fires afresh, one whose item is gone is
@@ -534,6 +540,9 @@ store's git push (the `push` setting).
     PM until it is consumed or expires.
   - A filed answer's live check is read once, when the filing is seen: an asker that ends after it is
     still tried (and reads it at its next start), and a coordinator started after it is not told.
+  - `session-watch` drops the events it saw while pm_watch's heartbeat was fresh, so those of the last
+    300 s before a pm_watch stopped are not pushed; it does not see a pm_watch run with its own
+    `--state`, so both push then; with no push worker its events are not pushed.
 
 Tests: tests/hubsite/test_push.py, tests/host/test_claude_peer.py, tests/launcher/test_pipes.py.
 
