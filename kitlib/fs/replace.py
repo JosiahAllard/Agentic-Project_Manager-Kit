@@ -3,7 +3,8 @@
 On Windows a rename over a file another process has open without delete sharing (an indexer, an
 antivirus scan, a reader in another tool) fails with PermissionError for as long as that handle
 stays open, usually a few milliseconds. replace() retries only that error, every PAUSE seconds for
-at most WAIT seconds, then raises it. Any other OSError is raised at once.
+at most WAIT seconds, then raises it. Any other OSError is raised at once. remove() is the same
+for os.remove, and a file already gone is success.
 """
 import os
 import time
@@ -19,6 +20,23 @@ def replace(src, dst, wait=None, pause=None):
     while True:
         try:
             os.replace(src, dst)
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+        time.sleep(pause)
+
+
+def remove(path, wait=None, pause=None):
+    """os.remove(path), retried on PermissionError for `wait` seconds (default WAIT); a file
+    that is already gone is not an error."""
+    deadline = time.monotonic() + (WAIT if wait is None else wait)
+    pause = PAUSE if pause is None else pause
+    while True:
+        try:
+            os.remove(path)
+            return
+        except FileNotFoundError:
             return
         except PermissionError:
             if time.monotonic() >= deadline:

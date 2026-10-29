@@ -78,6 +78,23 @@ class Pick(unittest.TestCase):
         (n, pct, reset), = A.week_rows(h.settings, NOW)
         self.assertEqual((pct, reset), (0, NOW + 6 * DAY))
 
+    def test_no_reading_is_unknown_not_0_and_still_eligible(self):
+        h = Home(self, accounts=('1', '2', '3'))
+        h.usage('1', week=(50, NOW + 8 * DAY))
+        h.usage('2', five=(10, NOW + DAY / 24))      # a file with no seven-day window
+        rows = A.week_rows(h.settings, NOW)
+        self.assertEqual(rows, [('1', 50, NOW + 8 * DAY), ('2', None, None), ('3', None, None)])
+        self.assertEqual(A.explain(rows)[1:], ['account 2: week unknown (no usage reading)',
+                                               'account 3: week unknown (no usage reading)'])
+        self.assertEqual(A.pick(h.settings, NOW)[0], '2')   # unknown counts as resetting a week from now
+
+    def test_a_week_with_a_reset_time_but_no_percentage_is_unknown_not_0(self):
+        h = Home(self, accounts=('1',))
+        h.usage('1', week=(None, NOW + DAY))
+        self.assertEqual(A.week_rows(h.settings, NOW), [('1', None, None)])
+        self.assertEqual(A.explain(A.week_rows(h.settings, NOW)), ['account 1: week unknown (no usage reading)'])
+        self.assertIn('seven_day=?', usage.report(h.settings, NOW)[0])
+
     def test_every_account_over_still_picks_the_soonest_and_signed_out_ones_are_skipped(self):
         h = Home(self, accounts=('1', '2', '3'), signed_out=('3',))
         h.usage('1', week=(99, NOW + 2 * DAY))
@@ -112,8 +129,22 @@ class Usage(unittest.TestCase):
         self.assertEqual(lines[2], 'account 3: no usage file')
         self.assertEqual(lines[3], 'current account: 1')
         self.assertEqual(lines[4], 'account codex: no usage data')
+        unknown = {'five': None, 'week': None, 'age': None, 'stale': True, 'missing': True}
         self.assertEqual(pmwatch.parse_usage('\n'.join(lines)),
-                         {'1': {'five': 12, 'week': 51}, '2': {'five': 0, 'week': 30}})
+                         {'1': {'five': 12, 'week': 51, 'age': 3, 'stale': False, 'missing': False},
+                          '2': {'five': 0, 'week': 30, 'age': 1440, 'stale': True, 'missing': False},
+                          '3': unknown, 'codex': unknown})
+
+    def test_a_window_without_a_figure_reads_unknown_and_is_not_dropped(self):
+        h = Home(self, accounts=('1', '2'))
+        h.usage('1', week=(98, NOW + DAY), updated=NOW - DAY)          # five_hour null, as the status line writes it
+        h.usage('2', five=(None, NOW + DAY / 24), week=(12.5, NOW + DAY))
+        lines = usage.report(h.settings, NOW)
+        self.assertTrue(lines[0].startswith('account 1: five_hour=?  seven_day=98% (resets '), lines[0])
+        self.assertTrue(lines[1].startswith('account 2: five_hour=?  seven_day=12% (resets '), lines[1])
+        got = pmwatch.parse_usage('\n'.join(lines))
+        self.assertEqual((got['1']['five'], got['1']['week'], got['1']['stale']), (None, 98, True))
+        self.assertEqual((got['2']['five'], got['2']['week'], got['2']['stale']), (None, 12, False))
 
 
     def test_the_codex_week_rounds_as_powershell_did(self):
@@ -125,7 +156,7 @@ class Usage(unittest.TestCase):
             f.write('{"primary":{"used_percent":94.6,"window_minutes":10080,"resets_at":%d}}\n' % reset)
         line = usage.codex_line(h.root, NOW)
         self.assertTrue(line.startswith('account codex: five_hour=reset  seven_day=95% (resets '), line)
-        self.assertEqual(pmwatch.parse_usage(line), {'codex': {'five': 0, 'week': 95}})
+        self.assertEqual(pmwatch.parse_usage(line)['codex']['week'], 95)
 
 
 class ParseTime(unittest.TestCase):

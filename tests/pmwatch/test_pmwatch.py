@@ -40,6 +40,18 @@ class UsageEvents(unittest.TestCase):
     def test_new_account_is_baseline_only(self):
         self.assertEqual(W.usage_events({}, {"3": {"five": 99, "week": 99}}), [])
 
+    def test_an_unknown_window_is_skipped_never_read_as_0(self):
+        # Unknown after 80% would be a RESET if read as 0; unknown before 99% a band jump from 0.
+        self.assertEqual(W.usage_events({"1": {"five": 10, "week": 80}}, {"1": {"five": None, "week": None}}), [])
+        self.assertEqual(W.usage_events({"1": {"five": None, "week": None}}, {"1": {"five": 99, "week": 99}}), [])
+
+    def test_merge_keeps_the_last_known_figure_so_a_band_crossed_meanwhile_fires(self):
+        s = {"1": {"five": 10, "week": 90, "stale": False}}
+        s = W.merge_usage(s, {"1": {"five": None, "week": None, "stale": True, "missing": True}})
+        self.assertEqual(s, {"1": {"five": 10, "week": 90, "stale": True, "missing": True}})
+        self.assertEqual(W.usage_events(s, {"1": {"five": 10, "week": 96}}),
+                         ["USAGE account 1 seven_day 95% (now 96%)"])
+
     def test_line_parser(self):
         txt = ("account 1: five_hour=reset  seven_day=reset  [updated 2 min ago]\n"
                "account 2: five_hour=39% (resets Fri 15:40)  seven_day=51% (resets Tue 00:00)")
@@ -48,9 +60,27 @@ class UsageEvents(unittest.TestCase):
 
     def test_parse_usage(self):
         self.assertEqual(W.parse_usage("account codex: five_hour=reset  seven_day=40% (resets x)"),
-                         {"codex": {"five": 0, "week": 40}})
+                         {"codex": {"five": 0, "week": 40, "age": None, "stale": True, "missing": False}})
         with self.assertRaises(RuntimeError):
-            W.parse_usage("account 1: no usage file")
+            W.parse_usage("current account: unknown")
+
+    def test_unknown_stale_and_missing_readings_are_kept_not_dropped_or_zeroed(self):
+        got = W.parse_usage("account 1: five_hour=?  seven_day=98% (resets Fri 12:00)  [updated 3735 min ago]\n"
+                            "account 2: five_hour=8% (resets Thu 02:30)  seven_day=18% (resets Mon 23:00)  "
+                            "[updated 0 min ago]\n"
+                            "account 3: five_hour=reset  seven_day=?  [updated ? min ago]\n"
+                            "account 4: no usage file\n"
+                            "current account: 2\n"
+                            "account codex: no usage data")
+        self.assertEqual(got, {
+            "1": {"five": None, "week": 98, "age": 3735, "stale": True, "missing": False},
+            "2": {"five": 8, "week": 18, "age": 0, "stale": False, "missing": False},
+            "3": {"five": 0, "week": None, "age": None, "stale": True, "missing": False},
+            "4": {"five": None, "week": None, "age": None, "stale": True, "missing": True},
+            "codex": {"five": None, "week": None, "age": None, "stale": True, "missing": True}})
+        line = "account 5: five_hour=1%%  seven_day=2%%  [updated %d min ago]"
+        self.assertFalse(W.parse_usage(line % W.STALE_MINUTES)["5"]["stale"])
+        self.assertTrue(W.parse_usage(line % (W.STALE_MINUTES + 1))["5"]["stale"])
 
 
 class AlertEvents(unittest.TestCase):
@@ -364,7 +394,7 @@ class Cli(TempHomeCase):
         with mock.patch("subprocess.run", side_effect=AssertionError("started a process")), \
                 mock.patch("subprocess.Popen", side_effect=AssertionError("started a process")):
             got = W.usage(report=lambda: ["account 1: five_hour=3%  seven_day=4%"])
-        self.assertEqual(got, {"1": {"five": 3, "week": 4}})
+        self.assertEqual(got, {"1": {"five": 3, "week": 4, "age": None, "stale": True, "missing": False}})
         with self.assertRaises(TypeError):
             W.usage("u.ps1", report=lambda: [])
 
@@ -379,7 +409,8 @@ class Cli(TempHomeCase):
         got = W.usage(report=lambda: ["account 1: five_hour=reset  seven_day=51% (resets Mon 10:00)  "
                                             "[updated 3 min ago]", "account 2: no usage file",
                                             "current account: 1"])
-        self.assertEqual(got, {"1": {"five": 0, "week": 51}})
+        self.assertEqual(got, {"1": {"five": 0, "week": 51, "age": 3, "stale": False, "missing": False},
+                               "2": {"five": None, "week": None, "age": None, "stale": True, "missing": True}})
 
     def test_config_keys_are_defaults_and_flags_win(self):
         cfg = {"sessions_file": "s.json", "alerts_dir": "A", "state_file": "S"}
