@@ -79,8 +79,8 @@ import hashlib
 import json
 import os
 import secrets
-import time
 
+from kitlib.fs import replace as fsreplace
 from kitlib.git import cmd, refs, repo
 
 DIR_NAME = 'kit-gate-ok'
@@ -91,8 +91,12 @@ KEYS = ('schema', 'verdict', 'commit', 'tree', 'base', 'gate_config', 'kit', 'au
 ADDED_KEYS = ('config_rev', 'source', 'full', 'mode', 'input_keys')
 MODES = ('full', 'select', 'docs')
 RAN_ON_KEYS = ('node', 'host_key', 'job')
-RETRIES = 5
-RETRY_SLEEP = 0.2
+RETRIES = 5         # tries of a record's os.replace while it fails with PermissionError
+RETRY_SLEEP = 0.2   # seconds between them
+# RETRIES as a wait for kitlib.fs.replace: try k starts at least k-1 pauses in, so the last (at
+# 0.8 s or later) is past this bound and the one before it (at 0.6 s) is not; the half pause is
+# the margin for a slow try.
+REPLACE_WAIT = (RETRIES - 1.5) * RETRY_SLEEP
 
 
 class RecordError(Exception):
@@ -319,16 +323,6 @@ def build(root, rev, gate_config, kit, repo_name, started_utc, steps, base=None,
     return rec
 
 
-def _retry(fn, *args):
-    for i in range(RETRIES):
-        try:
-            return fn(*args)
-        except PermissionError:
-            if i == RETRIES - 1:
-                raise
-            time.sleep(RETRY_SLEEP)
-
-
 def write(root, record):
     """Write `record` (from build()) to the record folder, then to its .git copy (legacy_dir),
     each atomically; returns the record folder's path. The folder first, so a failed write leaves
@@ -356,6 +350,8 @@ def write(root, record):
 
 
 def _write_file(path, record):
+    """Write `record` to `path`: a temp file, then os.replace, retried while a reader holds the
+    old file open (PermissionError; kitlib.fs.replace for REPLACE_WAIT). RecordError on failure."""
     folder = os.path.dirname(path)
     try:
         os.makedirs(folder, exist_ok=True)
@@ -363,7 +359,7 @@ def _write_file(path, record):
         try:
             with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
                 f.write(json.dumps(record, sort_keys=True, indent=1) + '\n')
-            _retry(os.replace, tmp, path)
+            fsreplace.replace(tmp, path, wait=REPLACE_WAIT, pause=RETRY_SLEEP)
         finally:
             if os.path.exists(tmp):
                 os.remove(tmp)

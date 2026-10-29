@@ -34,7 +34,8 @@ Just before removing, a break re-reads the file and refuses when it is no longer
 (released and taken again meanwhile). The window between that read and the remove is not closed.
 A take whose write fails after the create removes the file again: no empty lock is left behind.
 A PermissionError on a replace or remove (a reader holding the file open) is retried RETRIES
-times RETRY_SLEEP apart, then LockError.
+times RETRY_SLEEP apart, then LockError (the replace through kitlib.fs.replace; the removes keep
+their own loop, where a file already gone is an error, not success).
 
 Process facts come only from kitlib.proc. Until it is importable here, a process
 holder's start time is recorded as null and the holder always counts as alive: fail-closed.
@@ -45,13 +46,18 @@ import os
 import secrets
 import time
 
+from kitlib.fs import replace as fsreplace
 from kitlib.git import refs, repo
 
 LOCK_NAME = 'kit-landing.lock'
 FULL = 'full'                  # the record's constant lane, kept for older kits' readers
 PHASES = ('merge', 'gate', 'push', 'undo', 'stuck')
-RETRIES = 5
-RETRY_SLEEP = 0.2
+RETRIES = 5                    # tries of a replace or remove while it fails with PermissionError
+RETRY_SLEEP = 0.2              # seconds between them
+# RETRIES as a wait for kitlib.fs.replace: try k starts at least k-1 pauses in, so the last (at
+# 0.8 s or later) is past this bound and the one before it (at 0.6 s) is not; the half pause is
+# the margin for a slow try.
+REPLACE_WAIT = (RETRIES - 1.5) * RETRY_SLEEP
 
 
 class LockError(Exception):
@@ -108,6 +114,12 @@ def describe(record):
             % (' '.join(record.get('branches') or ()) or '-', who,
                record.get('phase'), record.get('started_utc'), record.get('main_branch') or 'main',
                (record.get('origin_at_take') or '?')[:10]))
+
+
+def _held_open(what, e):
+    """The LockError of a replace or remove still refused (PermissionError `e`) after its tries."""
+    return LockError('%s failed %d times (%s): the lock file is held open by another process; '
+                     'nothing was changed' % (what, RETRIES, e))
 
 
 def _utc(now=None):
@@ -229,13 +241,16 @@ class LandingLock(object):
         return rec
 
     def _retry(self, what, fn, *args):
+        """fn(*args), tried RETRIES times RETRY_SLEEP apart while it fails with PermissionError,
+        then LockError. Kept for release() and break_lock()'s removes: a lock file already gone
+        there (removed by someone else after the check) raises FileNotFoundError, where
+        kitlib.fs.replace.remove returns as on success."""
         for i in range(RETRIES):
             try:
                 return fn(*args)
             except PermissionError as e:
                 if i == RETRIES - 1:
-                    raise LockError('%s failed %d times (%s): the lock file is held open by '
-                                    'another process; nothing was changed' % (what, RETRIES, e))
+                    raise _held_open(what, e)
                 time.sleep(RETRY_SLEEP)
 
     def set_phase(self, token, phase):
@@ -250,7 +265,10 @@ class LandingLock(object):
             with open(tmp, 'w', encoding='utf-8') as f:
                 f.write(json.dumps(rec, sort_keys=True) + '\n')
             self._held_by(token)
-            self._retry('replacing %s' % self.path, os.replace, tmp, self.path)
+            try:
+                fsreplace.replace(tmp, self.path, wait=REPLACE_WAIT, pause=RETRY_SLEEP)
+            except PermissionError as e:
+                raise _held_open('replacing %s' % self.path, e)
         finally:
             try:
                 os.remove(tmp)

@@ -1,7 +1,9 @@
 """kitlib.records.landing: the landing lock against real throwaway repositories."""
+import contextlib
 import json
 import os
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -13,6 +15,27 @@ from tests.config.helpers import TempTree
 
 ALIVE = lambda pid, start: True      # noqa: E731
 DEAD = lambda pid, start: False      # noqa: E731
+
+
+class FakeClock(object):
+    """time.monotonic and time.sleep for the `with` of patched(): a sleep is recorded and moves
+    the clock on at once, so a retry loop's tries and pauses are counted exactly."""
+
+    def __init__(self):
+        self.now, self.sleeps = 1000.0, []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, s):
+        self.sleeps.append(s)
+        self.now += s
+
+    def patched(self):
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.object(time, 'monotonic', self.monotonic))
+        stack.enter_context(mock.patch.object(time, 'sleep', self.sleep))
+        return stack
 
 
 class LockCase(unittest.TestCase):
@@ -188,6 +211,66 @@ class TakeReleaseTest(LockCase):
                 lk.release(rec['token'])
         self.assertIn('failed %d times' % landing.RETRIES, str(cm.exception))
         self.assertEqual(lk.read()['token'], rec['token'])
+
+    def test_a_phase_replace_held_open_is_tried_five_times_0_2_s_apart_then_a_lock_error(self):
+        # The equivalence test of set_phase's move onto kitlib.fs.replace: the loop it replaced
+        # tried RETRIES (5) times, sleeping RETRY_SLEEP (0.2 s) between, then raised LockError
+        # ('failed 5 times'), the phase unchanged. The clock is faked, so the count is exact.
+        lk = self.lock()
+        for fails, tries, written in ((2, 3, True), (4, 5, True), (5, 5, False), (9, 5, False)):
+            with self.subTest(fails=fails):
+                rec = lk.take(['kit/a'])
+                real, calls, clock = os.replace, [], FakeClock()
+
+                def flaky(a, b):
+                    calls.append(b)
+                    if len(calls) <= fails:
+                        raise PermissionError('held open')
+                    return real(a, b)
+                with clock.patched(), mock.patch.object(landing.os, 'replace', flaky):
+                    if written:
+                        lk.set_phase(rec['token'], 'gate')
+                    else:
+                        with self.assertRaises(landing.LockError) as cm:
+                            lk.set_phase(rec['token'], 'gate')
+                self.assertEqual(len(calls), tries)
+                self.assertEqual(clock.sleeps, [0.2] * (tries - 1))
+                self.assertEqual(lk.read()['phase'], 'gate' if written else 'merge')
+                if not written:
+                    self.assertIn('failed 5 times (held open)', str(cm.exception))
+                    self.assertNotIsInstance(cm.exception, landing.NotHolder)
+                self.assertEqual(self.tmp_files(), [])
+                lk.release(rec['token'])
+
+    def test_the_phase_replace_goes_through_kitlib_fs_replace_with_the_old_bounds(self):
+        lk = self.lock()
+        rec = lk.take(['kit/a'])
+        real, seen = landing.fsreplace.replace, []
+
+        def spy(src, dst, wait=None, pause=None):
+            seen.append((os.path.normcase(dst), wait, pause))
+            return real(src, dst, wait=wait, pause=pause)
+        with mock.patch.object(landing.fsreplace, 'replace', spy):
+            lk.set_phase(rec['token'], 'push')
+        self.assertEqual(seen, [(os.path.normcase(lk.path), landing.REPLACE_WAIT, 0.2)])
+        self.assertAlmostEqual(landing.REPLACE_WAIT, 0.7)
+        self.assertEqual(lk.read()['phase'], 'push')
+
+    def test_a_phase_replace_refused_otherwise_is_not_retried(self):
+        lk = self.lock()
+        rec = lk.take(['kit/a'])
+        calls, clock = [], FakeClock()
+
+        def refused(a, b):
+            calls.append(b)
+            raise OSError('disk said no')
+        with clock.patched(), mock.patch.object(landing.os, 'replace', refused):
+            with self.assertRaises(OSError) as cm:
+                lk.set_phase(rec['token'], 'gate')
+        self.assertNotIsInstance(cm.exception, landing.LockError)   # raised as it was, as before
+        self.assertEqual((len(calls), clock.sleeps), (1, []))
+        self.assertEqual(lk.read()['phase'], 'merge')
+        self.assertEqual(self.tmp_files(), [])
 
 
 class BreakTest(LockCase):
