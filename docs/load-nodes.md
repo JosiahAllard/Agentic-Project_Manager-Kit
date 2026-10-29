@@ -197,10 +197,10 @@ Known limits:
 
 ## A landing's merged gate on a node
 
-The parts a landing needs to run its merged gate (docs/gate.md "Landing") on a load node are in
-the kit; the landing does not use them yet, so every landing still gates on main. The node checks
-the job and runs the gate; main checks the record it sends back against main's own reading of the
-same merge, step by step.
+A landing (docs/gate.md "Landing") may run its merged gate on a load node that opted its
+repository in; main still merges, writes the gate-OK record and pushes. The node checks the job and
+runs the gate; main checks the record it sends back against main's own reading of the same merge,
+step by step.
 
 1. Main starts a `NodeJob` in land mode (`kitlib.loadnode.job`, `land={full, docs, kit_files}`):
    the merge commit, the base (main's tip the merge was made on), the repository name and main's
@@ -245,6 +245,70 @@ same merge, step by step.
    job is stopped after `CEILING_S` (4 hours, an estimate) of wall time.
 
 A kit checkout is never gated on a node, by a landing or by `node.py gate`.
+
+### How a landing uses it
+
+`kitlib.gate.land` (`Lander`):
+
+- **Before the booking** (step 2b) it plans the route and says `gating on load node <n>: <why>`
+  or `gating here: <why>`; nothing is said when the plan is quiet (a kit checkout, no registry,
+  no node opted in, a kind the lock does not name).
+- **The booking** (step 3) is the gate kind for the landing, holding the landing resource at
+  priority `land`, as always. Routed to a node, it books `cores=1`: the landing's own work (fetch,
+  merge, record, push) needs one slot while the node runs the gate.
+- **At the merged gate** (step 7), in this order:
+  - `same_tree_why` gives a reason: the gate runs on main.
+  - Otherwise `recheck` asks the nodes again. No node qualifies: the gate runs on main. Another
+    node qualifies where the planned one does not: that node takes it, said as
+    `gating on load node <n2>: ...`.
+  - Otherwise `run_on_node` runs the land job, with `docs` set as main's merged gate has it, the
+    landing tree, the kind, `full` and the slug.
+- **When the job passes**, its Outcome is the merged gate's: the lines include `ran on load node
+  <n> as job <j>`, and the gate-OK record main writes for the merge carries `ran_on` (node, host
+  key fingerprint, job) and no `input_keys`. The result record is the same as for any landing.
+- **When the job does not pass** (a FAILED Outcome), the landing is NOT LANDED: the merge is
+  undone and nothing is pushed. The merge is never gated again on main, because the job started
+  on the node.
+- **An exception from the node side** that is not `Fallback` (a bug, an unexpected error) is NOT
+  LANDED the same way, through the landing's recovery. It is never a fallback.
+- **A fallback to main** (same tree, no node now, or `Fallback`) is said as `gating here: <why>`
+  (for `Fallback`, `<why> (nothing ran on load node <n>)`). The landing releases its 1-slot run
+  first, then books main's full run of the kind: the landing resource, priority `land`, no wait
+  limit. The landing lock file stays held throughout, so no other landing merges meanwhile.
+  Booking the full run while the 1-slot run is still held could wait on itself. That happens with
+  a kind that takes every slot, which `agent_cap` allows. It also happens inside an owner whole
+  hold, where heavy is every slot, and with a gpu-pool kind, whose 1-slot run already takes the
+  whole gpu pool.
+  If the lock refuses the full run, the landing is NOT LANDED.
+- **The queue during a fallback.** Releasing the 1-slot run frees the turn, so the next landing
+  of the repository may book it. That landing then waits at the landing lock file, while the
+  holder waits in the queue behind it. The waiting landing sees this (`Lander.yield_turn`: the
+  lock file's holder has a waiting entry for this repository's landing resource). It releases its
+  run, says so in a line, and books again behind the holder with what is left of its `--wait`
+  (one cpu slot again when it is node-routed itself). The new booking may be granted at once (a
+  backfill, while the holder's start is far off); it is then given back again at the next look,
+  `poll_s` apart, the line said once per holder.
+
+### Known limits
+
+- A node-routed landing's 1-slot run of a gpu-pool kind (local-ai, render, measure) still takes
+  every gpu slot: `cores=` sizes only the cpu pool.
+- The fallback's full run waits with no limit, whatever `--wait` had left.
+- A landing waiting at the lock file gives its turn back only if it runs a kit with
+  `yield_turn`. One from an older kit waits until its `--wait` runs out (BUSY), and the fallback
+  waits that long too.
+- A landing whose booking after a yield is not given before its `--wait` runs out ends NOT RUN
+  with the machine lock's exit code, not BUSY as when it waits at the lock file holding its turn.
+- While the holder's start stays far off, the landing that yielded books again once a look
+  (`poll_s`, 5 s) until it runs out of `--wait`.
+- A plan that raises is said as `gating here: the load-node plan failed: <error>` and the
+  landing gates on main.
+- The plan and the 1-slot booking use the config read before the landing's turn. A base whose
+  config names another `"gate".kind` is not booked again at that size.
+- A 1-slot landing run's held time goes into the `land` mode of the kind's expected times
+  (`history_expect`), beside the full runs.
+- Not yet proven on a live machine with a real node: the tests use a stand-in for
+  `kitlib.loadnode.landroute` on the real landing, git and scratch lock store.
 
 ## Lock runs on a node
 
