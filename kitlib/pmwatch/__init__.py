@@ -394,18 +394,37 @@ def idle_events(names, newest, fired, nolog, now, minutes, stopped=None):
     return ev, cur, miss
 
 
-def plugin_check(kit=None, settings=None, spawn=None, alive=None, folders=None):
+def hub_plugin_job_up(load=None, make_client=None):
+    """True when the loopback hub server's GET health `jobs` names its plugin-refresh job
+    (kitlib.hubsite.plugin_job): the hub then owns the plugin refresh. A hub that is down, has no
+    token file or no pointer, or answers anything else, is False. Never raises. `load` and
+    `make_client` as hub_check."""
+    try:
+        from kitlib import pmstart
+        port = (load or pmstart.hub_settings)().port
+        health = (make_client or pmstart._hub_client)(port).get("/health", timeout=pmstart.HUB_SITE_TIMEOUT_S)
+        jobs = health.get("jobs") if isinstance(health, dict) else None
+        return isinstance(jobs, dict) and "plugin-refresh" in jobs
+    except Exception:                       # noqa: BLE001 - a hub we cannot read is a hub that is not up
+        return False
+
+
+def plugin_check(kit=None, settings=None, spawn=None, alive=None, folders=None, hub_job=None):
     """The PLUGIN check for Watcher: check(last) -> (lines, last), over kitlib.pluginsource.poll
     (docs/plugin-source.md "Behind warnings"). `last` is the kit main sha last reported (None when
     current), kept in the state file so a relaunch does not report the same sha again. With no
     `settings` the machine config's plugin key is read on every call, so a bad key is a failed
     check (ERROR on the third), never a dead watcher, and so is an unreadable tracking ref or
     state.json; with no `kit`, the checkout this code is in; with no `folders`, this machine's
-    account folders."""
+    account folders. With auto_refresh on and the hub's plugin-refresh job up (`hub_job()`, default
+    hub_plugin_job_up), the hub is the one owner of the refresh: the check reports the behind
+    line and starts nothing; with the hub down it still starts the refresh itself."""
     from kitlib import pluginsource
 
     def check(last):
         s = pluginsource.load() if settings is None else settings
+        if s.auto_refresh and (hub_job or hub_plugin_job_up)():
+            s = s._replace(auto_refresh=False)
         return pluginsource.poll(kit or pluginsource.kit_root(), s, last, spawn=spawn, alive=alive,
                                  folders=folders)
     return check
