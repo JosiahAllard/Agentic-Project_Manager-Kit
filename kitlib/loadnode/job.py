@@ -17,6 +17,13 @@ One job is the caller's checkout at HEAD, run on one node:
            or none (the staging folder is kept and named when not)
   clean    the node removes the job's worktree, ref and folder: only once its artifacts are here
 
+A gate job (`gate`, docs/load-nodes.md "Gating a branch on a node") pushes the base too, to
+refs/node/<job>-base, and asks the node's `gate` verb: the node runs its own kit's
+`gate.py --full` on the commit, and sends back the gate-OK record it wrote. Main takes it into its
+own record folder only through kitlib.records.gate_ok.import_record (every check of verify() with
+main's gate config at the commit, a --full pass, the same repository), adding `ran_on` from its
+registry; then cleans the job. A record main does not take is EXIT_RECORD, the job kept.
+
 When the machine config turns lock-window notices on (kitlib.lock.site.notice) for the kind, a
 start notice is written once the node has started the job and an end notice on every way out after
 that, LOST included, so the owner hears of the window on the node as of one on main.
@@ -29,10 +36,12 @@ EXIT_AFTER_START the node started the job but it ended there with no exit code o
 runner vanished, the node lost it) or could not be followed, or the start request went out and no
 reply came back (the job may run there: the follow and stop lines are said); EXIT_LOST the
 connection did not come back; EXIT_ARTIFACTS the job succeeded but its artifacts did not all come
-or could not all be copied into the checkout (none was). Once the node has started the job
-(`started`), only its lock refusing it as busy (the command never ran) is one `--node auto`
-answers on main; no other failure is, or the job would run twice. Nothing here prints:
-`say(text)` gets every line for the user and `out(bytes)` the job's own output.
+or could not all be copied into the checkout (none was); EXIT_RECORD a gate job passed on the
+node but main did not take its gate-OK record (the job is kept, the follow line names -C). Once
+the node has started the job (`started`), only its lock refusing it as busy (the command never
+ran) is one `--node auto` answers on main; no other failure is, or the job would run twice.
+Nothing here prints: `say(text)` gets every line for the user and `out(bytes)` the job's own
+output.
 """
 import collections
 import datetime
@@ -45,9 +54,10 @@ import tempfile
 import time
 from fnmatch import fnmatchcase
 
-from kitlib.loadnode import box, frames, remote
+from kitlib.loadnode import box, frames, registry, remote
 
 EXIT_USAGE, EXIT_BUSY, EXIT_LOST, EXIT_NODE, EXIT_ARTIFACTS, EXIT_AFTER_START = 2, 6, 9, 10, 13, 14
+EXIT_RECORD = 15
 REATTACH_S = 120
 BACKOFF = (2, 4, 8, 16, 30)
 PUSH_TIMEOUT_S = 1800
@@ -139,16 +149,88 @@ def _iso():
     return datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
+def gate_facts(top):
+    """What a gate job of the checkout `top` sends: {repo, kind, remote, main, base, slug}, read
+    as its own gate reads them (its `.kit.json`, runner.repo_name, the gate's lock kind, the
+    default base: kitlib.git.refs.default_base, as a full hash). JobError(EXIT_USAGE) naming
+    what cannot be read or does not resolve."""
+    import kitlib.config as kconfig
+    from kitlib.config.types import ConfigError
+    from kitlib.gate import runner
+    from kitlib.git import refs
+    try:
+        cfg = kconfig.load(top)
+        kind = cfg.section('gate').get('kind')
+    except ConfigError as e:
+        raise JobError(EXIT_USAGE, 'the config of %s cannot be read: %s' % (top, e))
+    ref, _note = refs.default_base(top, cfg.remote, cfg.main_branch)
+    base, why = refs.resolve(ref, top)
+    if not base:
+        raise JobError(EXIT_USAGE, 'the default base of %s does not resolve (%s): neither %s/%s '
+                       'nor %s' % (top, why, cfg.remote, cfg.main_branch, cfg.main_branch))
+    branch, _ = refs.current_branch(top)
+    slug = runner.slug_of(branch or 'detached')
+    return {'repo': runner.repo_name(cfg, top), 'kind': kind, 'remote': cfg.remote or '',
+            'main': cfg.main_branch, 'base': base,
+            'slug': slug if registry.repo_ok(slug) else 'gate'}
+
+
+def repo_of(top):
+    """The repository name the gate of the checkout `top` writes in its records
+    (runner.repo_name), or None when its config cannot be read."""
+    import kitlib.config as kconfig
+    from kitlib.config.types import ConfigError
+    from kitlib.gate import runner
+    try:
+        return runner.repo_name(kconfig.load(top), top)
+    except ConfigError:
+        return None
+
+
+def import_gate_record(top, rec, commit, ran_on, repo_name):
+    """Take the gate-OK record `rec` a node's gate wrote for `commit` into the record folder of
+    the checkout `top` (kitlib.records.gate_ok.import_record, checked against the gate config main
+    reads at the commit): `(path, [warnings])`, or RecordError. With no record folder (no
+    dev_drive) only the .git copy is written: its path, with a warning, as the gate itself does.
+    A record whose kit commit is not main's kit's is taken with a warning: the config hash
+    check is what refuses."""
+    from kitlib.gate import runner
+    from kitlib.records import gate_ok
+
+    def config_at(rev):
+        try:
+            return runner.gate_config_at(top, rev)
+        except runner.ConfigError as e:
+            raise gate_ok.RecordError('the gate config at %s: %s' % (rev[:10], e))
+    warnings = []
+    try:
+        path, _out = gate_ok.import_record(top, rec, commit, ran_on, config_at, repo_name)
+    except gate_ok.NoRecordFolder as e:
+        path = gate_ok.legacy_path(top, commit)
+        warnings.append('the record could not go to the record folder (%s); .git copy only' % e)
+    theirs = (rec.get('kit') or {}).get('commit') if isinstance(rec.get('kit'), dict) else None
+    try:
+        mine = runner.kit_identity().get('commit')
+    except Exception:                   # noqa: BLE001 - only a warning rides on it
+        mine = None
+    if theirs and mine and theirs != mine:
+        warnings.append("the node's kit is at %s and this machine's at %s; the record's gate "
+                        "config matched, so it is taken" % (str(theirs)[:12], str(mine)[:12]))
+    return path, warnings
+
+
 class NodeJob(object):
     """One job on `node` through the open remote.Link `link`. git(args, cwd, env, timeout) ->
     (rc, out bytes, err text), sleep and clock are the tests' stand-ins. notice_dir: the folder
     for the lock-window notices, or None for none. tool: how the follow and stop lines name
-    node.py."""
+    node.py. gate: for a gate job, {base, remote, main} (the base commit and the names its
+    refs take on the node); importer(top, rec, commit, ran_on, repo) -> (path, [warnings]) is
+    import_gate_record, the tests' stand-in."""
 
     def __init__(self, node, link, top, sha, repo, slug, kind, cmd, artifacts=(), wait_s=None,
                  expect_s=None, no_wait=False, note=None, say=None, out=None, git=None,
                  notice_dir=None, reattach_s=REATTACH_S, sleep=time.sleep, clock=time.monotonic,
-                 job=None, tool='node.py'):
+                 job=None, tool='node.py', gate=None, importer=None):
         self.node, self.link, self.top, self.sha = node, link, top, sha
         self.repo, self.slug, self.kind, self.cmd = repo, slug, kind, list(cmd)
         self.artifacts = list(artifacts)
@@ -164,21 +246,31 @@ class NodeJob(object):
         self.noticed = False
         self.staging = None
         self.started = False             # the node took the job: it is never run again on main
+        self.gate = dict(gate) if gate else None
+        self.gate_job = bool(gate)       # a gate job (a follow learns it from the result)
+        self.importer = importer or import_gate_record
 
     # -- the steps --------------------------------------------------------------------------
     def spec(self):
+        if self.gate:
+            return {'job': self.job, 'repo': self.repo, 'slug': self.slug, 'sha': self.sha,
+                    'base': self.gate.get('base'), 'remote': self.gate.get('remote'),
+                    'main': self.gate.get('main'), 'max_jobs': self.node.slots, 'note': self.note}
         return {'job': self.job, 'repo': self.repo, 'slug': self.slug, 'kind': self.kind,
                 'sha': self.sha, 'cmd': self.cmd, 'artifacts': self.artifacts,
                 'max_jobs': self.node.slots, 'wait_s': self.wait_s, 'expect_s': self.expect_s,
                 'no_wait': bool(self.no_wait), 'note': self.note}
 
     def push(self):
-        """Push HEAD to refs/node/<job> on the node's mirror. JobError(EXIT_NODE, fallback)."""
+        """Push HEAD to refs/node/<job> on the node's mirror (a gate job: its base to
+        refs/node/<job>-base too). JobError(EXIT_NODE, fallback)."""
         from kitlib.git import cmd as gitcmd
         env = self.link.git_env(gitcmd.scrubbed_env())
         env['GIT_TERMINAL_PROMPT'] = '0'
         args = ['-c', 'protocol.version=0', 'push', '--quiet', remote.push_url(self.node, self.repo),
                 '%s:refs/node/%s' % (self.sha, self.job)]
+        if self.gate:
+            args.append('%s:refs/node/%s%s' % (self.gate['base'], self.job, box.BASE_SUFFIX))
         rc, _out, err = self.git(args, self.top, env, PUSH_TIMEOUT_S)
         if rc != 0:
             raise JobError(EXIT_NODE, 'the push to %s failed: %s'
@@ -216,14 +308,16 @@ class NodeJob(object):
     def start(self):
         """The node's ok reply. JobError(fallback True) when it refused the job or was busy, or
         ssh did not start; StartUnknown when the request went out and no reply came back."""
-        d = self._call('start', self.spec(), fallback=True, sent=StartUnknown)
+        verb = box.GATE_VERB if self.gate else 'start'
+        d = self._call(verb, self.spec(), fallback=True, sent=StartUnknown)
         if d.get('ok'):
             return d
         err = str(d.get('error') or '')[:300]
         if d.get('busy'):
             raise JobError(EXIT_BUSY, '%s is busy: %s' % (self.node.name, err), fallback=True)
         if 'not a command this node serves' in err:
-            err = 'its kit serves no run verbs; update the kit on the node'
+            err = ('its kit serves no gate verb; update the kit on the node' if self.gate
+                   else 'its kit serves no run verbs; update the kit on the node')
         raise JobError(EXIT_NODE, '%s refused the job: %s' % (self.node.name, err), fallback=True)
 
     def follow(self):
@@ -486,6 +580,8 @@ class NodeJob(object):
         fetch = ''
         if self.artifacts:
             fetch = ' -C "%s"%s' % (self.top, ''.join(' --artifact "%s"' % g for g in self.artifacts))
+        elif self.gate_job:                      # the record is taken into a checkout
+            fetch = ' -C "%s"' % (self.top or '<checkout>')
         return ['  follow it: %s follow %s %s%s' % (self.tool, self.node.name, self.job, fetch),
                 '  stop it:   %s stop %s %s' % (self.tool, self.node.name, self.job)]
 
@@ -499,7 +595,7 @@ class NodeJob(object):
         for a failure before the job started, and for a busy result (fallback True). The node's
         own spec check runs here first, so a start it would refuse never pushes."""
         try:
-            box.check_spec(self.spec())
+            (box.check_gate_spec if self.gate else box.check_spec)(self.spec())
         except box.SpecError as e:
             raise JobError(EXIT_USAGE, 'the node would refuse this job: %s' % e)
         self.push()
@@ -541,6 +637,8 @@ class NodeJob(object):
             self.say('the job on %s did not end with an exit code (%s: %s)'
                      % (self.node.name, how, str(res.get('why'))[:300]))
             return EXIT_AFTER_START
+        if res.get('gate') is True and how == 'ended' and code == 0:
+            return self.take_record(res)
         if self.artifacts and how in ('ended', 'stopped', 'interrupted'):
             ok, got = self.fetch()
             if not ok:
@@ -552,6 +650,42 @@ class NodeJob(object):
         self.clean()
         self.say('job %s on %s: %s, exit %d' % (self.job, self.node.name, how, code))
         return code
+
+    def take_record(self, res):
+        """After a gate job passed on the node: import the gate-OK record in `res` and clean the
+        job, exit 0; EXIT_RECORD with the job kept when main does not take it."""
+        self.gate_job = True
+        sha, why, warnings = res.get('sha'), None, []
+        if not self.top:
+            why = 'no checkout to take it into: follow it with -C <checkout>'
+        elif not isinstance(res.get('record'), dict):
+            why = "the node's gate wrote none it could read: %s" % str(res.get('record_why'))[:300]
+        elif not self.repo:
+            why = 'the repository name of %s cannot be read from its config' % self.top
+        elif self.sha and sha != self.sha:
+            why = 'the node gated %s, not %s' % (str(sha)[:12], self.sha[:12])
+        else:
+            from kitlib.records import gate_ok
+            ran_on = {'node': self.node.name, 'host_key': registry.fingerprint(self.node.host_key),
+                      'job': self.job}
+            try:
+                path, warnings = self.importer(self.top, res['record'], sha, ran_on, self.repo)
+            except gate_ok.RecordError as e:
+                why = str(e)[:400]
+            except (OSError, ValueError) as e:
+                why = '%s: %s' % (type(e).__name__, e)
+        if why:
+            self.say('the gate passed on %s, and its gate-OK record was not taken: %s; job %s '
+                     'stays there' % (self.node.name, why, self.job))
+            for line in self.follow_lines():
+                self.say(line)
+            return EXIT_RECORD
+        for w in warnings:
+            self.say('WARNING: ' + w)
+        self.say('gate-OK record (from %s, job %s): %s' % (self.node.name, self.job, path))
+        self.clean()
+        self.say('job %s on %s: ended, exit 0' % (self.job, self.node.name))
+        return 0
 
 
 def _json(payload):
