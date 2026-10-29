@@ -8,14 +8,15 @@ account's authorized keys as
 so whatever the main machine asks to run, sshd runs this instead, with the words it asked for in
 SSH_ORIGINAL_COMMAND. serve() answers `status`: the node's machine lock and hardware as one JSON
 line (kitlib.loadnode.reply), with the words it serves and its live jobs. The run words (`start`,
-`gate`, `follow`, `fetch`, `clean`, `stop` and the one git push form) go to kitlib.loadnode.box,
+`gate`, `land`, `follow`, `fetch`, `clean`, `stop` and the one git push form) go to kitlib.loadnode.box,
 which checks their parameters before it does anything. Anything else, an argument other than `serve`
 (and `--base <absolute folder>`, the jobs' folder for a test node), or no SSH_ORIGINAL_COMMAND at
 all, is refused with exit 2 and a fixed message that never repeats what was sent.
 
-`loadnode.py job <job> [--base <folder>]` is the job runner box's `start` and `gate` start
-detached; it is never reached over ssh (the forced command's arguments are fixed) and is refused
-when SSH_ORIGINAL_COMMAND is set.
+`loadnode.py job <job> [--base <folder>]` is the job runner box's `start`, `gate` and `land`
+start detached, and `loadnode.py landgate <job> [--base <folder>]` the land job's merged gate
+that runner starts (kitlib.loadnode.landgate.node_main); neither is ever reached over ssh (the
+forced command's arguments are fixed), and both are refused when SSH_ORIGINAL_COMMAND is set.
 
 Exit codes: 0 the reply; 1 the machine lock could not be read (an ok false reply), or a run word
 refused for a reason it names; 2 refused.
@@ -57,9 +58,15 @@ def split_base(argv):
     return argv[:i] + argv[i + 2:], base
 
 
+def _kit_files():
+    from kitlib.loadnode import landgate      # only for a `land` request
+    return landgate.kit_files()
+
+
 def _box(base):
     from kitlib.loadnode import box
-    return box.Box(base, runner=[sys.executable, '-I', '-B', os.path.realpath(__file__)])
+    return box.Box(base, runner=[sys.executable, '-I', '-B', os.path.realpath(__file__)],
+                   kit_files=_kit_files)
 
 
 def serve(argv, environ, snapshot_fn=None, version=None, box=None):
@@ -88,10 +95,13 @@ def main(argv=None, environ=None, out=None, stdin=None, box=None, exec_fn=None, 
     rest, base = split_base(argv)
     cmd = environ.get('SSH_ORIGINAL_COMMAND')
     if rest and rest[0] == 'job' and len(rest) == 2 and cmd is None:
-        from kitlib.loadnode import box as boxmod, gaterecord
+        from kitlib.loadnode import box as boxmod, gaterecord, landgate
         return boxmod.job_main(rest[1], base, runner=[sys.executable, '-I', '-B',
                                                       os.path.realpath(__file__)],
-                               verify=gaterecord.read_record)
+                               verify=gaterecord.read_record, verify_land=landgate.read_record)
+    if rest and rest[0] == 'landgate' and len(rest) == 2 and cmd is None:
+        from kitlib.loadnode import landgate
+        return landgate.node_main(rest[1], base)
     if rest == ['serve'] and cmd is not None and cmd != SERVED:
         from kitlib.loadnode import box as boxmod
         bout = binout or sys.stdout.buffer

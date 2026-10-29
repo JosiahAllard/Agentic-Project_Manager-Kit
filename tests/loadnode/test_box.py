@@ -867,3 +867,143 @@ class GateOnRealGit(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+# -- land jobs (S3b) -------------------------------------------------------------------------------
+
+KITH = 'e' * 64
+
+
+def land_spec(**over):
+    d = dict(gate_spec(), full=True, docs=False, kit_files=KITH)
+    d.update(over)
+    return d
+
+
+class LandParams(unittest.TestCase):
+
+    def test_the_land_verb_is_served_and_runs_need_only_the_run_verbs(self):
+        self.assertIn(box.LAND_VERB, box.VERBS)
+        self.assertNotIn(box.LAND_VERB, box.RUN_VERBS)
+
+    def test_a_good_land_spec_reads_and_every_bad_key_is_named_without_quoting(self):
+        got = box.check_land_spec(dict(land_spec(docs=True), cmd=['rm', '-rf', '/']))
+        self.assertEqual((got['land'], got['gate'], got['full'], got['docs'], got['kit_files']),
+                         (True, True, True, True, KITH))
+        self.assertNotIn('cmd', got)
+        for k, v in (('full', None), ('full', 1), ('docs', 'yes'), ('kit_files', 'SECRET'),
+                     ('kit_files', 'E' * 64), ('kit_files', 'e' * 63), ('kit_files', None),
+                     ('base', 'SECRET'), ('main', 'a..b')):
+            with self.subTest(key=k, value=str(v)[:20]):
+                with self.assertRaises(box.SpecError) as cm:
+                    box.check_land_spec(land_spec(**{k: v}))
+                self.assertIn(k, str(cm.exception))
+                self.assertNotIn('SECRET', str(cm.exception))
+
+
+class LandStart(GateBase):
+
+    def setUp(self):
+        GateBase.setUp(self)
+        self.box.kit_files = lambda: KITH
+
+    def test_a_land_starts_as_a_gate_does_with_land_in_its_spec(self):
+        self.mirror()
+        got = self.box.land(box.check_land_spec(land_spec()))
+        self.assertTrue(got['ok'], got)
+        d = self.box.job_dir(JOB)
+        saved = box._read_json(os.path.join(d, 'spec.json'))
+        self.assertEqual((saved['land'], saved['gate'], saved['kit_files']), (True, True, KITH))
+        self.assertTrue(os.path.isdir(os.path.join(d, 'gate', 'my-repo')))
+        self.assertEqual(self.started[0][0][-4:-2], ['job', JOB])
+
+    def test_another_kit_is_refused_with_kit_and_both_refs_dropped(self):
+        self.mirror()
+        self.box.kit_files = lambda: 'f' * 64
+        got = self.box.land(box.check_land_spec(land_spec()))
+        self.assertEqual((got['ok'], got['kit']), (False, True))
+        self.assertIn("the node kit's files are not main's", got['error'])
+        self.assertFalse(os.path.exists(self.box.job_dir(JOB)))
+        for drop in self.drops():
+            self.assertIn(drop, self.git.calls)
+        self.assertEqual(self.started, [])
+
+    def test_a_kit_that_cannot_be_read_is_refused_by_its_kind_only(self):
+        self.mirror()
+
+        def boom():
+            raise OSError('SECRET path')
+        self.box.kit_files = boom
+        got = self.box.land(box.check_land_spec(land_spec()))
+        self.assertEqual((got['ok'], got['kit']), (False, True))
+        self.assertIn('cannot be read (OSError)', got['error'])
+        self.assertNotIn('SECRET', got['error'])
+        self.assertEqual(self.started, [])
+
+    def test_a_box_with_no_kit_files_reader_refuses_every_land(self):
+        self.mirror()
+        self.box.kit_files = None
+        got = self.box.land(box.check_land_spec(land_spec()))
+        self.assertEqual((got['ok'], got['kit']), (False, True))
+
+    def test_serve_takes_the_land_verb_and_a_refused_land_spec_drops_both_refs(self):
+        self.mirror()
+        out = io.BytesIO()
+        code = box.serve('land', io.BytesIO(json.dumps(land_spec()).encode() + b'\n'), out.write,
+                         self.box)
+        self.assertEqual(code, 0, out.getvalue())
+        self.assertTrue(json.loads(out.getvalue())['ok'])
+        out = io.BytesIO()
+        code = box.serve('land', io.BytesIO(json.dumps(land_spec(job=JOB2, kit_files='SECRET'))
+                                            .encode() + b'\n'), out.write, self.box)
+        self.assertEqual(code, box.EXIT_USAGE)
+        self.assertNotIn(b'SECRET', out.getvalue())
+        for drop in self.drops(JOB2):
+            self.assertIn(drop, self.git.calls)
+
+
+class RunLand(GateBase):
+
+    def made_land_job(self):
+        d = self.box.job_dir(JOB)
+        os.makedirs(os.path.join(d, 'gate', 'my-repo'))
+        box._write_json(os.path.join(d, 'spec.json'), box.check_land_spec(land_spec()))
+        return d
+
+    def test_it_runs_the_node_kits_landgate_and_sends_the_record_with_land(self):
+        d = self.made_land_job()
+        p, seen = FakePopen([0]), []
+
+        def verify(root, commit):
+            seen.append((root, commit))
+            return {'commit': commit, 'verdict': 'OK'}, None
+        spec_ = box._read_json(os.path.join(d, 'spec.json'))
+        self.assertEqual(self.box.run_land(JOB, spec_, popen=p, verify=verify), 0)
+        tree = os.path.join(d, 'gate', 'my-repo')
+        argv, cwd, env = p.args
+        self.assertEqual(argv, [sys.executable, '-B',
+                                os.path.join(box.KIT_ROOT, 'optional', 'loadnode', 'loadnode.py'),
+                                'landgate', JOB, '--base', self.base])
+        self.assertEqual((cwd, env['PMKIT_NODE_JOB']), (tree, JOB))
+        self.assertEqual(seen, [(tree, SHA)])
+        res = box._read_json(os.path.join(d, 'result.json'))
+        self.assertEqual((res['exit'], res['gate'], res['land'], res['record']),
+                         (0, True, True, {'commit': SHA, 'verdict': 'OK'}))
+
+    def test_a_failed_merged_gate_reads_no_record(self):
+        d = self.made_land_job()
+        spec_ = box._read_json(os.path.join(d, 'spec.json'))
+        self.assertEqual(self.box.run_land(JOB, spec_, popen=FakePopen([1]),
+                                           verify=self.fail), 1)
+        res = box._read_json(os.path.join(d, 'result.json'))
+        self.assertEqual((res['land'], res['record']), (True, None))
+
+    def test_run_job_hands_a_land_spec_to_run_land_with_verify_land(self):
+        self.made_land_job()
+        verify, verify_land = object(), object()
+        with mock.patch.object(box.Box, 'run_land', return_value=4) as rl, \
+                mock.patch.object(box.Box, 'run_gate', side_effect=AssertionError('gate')):
+            self.assertEqual(self.box.run_job(JOB, run_command=self.fail, verify=verify,
+                                              verify_land=verify_land), 4)
+        self.assertEqual(rl.call_args[0][0], JOB)
+        self.assertIs(rl.call_args[1]['verify'], verify_land)
