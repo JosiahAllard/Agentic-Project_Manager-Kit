@@ -82,6 +82,7 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from kitlib.config import user as kuser
+from kitlib.fs.rmtree import rmtree_force
 from kitlib.proc import spawn
 from kitlib.pytests import runner as unit_runner
 from kitlib.tooldeps import pool as worker_pool
@@ -210,30 +211,6 @@ def git_direct_env(base_env):
     env = dict(base_env)
     env[key] = direct + os.pathsep + base_env[key]
     return env, 'git: %s first on PATH, not the %s launcher' % (direct, found)
-
-
-_HAS_ONEXC = sys.version_info >= (3, 12)       # shutil.rmtree's onexc; before it, onerror
-
-
-def rmtree_force(path, ignore_errors=False):
-    """Remove the folder `path` the way shutil.rmtree does, but clear the read-only bit of what
-    refuses to go and retry it once: git writes its objects read-only, and on Windows rmtree stops
-    at the first one, so a throwaway repository would stay in TEMP. Python 3.12+ takes the handler
-    as onexc, older as onerror. `ignore_errors` leaves what still stays; otherwise it raises.
-    Only `path` and what is under it is touched; a missing `path` is not an error."""
-    def clear(func, target, _exc):
-        try:
-            os.chmod(target, stat.S_IWRITE)
-            func(target)
-        except OSError:
-            if not ignore_errors:
-                raise
-    if not os.path.lexists(path):
-        return
-    if _HAS_ONEXC:
-        shutil.rmtree(path, onexc=clear)
-    else:
-        shutil.rmtree(path, onerror=clear)
 
 
 def work_parent(root):
