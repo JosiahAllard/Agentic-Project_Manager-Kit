@@ -602,8 +602,8 @@ class GateJob(Base):
         code = self.gate_job().run()
         self.assertEqual(code, 0, self.said)
         self.assertEqual(self.verbs(), ['gate', 'follow', 'clean'])
-        self.assertEqual(self.pushes[0][0][-1], '%s:refs/pmkit/main/main' % BASE_SHA)
-        args = self.pushes[1][0]
+        self.assertEqual(len(self.pushes), 1, self.pushes)    # no main push for a gate job
+        args = self.pushes[0][0]
         self.assertEqual(args[-2:], ['%s:refs/node/%s' % (SHA, JOB),
                                      '%s:refs/node/%s-base' % (BASE_SHA, JOB)])
         sent = self.link.calls[0][1]
@@ -852,6 +852,10 @@ class LandJob(Base):
     def test_a_run_job_has_no_main_push(self):
         nj = self.node_job()
         self.assertFalse(nj.push_main())
+        self.assertEqual(self.pushes, [])
+
+    def test_a_gate_job_has_no_main_push(self):
+        self.assertFalse(self.node_job(gate=GATE).push_main())
         self.assertEqual(self.pushes, [])
 
 

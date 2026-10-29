@@ -28,7 +28,7 @@ job. A record main does not take is EXIT_RECORD, the job kept. A land job (`land
 the merged gate (kitlib.loadnode.landgate) and sends back the record it wrote, which main takes
 only through the checker its caller hands in (landgate.check_record: every field against main's
 own git, config and step selection); the checked record is `land_record`, for the landing to
-write its own with `ran_on`. Before each gate or land job's push, main's base goes to the mirror's
+write its own with `ran_on`. Before a land job's push, main's base goes to the mirror's
 refs/pmkit/main/<main> (push_main: fast-forwards only, a WARNING when refused), so the mirror
 keeps main's objects and the next push is small; nothing depends on it. This module never
 imports the gate or record modules: the lock tool reaches it (machine_lock.py run, through kitlib.loadnode.dispatch)
@@ -240,11 +240,13 @@ class NodeJob(object):
                            % (self.node.name, _push_why(err) or 'git exit %s' % rc), fallback=True)
 
     def push_main(self):
-        """A gate or land job: push its base to the mirror's refs/pmkit/main/<main> (box.MAIN_REF),
+        """A land job only: push its base to the mirror's refs/pmkit/main/<main> (box.MAIN_REF),
         never forced, so the mirror keeps main's objects once the job's refs are cleaned. Best
         effort: a refusal (main was rewound: not a fast-forward) or failure is a WARNING and the
-        job goes on; the job checks its own refs, never this one. True when it went."""
-        if not self.gate:
+        job goes on; the job checks its own refs, never this one. A run or gate job pushes none
+        (one ssh push less, and no second push timeout on a node that cannot be reached). True
+        when it went."""
+        if not self.land:
             return False
         rc, err = self._push(['%s:%s%s' % (self.gate['base'], box.MAIN_REF, self.gate['main'])])
         if rc != 0:

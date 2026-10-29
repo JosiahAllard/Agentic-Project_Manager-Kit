@@ -148,6 +148,10 @@ def check_record(root, rec, merge, base, expected, repo_name, kit_hash, gate_con
     if expected.get('head') not in (None, merge):
         raise RecordRefused("main's selection was read at %s, not the merge %s"
                             % (str(expected.get('head'))[:12], merge[:12]))
+    if rec.get('input_keys') is not None:
+        raise RecordRefused('the record has input_keys; a landing serves no step from it')
+    if 'ran_on' in rec:
+        raise RecordRefused('the record carries ran_on, which only main writes')
     why = gate_ok._check(root, merge, rec, gate_config=gate_config)
     if why is not None:
         raise RecordRefused(why)

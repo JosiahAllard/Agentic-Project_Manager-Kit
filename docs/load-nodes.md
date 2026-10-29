@@ -225,8 +225,8 @@ same merge, step by step.
    landing's checker (`landgate.checker`), which reads main's own selection once with
    `runner.merged_steps` (the steps `merged_gate` would run, run nothing) and refuses when main's
    own gate would refuse the merge. The record is refused, at its first failing check, unless:
-   it names the merge; `gate_ok`'s checks pass (keys, schema, verdict, tree, author); its
-   `gate_config` is the hash of main's config at the base; its `base` and `config_rev` are the
+   it names the merge; it has no `input_keys` and no `ran_on` (only main writes that);
+   `gate_ok`'s checks pass (keys, schema, verdict, tree, author); its `gate_config` is the hash of main's config at the base; its `base` and `config_rev` are the
    base; its `mode` and `full` match main's; its `source` is main's; its steps are exactly main's
    by name, once each; every step's result is `pass` or `warn` (a `skip` or `reused` step is
    refused); its `repo` is main's name; and its kit files are main's.

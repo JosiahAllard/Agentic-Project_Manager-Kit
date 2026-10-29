@@ -83,6 +83,14 @@ class CheckRecord(Repo):
         self.expected['head'] = self.base
         self.refused("main's selection was read at")
 
+    def test_a_record_with_input_keys(self):
+        keys = {'schema': 1, 'steps': {'unit': {'tree': 'a' * 64}}}
+        self.refused('the record has input_keys', rec=self.rec(input_keys=keys))
+
+    def test_a_record_carrying_ran_on(self):
+        ran_on = {'node': 'box1', 'host_key': 'SHA256:x', 'job': 'j1'}
+        self.refused('the record carries ran_on', rec=self.rec(ran_on=ran_on))
+
     def test_another_tree(self):
         self.refused('names tree', rec=self.rec(tree='0' * 40))
 
