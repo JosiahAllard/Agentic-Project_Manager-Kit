@@ -209,6 +209,103 @@ itself is not listed as widened. The report refuses nothing (exit 0) and needs n
 base git cannot read is exit 2. A gate step may run it with `"warn": true` so every gate log
 shows the scope.
 
+## Isolation runs
+
+`--isolate` runs each module's own tests in a sparse clone of HEAD that holds only what the
+module's map entry lets it reach (`kitlib/modulemap/isolate.py`). A test that passes in the
+whole tree but fails there uses something the map does not allow, which the detectors above can
+miss (a path built at run time, a file found by a search).
+
+It is opt-in per module. A module with a `test` in the map runs; the others are listed as not
+isolated:
+
+```json
+"modules": {
+  "brain": {"paths": ["brain"],
+            "test": {"cmd": ["{python}", "-m", "unittest", "discover", "-s", "brain/tests"],
+                     "cwd": "", "timeout": 1800}}
+},
+"isolate": {"include": ["tools", "pyproject.toml"]}
+```
+
+- `test.cmd`: the argv, run without a shell. `{python}` is the Python running the tool, `{root}`
+  the clone's root and `{module}` the module's name; any other `{...}` is refused when the map
+  loads.
+- `test.cwd`: a folder relative to the clone's root (default: the root). A folder the tree does
+  not hold is ERROR.
+- `test.timeout`: seconds, 1 to 14400 (default 1800).
+- `isolate.include`: paths of the root (`(root)`, no module's) that every tree holds, such as a
+  shared build script or tool folder. Each is named in full: a glob, or a path a module holds, is
+  refused when the map loads.
+
+The tree of module M holds:
+
+- M itself, the messaging modules, and the direct target of every edge and ratchet from M, of
+  any kind;
+- then, from every module in that set, the targets of its `build` edges and build ratchets
+  (`java-imports`, no `kinds`, or `build` among them), until nothing new is added. A data edge
+  from a module M reaches is not followed: M reads that module's files, not their files;
+- the root's top-level files, plus `isolate.include`. When an edge or ratchet in the set reaches
+  `(root)`, the whole root.
+
+A module outside the set is left out even inside a folder the tree holds (non-cone sparse
+patterns, deeper paths last). `--plan` prints each module's tree, command and patterns, and
+books nothing.
+
+Each tree is `git clone --shared --no-checkout` of the repository's git common dir, with its
+origin removed and its hooks off, checked out sparse at HEAD's commit. The test runs there without
+`GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR` and `GIT_CEILING_DIRECTORIES` (`kitlib.git.cmd`
+`SCRUB_ENV`), in the machine-lock slot the run holds; past its timeout, or when the
+lock asks the run to stop, it is ended with its whole process tree. The output of a run that did
+not pass is printed between marker lines (its last 2000 lines). A module that fails runs again
+in a full clone of the same commit (never in the checkout itself). That tells the two causes
+apart:
+
+| Status | Meaning |
+|---|---|
+| `PASS` | the test passed in its tree |
+| `COUPLED` | it failed in its tree and passes in a full clone: it needs something its tree leaves out; add the edge, or remove the use |
+| `RED` | it fails in a full clone too: its tests fail anyway |
+| `TIMEOUT` | it timed out in its tree and in the full clone |
+| `FAIL` | it failed in its tree, and `--no-rerun` skipped the full clone |
+| `ERROR` | a tree could not be made, the test could not start, or the lock stopped the run |
+
+The last line is `module_map isolate: OK: N PASS` or `module_map isolate: FAILED: <counts>
+(<modules>)`. The clones live in one run folder, `kit-iso-<pid>-<ctime>-*` in the kit's temp
+folder for the checkout. Each clone is removed when its test ends, and the folder when the run
+ends. The next run removes a folder whose process is gone. Nothing in the source repository is
+written: a shared clone only reads its objects.
+
+The run books the machine lock as the `daily_full` kind, waiting up to its `max_wait`
+(docs/daily-full.md). Run as a step of the daily full run, it nests in that run's slot and takes
+nothing more. To run it daily, add a gate step whose ordinary command is the plan (cheap, and
+it checks that the map is owner-locked and its tests are well formed) and whose `daily_cmd` is
+the run (docs/gate.md "Steps"):
+
+```json
+{"name": "module-isolation",
+ "cmd":       ["{python}", "<kit>/tools/module_map.py", "-C", "{root}", "--isolate", "--plan"],
+ "daily_cmd": ["{python}", "<kit>/tools/module_map.py", "-C", "{root}", "--isolate"]}
+```
+
+`--isolate` reads the owner-locked map only. `--map FILE` goes with it only under `--plan` (a
+dry run), and `--ceilings` not at all, so a map an agent wrote never picks the commands a run
+starts. `--module M` runs one module.
+
+Known limits:
+
+- Gradle: `settings.gradle(.kts)` names every project, and a tree leaves most of their folders
+  out. Gradle 8 warns about a missing project folder; Gradle 9 fails on it. A Gradle module may
+  need a settings file of its own, its test command running Gradle from the folder that holds it.
+- `git ls-files` inside a tree still lists the paths the tree leaves out (sparse paths are
+  skip-worktree entries, not deletions), so a test that lists the index sees more than it can
+  open.
+- Only committed HEAD is isolated, never the work tree or untracked files.
+- Git LFS is not tested. The clone has no remote, so an LFS object it cannot find locally is
+  not fetched: the checkout may fail (ERROR) or leave the pointer file.
+- The tree covers the paths of modules the map names; it does not hide the rest of the machine
+  (an absolute path, a sibling checkout, an installed package).
+
 ## Running
 
 ```
@@ -216,6 +313,7 @@ python <kit>/tools/module_map.py [-C DIR] --check [--base REV]
 python <kit>/tools/module_map.py [-C DIR] --baseline
 python <kit>/tools/module_map.py [-C DIR] --page [--write]
 python <kit>/tools/module_map.py [-C DIR] --scope [--base REV]
+python <kit>/tools/module_map.py [-C DIR] --isolate [--module M] [--plan] [--no-rerun]
 python <kit>/tools/module_map.py [-C DIR] --check --map FILE [--ceilings FILE]
 ```
 
@@ -232,11 +330,14 @@ path, and the output says so.
 `from`, `kind`, `to` of refused crossings for the owner to add to the map, and the ceilings
 file the current tree needs. It needs no owner path.
 
-Exit codes: 0 OK (a baseline, a page and a scope always), 1 a refused crossing, a ratchet over
-its ceiling, a ceiling raised above the base's or a stale page, 2 usage (`--write` without
-`--page`, `--base` without `--check` or `--scope`), a refused `.kit.json`, an unusable map or
-ceilings file (here or at the base), a base git cannot read, a refused page write, or git could
-not list the tree (`module_map: NOT CHECKED: ...`).
+Exit codes: 0 OK (a baseline, a page, a scope and an isolation plan always), 1 a refused
+crossing, a ratchet over its ceiling, a ceiling raised above the base's, a stale page or a module
+whose isolation run did not pass, 2 usage (`--write` without `--page`, `--base` without
+`--check` or `--scope`, an isolation option without `--isolate`, `--isolate` with `--ceilings`,
+or with `--map` but no `--plan`), a refused `.kit.json`, an unusable map or ceilings file (here
+or at the base), a `--module` the map has no test for, a base git cannot read, a refused page
+write, the machine lock refusing an isolation run, or git could not list the tree
+(`module_map: NOT CHECKED: ...`).
 
 ## Remaining slices
 
@@ -244,6 +345,4 @@ Not yet scoped; each needs files outside this tool's own:
 
 - the weekly drift sum: gates keep their scope reports, and the weekly upkeep run sums how often
   a gate widened beyond the changed modules (kitlib/gate or the upkeep tasks);
-- isolation runs: each module's tests, daily, in a sparse checkout holding only that module and
-  its allowed edges (a per-module test command in the map; daily_full and kitlib/gate);
 - a C# `using` detector; rollout to the first Java repository.
