@@ -331,14 +331,14 @@ class StepTest(InstallCase):
     def test_the_old_copy_too_is_a_line_naming_its_removal(self):
         self.config('\\\\?\\' + self.root, "\n[marketplaces.pm-kit-local]\nsource = 'C:\\\\x'\n")
         self.step()
-        self.assertIn('also names the old pm-kit-local copy: Codex loads both', self.text())
+        self.assertIn('also names the hand-made pm-kit-local copy: Codex loads both', self.text())
         self.assertIn('codex plugin remove pm-kit@pm-kit-local', self.text())
 
     def test_only_the_old_copy_gets_the_switch_steps_then_the_mirror(self):
         write(os.path.join(self.home, 'config.toml'), "[marketplaces.pm-kit-local]\nsource = 'C:\\\\nowhere'\n")
         self.step()
         lines = self.lines
-        self.assertIn('the pm-kit plugin is the old pm-kit-local copy', lines[0])
+        self.assertIn('the pm-kit plugin is the hand-made pm-kit-local copy', lines[0])
         self.assertEqual(lines[1:5], ['codex:   1. codex plugin remove pm-kit@pm-kit-local',
                                       'codex:   2. codex plugin marketplace remove pm-kit-local',
                                       'codex:   3. codex plugin marketplace add "%s"' % self.root,

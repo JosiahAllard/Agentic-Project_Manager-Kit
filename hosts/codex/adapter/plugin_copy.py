@@ -108,7 +108,7 @@ class Step(object):
         if plugin_install.MARKET in markets:
             plugin_install.install(export, self.home, config, out, apply=apply, environ=self.environ)
             if MARKET in markets:
-                out('codex: config.toml also names the old %s copy: Codex loads both, so every pm-kit hook '
+                out('codex: config.toml also names the hand-made %s copy: Codex loads both, so every pm-kit hook '
                     'runs twice; remove it, with CODEX_HOME=%s: codex plugin remove %s, then codex plugin '
                     'marketplace remove %s' % (MARKET, self.home, KEY, MARKET))
             return

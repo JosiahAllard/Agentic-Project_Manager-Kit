@@ -12,7 +12,7 @@
   install(export, home, config, out, apply, environ, run)
                                    the dry run names `codex plugin add pm-kit@pm-kit`; apply runs it
                                    when the cache does not hold the export's version
-  switch_lines(home, root)         the owner's hand steps from the old pm-kit-local copy to the export
+  switch_lines(home, root)         the owner's hand steps from the hand-made pm-kit-local copy to the export
 
 Codex runs a plugin only from its cache: `codex plugin add` copies the folder the marketplace names
 (the export folder of <root>\\.agents\\plugins\\marketplace.json) into
@@ -193,8 +193,8 @@ def hand_command(home):
 
 
 def switch_lines(home, root):
-    """The owner's hand steps from the old pm-kit-local copy to the export, in order, as lines."""
-    return ['codex: the pm-kit plugin is the old %s copy; to install it from the export instead, close Codex '
+    """The owner's hand steps from the hand-made pm-kit-local copy to the export, in order, as lines."""
+    return ['codex: the pm-kit plugin is the hand-made %s copy; to install it from the export instead, close Codex '
             'and run, with CODEX_HOME=%s:' % (OLD_MARKET, home),
             'codex:   1. codex plugin remove %s' % OLD_KEY,
             'codex:   2. codex plugin marketplace remove %s' % OLD_MARKET,

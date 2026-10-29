@@ -18,7 +18,7 @@ is a copy, so it carries no generated-file line.
 manifests(kit, content) writes the plugin's files, each JSON with indent 2 and a final newline:
 - `hosts/codex/shell/plugin.json`: Codex's plugin manifest, which the plugin export
   (kitlib.pluginsource.export) writes, version stamped, at `.codex-plugin/plugin.json` of the
-  export folder: the plugin root is the whole export, as Claude's is. kit.json's name and version,
+  export folder: the plugin root is the whole export, as the default host's is. kit.json's name and version,
   the skills (PLUGIN_SKILLS_REL, the kit's own `content/skills/`), the hooks file (HOOKS_REL) and the MCP
   servers file (MCP_REL), each a path from that root (docs/plugin-source.md "Codex").
 - `hosts/codex/shell/mcp.json`: the machine-lock MCP server, read-only on Codex
@@ -72,7 +72,7 @@ VENDORED = {SHELL_REL + '/boot/kitboot.py': 'boot/kitboot.py', SHELL_REL + '/boo
 HOSTS_REL = SHELL_REL + '/hosts.json'
 ENTRY = 'boot/hook.py'
 PLUGIN_ROOT = '${PLUGIN_ROOT}'
-# The plugin's skills: the kit's content folder itself, as for Claude (Codex loads them from the
+# The plugin's skills: the kit's content folder itself, as for the default host (Codex loads them from the
 # plugin root, the export; the skills copy under SHELL_REL is the old mirror's, docs/plugin-source.md).
 PLUGIN_SKILLS_REL = 'content/skills'
 DESCRIPTION = ('The PM kit as a Codex plugin (ARCHITECTURE.md, Packaging; hosts/codex/README.md): its hooks, '
