@@ -434,6 +434,7 @@ A reused step's `requires` probe is not run either (`runner._to_run` leaves the 
 **The same tree** (`reuse.same_tree`). A branch's `gate.py --full` stores nothing in the cache, so without this a landing whose merge holds the very tree the tip passed `--full` on would run every step again. In a one-branch landing that `reuse.landing_why` lets reuse (so never a strict one, nor a batch), the tip's gate-OK record serves an asking step the cache does not serve when all of these hold:
 
 - the record is a `--full` one of the tip (`gate_ok.verify_full`, `mode` `full`), and its tree is the merge's tree;
+- the record has no `ran_on`: a record a load node's gate wrote lets its tip land but serves no step, since those steps ran on another machine;
 - the merge's parents are exactly the base and the tip, and the record's `base` is the landing's base;
 - its `gate_config` is the landing's, its `kit` (commit, interpreter, clean) is the kit gating the landing, and it ended within `"landing".reuse_max_age_h` hours;
 - the step is no check step, has no `merged_args` (its landing argv never ran at the tip), and passed in that record.

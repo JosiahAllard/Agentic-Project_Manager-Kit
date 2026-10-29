@@ -257,6 +257,10 @@ def _record_why(rec, cfg, base, tip, merge, root, now):
         return 'the merge %s is not the merge of %s onto %s' % (merge[:10], tip[:10], base[:10])
     if gate_ok.mode_of(rec) != 'full':
         return 'the record is not a --full record (mode %s)' % gate_ok.mode_of(rec)
+    if rec.get('ran_on') is not None:
+        # a load node's record lands its tip but serves no step: those ran on another machine
+        return 'the record ran on a load node (%s)' % (
+            rec['ran_on'].get('node') if isinstance(rec['ran_on'], dict) else rec['ran_on'])
     if rec.get('base') != base:
         return 'the record gated against %s, not %s' % (str(rec.get('base'))[:10], base[:10])
     if rec.get('gate_config') != gate_ok.config_hash(runner.gate_config(cfg)):
