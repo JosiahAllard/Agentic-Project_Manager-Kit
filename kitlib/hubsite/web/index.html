@@ -617,14 +617,15 @@ ul.hist .sch-line{display:block}
   }
 
   // The usage chip is one figure, the highest of every account's two windows: it says whose and which. A tie goes to
-  // the weekly window (it lasts longer) whichever account it is on, then to the first account by name.
+  // the weekly window (it lasts longer) whichever account it is on, then to the first account by name. A stale reading
+  // still counts (its figure is the last known one) but the chip says so; an unknown one (?) has no figure to count.
   function usagePeak(rows){
-    let top = { pct: -1, win: "", account: "" };
+    let top = { pct: -1, win: "", account: "", stale: false };
     for (const u of rows.slice().sort((a,b) => String(a.account).localeCompare(String(b.account), [], {numeric:true})))
-      for (const [win, v] of [["wk", u.seven_day], ["5h", u.five_hour]]) { const n = pctOf(v); if (n > top.pct || (n === top.pct && n >= 0 && win === "wk" && top.win !== "wk")) top = { pct: n, win, account: String(u.account) }; }
+      for (const [win, v] of [["wk", u.seven_day], ["5h", u.five_hour]]) { const n = pctOf(v); if (n > top.pct || (n === top.pct && n >= 0 && win === "wk" && top.win !== "wk")) top = { pct: n, win, account: String(u.account), stale: !!u.stale }; }
     return top;
   }
-  const usageChip = t => t.pct < 0 ? "–" : t.pct + "% " + t.win + " · " + (/^\d+$/.test(t.account) ? "acct " + t.account : t.account);
+  const usageChip = t => t.pct < 0 ? "–" : t.pct + "% " + t.win + " · " + (/^\d+$/.test(t.account) ? "acct " + t.account : t.account) + (t.stale ? " · stale" : "");
   function pctOf(v){ const n = typeof v === "number" ? v : parseFloat(v); return isNaN(n) ? -1 : Math.round(n); }
   // An unknown reading is "?" with an empty bar, never 0%; a stale one keeps its figure, dimmed and marked.
   function meter(label, v, stale){

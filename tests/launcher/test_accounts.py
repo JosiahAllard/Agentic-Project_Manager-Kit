@@ -88,6 +88,13 @@ class Pick(unittest.TestCase):
                                                'account 3: week unknown (no usage reading)'])
         self.assertEqual(A.pick(h.settings, NOW)[0], '2')   # unknown counts as resetting a week from now
 
+    def test_a_week_with_a_reset_time_but_no_percentage_is_unknown_not_0(self):
+        h = Home(self, accounts=('1',))
+        h.usage('1', week=(None, NOW + DAY))
+        self.assertEqual(A.week_rows(h.settings, NOW), [('1', None, None)])
+        self.assertEqual(A.explain(A.week_rows(h.settings, NOW)), ['account 1: week unknown (no usage reading)'])
+        self.assertIn('seven_day=?', usage.report(h.settings, NOW)[0])
+
     def test_every_account_over_still_picks_the_soonest_and_signed_out_ones_are_skipped(self):
         h = Home(self, accounts=('1', '2', '3'), signed_out=('3',))
         h.usage('1', week=(99, NOW + 2 * DAY))

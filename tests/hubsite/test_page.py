@@ -1720,6 +1720,29 @@ class DomTest(unittest.TestCase):
         got = reload({"oq.section": "info", "oq.infotab": "agents"})      # Agents was a Usage tab in an older page
         self.assertEqual((got["section"], got["tabs"]), (["info"], ["usage"]))
 
+    def test_a_stale_reading_is_marked_and_a_missing_one_is_never_0(self):
+        # Account 1: a 3735-minute-old file (five_hour unknown); account 2: no usage file at all.
+        accounts = {"1": {"five": None, "week": 98, "age": 3735, "stale": True, "missing": False},
+                    "2": {"five": None, "week": None, "age": None, "stale": True, "missing": True}}
+        snap = snapshot(views={"usage": {"available": True, "as_of": NOW, "accounts": accounts}})
+        rows = {u["id"]: u for u in js("hubState(items).usage", snap)}
+        self.assertEqual(rows["1"]["measured_at"], "2026-10-04T21:45:00.000Z")       # as_of minus 3735 minutes (62 h 15 min)
+        self.assertEqual((rows["1"]["stale"], rows["2"]["missing"], rows["2"]["measured_at"]), (True, True, None))
+        got = dom("""
+            await start();
+            const out = { chip: text($("#n-u")), hot: $("#n-u").classList.contains("hot"), rows: $$("#list article").map(a => text(a)) };
+            await click($("#row-1")); out.one = $$("#pane-detail .meter .pct").map(text); out.oneFoot = text($("#pane-detail .foot"));
+            await click($("#row-2")); out.two = $$("#pane-detail .meter .pct").map(text); out.twoFoot = text($("#pane-detail .foot"));
+            return out;
+        """, snap, hash="#usage")
+        self.assertEqual((got["chip"], got["hot"]), ("98% wk · acct 1 · stale", True))      # the peak says it is stale
+        self.assertIn("stale", got["rows"][0])
+        self.assertIn("no usage file", got["rows"][1])
+        self.assertEqual(got["one"], ["?", "98% (stale)"])
+        self.assertIn("stale", got["oneFoot"])
+        self.assertEqual(got["two"], ["?", "?"])
+        self.assertEqual(got["twoFoot"], "No usage file: no session on this account has written one")
+
     def test_a_usage_tie_goes_to_the_weekly_window_whichever_account_has_it(self):
         def chip(accounts):
             return dom("""

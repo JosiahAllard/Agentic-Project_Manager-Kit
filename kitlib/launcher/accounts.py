@@ -146,7 +146,7 @@ def check_headroom(settings, n, now, force, out, limit=HEADROOM_LIMIT):
 def week_rows(settings, now):
     """[(account, pct, reset)] of every signed-in account's seven-day window. A window whose
     reset has passed is fresh (0%) and resets 7 days after the old time. No file, or a file with
-    no seven-day window, is unknown: pct and reset None, never 0%."""
+    no seven-day window or no percentage in it, is unknown: pct and reset None, never 0%."""
     rows = []
     for n in settings.account_numbers():
         if not account_signed_in(settings, n):
@@ -154,8 +154,9 @@ def week_rows(settings, now):
         pct, reset = None, None
         _, data = newest_usage(settings, n)
         w = (data or {}).get('seven_day')
-        if isinstance(w, dict) and parse_time(w.get('resets_at')):
-            pct, reset = whole(w.get('used_percentage')), parse_time(w['resets_at'])
+        used = w.get('used_percentage') if isinstance(w, dict) else None
+        if isinstance(used, (int, float)) and not isinstance(used, bool) and parse_time(w.get('resets_at')):
+            pct, reset = whole(used), parse_time(w['resets_at'])
             while reset < now:
                 reset, pct = reset + datetime.timedelta(days=7), 0
         rows.append((n, pct, reset))

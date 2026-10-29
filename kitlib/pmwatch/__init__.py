@@ -553,7 +553,8 @@ class Watcher:
     returns their event lines. The caller saves state after each poll and stops at the first
     non-empty one. Every check gives an ERROR line on its third failure in a row.
 
-    branches: [(repo_dir, ref)]; usage_reader() -> {account: {"five", "week"}};
+    branches: [(repo_dir, ref)]; usage_reader() -> parse_usage's {account: {"five", "week", "age",
+    "stale", "missing"}} (five or week None: unknown);
     sessions: path of sessions.json; newest(name) -> mtime or None; tip(repo, ref) -> short sha;
     plugin: check(last) -> (lines, last) (plugin_check), or None for no PLUGIN check. Unlike the
     others it has no baseline: a plugin export already behind at the first run is reported then.
