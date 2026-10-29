@@ -68,7 +68,8 @@ on `main` and is never worked in; only the lander writes to it.
 Standing owner-approved work: the coordinator, or the `pm-kit:lander` it dispatches, lands reviewed
 branches on `main` without asking each time. Only with the coordinator's review verdict queued for
 the exact tip (`<kit>/tools/verdict.py`), one at a time, by ONE bare call from the main checkout:
-`python <kit>/tools/land.py -C <repo> <branch> --expect-tip <sha> --submit` (skill land-branch), then
+`python <kit>/tools/land.py -C <repo> <branch> --expect-tip <sha> --reviewed-by <reviewer id> --submit` (skill land-branch;
+the reviewer id of the queued verdict), then
 the `gate.py wait-result` command it prints. It merges onto the main it finds at its turn, so no
 `--expect-main` is needed.
 No `cd` prefix, `Tee-Object`, pipe or chaining: the bare form is what the allow rule matches.
