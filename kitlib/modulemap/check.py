@@ -181,10 +181,13 @@ def baseline(mm, ceilings, files, read):
 
 
 def _rel(root, path):
-    """`path` relative to `root`, posix, or None when it is outside it."""
+    """`path` relative to `root`, posix, or None when it is outside it (another drive too)."""
     if not path:
         return None
-    rel = os.path.relpath(os.path.abspath(path), os.path.abspath(root)).replace(os.sep, '/')
+    try:
+        rel = os.path.relpath(os.path.abspath(path), os.path.abspath(root)).replace(os.sep, '/')
+    except ValueError:
+        return None
     return None if rel == '..' or rel.startswith('../') or os.path.isabs(rel) else rel
 
 
@@ -201,11 +204,13 @@ def base_of(root, cfg, rev, map_path, ceilings_path):
         if not sha:
             return None, notes + ['note: no base (%s): ceilings are not compared; pass --base'
                                   % why]
-    map_rel = _rel(root, map_path)
-    if map_rel is None:
-        return None, notes + ['note: the map is outside the checkout: ceilings are not compared '
-                              'with the base']
-    base, more = ratchet.read_base(root, rev, map_rel, _rel(root, ceilings_path))
+    map_rel, ceilings_rel = _rel(root, map_path), _rel(root, ceilings_path)
+    for what, path, rel in (('map', map_path, map_rel), ('ceilings file', ceilings_path,
+                                                          ceilings_rel)):
+        if path and rel is None:
+            return None, notes + ['note: the %s is outside the checkout: ceilings are not '
+                                  'compared with the base' % what]
+    base, more = ratchet.read_base(root, rev, map_rel, ceilings_rel)
     return base, notes + more
 
 

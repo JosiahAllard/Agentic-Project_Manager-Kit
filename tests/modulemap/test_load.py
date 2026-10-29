@@ -92,7 +92,9 @@ class RulesTest(unittest.TestCase):
              'files': ['brain/src/api/*'], 'imports': ['org.x.internal']}
         mm = ModuleMap(with_(ratchets=[r]))
         self.assertEqual(mm.ratchets[0]['imports'], ['org.x.internal'])
-        self.refuses(with_(ratchets=[dict(r, files=None)]), '')
+        nofiles = {k: v for k, v in r.items() if k != 'files'}
+        self.refuses(with_(ratchets=[nofiles]), 'ratchet r: a java-imports ratchet needs "files"')
+        self.refuses(with_(ratchets=[dict(r, files=[])]), 'ratchets[0].files must not be empty')
         bare = {k: v for k, v in r.items() if k != 'imports'}
         self.refuses(with_(ratchets=[bare]), 'a java-imports ratchet needs "imports"')
         self.refuses(with_(ratchets=[dict(r, kinds=['data'])]), 'drop "kinds"')

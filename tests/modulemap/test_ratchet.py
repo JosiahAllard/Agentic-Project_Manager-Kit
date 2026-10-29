@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import sys
 import unittest
 from unittest import mock
@@ -154,6 +155,48 @@ class BaseTest(unittest.TestCase):
         self.repo.commit('broken', CEIL_REL)
         with self.assertRaises(MapError):
             self.run_check(base_rev='HEAD')
+
+    def test_a_base_map_of_the_wrong_shape_refuses(self):
+        for text, why in (('{"modules": {}, "ratchets": {"brain-source-node": 1}}',
+                           '"ratchets" must be a list'),
+                          ('{"modules": {}, "ratchets": [{"from": "brain"}]}',
+                           'ratchets[0] has no "id"'),
+                          ('[]', 'is not a module map')):
+            with self.subTest(text=text):
+                self.repo.write(MAP_REL, text)
+                self.repo.commit('broken map', MAP_REL)
+                self.write_map(ratchets=[RATCHET])  # the tree's map is good; HEAD's is not
+                with self.assertRaisesRegex(MapError, 'at the base: .*' + re.escape(why)):
+                    self.run_check(base_rev='HEAD')
+
+    def test_a_base_map_with_no_ratchets_makes_each_one_new(self):
+        self.write_map()
+        self.repo.commit('no ratchets', MAP_REL)
+        self.write_map(ratchets=[RATCHET])
+        out = self.run_check(base_rev='HEAD')
+        self.assertEqual(out.code, C.OK, out.lines)
+        self.assertTrue(any('brain-source-node is new in the map' in l for l in out.lines))
+
+    def test_a_map_or_ceilings_file_outside_the_checkout_compares_nothing(self):
+        other = TempRepo()
+        self.addCleanup(other.cleanup)
+        outside = os.path.join(other.root, 'c.json')
+        with open(outside, 'w', encoding='utf-8') as f:
+            f.write('{"brain-source-node": 9}')
+        base, notes = C.base_of(self.root, None, 'main', os.path.join(self.root, MAP_REL),
+                                outside)
+        self.assertIsNone(base)
+        self.assertIn('note: the ceilings file is outside the checkout: ceilings are not '
+                      'compared with the base', notes)
+
+    def test_a_path_on_another_drive_is_outside_not_a_crash(self):
+        with mock.patch.object(C.os.path, 'relpath', side_effect=ValueError('path is on mount '
+                                                                           "'D:', start on 'C:'")):
+            self.assertIsNone(C._rel(self.root, 'D:/elsewhere/map.json'))
+            base, notes = C.base_of(self.root, None, 'main', 'D:/elsewhere/map.json', None)
+        self.assertIsNone(base)
+        self.assertIn('note: the map is outside the checkout: ceilings are not compared with '
+                      'the base', notes)
 
     def test_with_no_base_given_the_main_branch_is_the_base(self):
         self.write_ceilings({'brain-source-node': 3})

@@ -29,6 +29,24 @@ def _parse(blob, where):
         raise MapError('at the base: %s' % e)
 
 
+def ratchet_ids(data, where):
+    """The ratchet ids a base map holds. MapError when its shape is wrong, so a broken map
+    never makes every ratchet "new" and uncompared. Only the shape the comparison reads is
+    checked: a base map written to an older schema is still read. A map with no "ratchets" has
+    none (every ratchet is new)."""
+    if not isinstance(data, dict) or 'modules' not in data:
+        raise MapError('at the base: %s is not a module map (an object with "modules")' % where)
+    rows = data.get('ratchets', [])
+    if not isinstance(rows, list):
+        raise MapError('at the base: %s "ratchets" must be a list' % where)
+    ids = set()
+    for i, r in enumerate(rows):
+        if not isinstance(r, dict) or not isinstance(r.get('id'), str) or not r['id']:
+            raise MapError('at the base: %s ratchets[%d] has no "id"' % (where, i))
+        ids.add(r['id'])
+    return ids
+
+
 def read_base(root, rev, map_rel, ceilings_rel):
     """`(Base or None, notes)`: the map's ratchet ids and the ceilings at the merge base of `rev`
     and HEAD. None (with a note) when the map is not there. MapError when git cannot answer."""
@@ -48,10 +66,7 @@ def read_base(root, rev, map_rel, ceilings_rel):
     if blob is None or blob[0] != 'blob':
         return None, ['note: the base %s (%s) has no module map %s: ceilings are not compared '
                       'with it' % (rev, short, map_rel)]
-    data = _parse(blob[1], '%s:%s' % (short, map_rel))
-    rows = data.get('ratchets') if isinstance(data, dict) else None
-    ids = {r['id'] for r in (rows if isinstance(rows, list) else [])
-           if isinstance(r, dict) and isinstance(r.get('id'), str)}
+    ids = ratchet_ids(_parse(blob[1], '%s:%s' % (short, map_rel)), '%s:%s' % (short, map_rel))
     ceilings = {}
     cblob = got.get(specs[1]) if ceilings_rel else None
     if cblob is not None and cblob[0] == 'blob':
