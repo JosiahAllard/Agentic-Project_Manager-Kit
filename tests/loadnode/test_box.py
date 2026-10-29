@@ -796,7 +796,10 @@ class RunGate(GateBase):
 
     def test_a_second_stop_during_the_wait_kills_it_and_still_leaves_a_result(self):
         p = FakePopen([-9], interrupt=2)
-        code, res, seen = self.run_gate(p, stop=True)
+        try:
+            code, res, seen = self.run_gate(p, stop=True)
+        except KeyboardInterrupt:
+            self.fail('the second stop escaped run_gate: no kill, no result.json')
         self.assertTrue(p.killed)
         self.assertEqual(p.signals, [getattr(signal, 'SIGINT', 2)])
         self.assertEqual((code, res['exit'], res['how'], seen), (-9, -9, 'stopped', []))
