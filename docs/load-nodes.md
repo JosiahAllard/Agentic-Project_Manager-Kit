@@ -151,8 +151,8 @@ lock holds it, and its exit code comes back as the run's.
   `running here: why` when main wins. When the run cannot go to a node it runs here as before.
   Most of these are silent: no registry, no node has opted the repository in, a run inside
   another lock run (`MACHINE_LOCK_RUN`), an unknown kind, or an option only main has
-  (`--cores`, `--hold`, `--gpu-share`, `--within`, `--resource`, `--on-release-cmd`, `--detach`
-  and a detached run, `--env`). The others say `running here, not on a load node: why`: a
+  (`--cores`, `--hold`, `--gpu-share`, `--within`, `--resource`, `--on-release`, `--detach`
+  and a detached run, and a library caller's own `env=`). The others say `running here, not on a load node: why`: a
   registry that cannot be used, a Windows command, the run not started in the checkout's top,
   uncommitted tracked changes, a start the node would refuse (a `--note` over 200 characters, a
   wait over 7 days), a repo or slug a node does not take, a kind that cannot be sized, or main's
