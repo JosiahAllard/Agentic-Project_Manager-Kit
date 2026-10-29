@@ -1,4 +1,5 @@
-"""kitlib.hubsite.jobs: the hub server's timed jobs, one thread each. The first is the plugin
+"""kitlib.hubsite.jobs: the runner of the hub server's timed jobs, one thread each. The jobs
+themselves are modules of kitlib.hubjobs (its docstring: adding a job); the first is the plugin
 refresh (kitlib.hubsite.plugin_job, docs/plugin-source.md "Hub refresh").
 
   Job(name, every_s, run, first_s=FIRST_S)   one job: `run(ctx)` every `every_s` seconds, the
@@ -13,8 +14,11 @@ refresh (kitlib.hubsite.plugin_job, docs/plugin-source.md "Hub refresh").
                                              that job is running already
 
 A job's `run(ctx)` gets a Ctx: `ctx.stop`, the event the close sets (a long job looks at it
-between steps), and `ctx.event(word)`, which pushes a job event to the PM (`notify(name, word)`,
-kitlib.hubsite.push PushWorker.job_event; nothing when the hub has no push worker). What run
+between steps), and `ctx.event(word, detail=None)`, which pushes a job event to the PM
+(`notify(name, word)`, or `notify(name, word, detail)` when a detail is given:
+kitlib.hubsite.push PushWorker.job_event, where the detail is one more header field cut to its
+alphabet, a short token such as a sha or a count, never prose; nothing when the hub has no push
+worker). What run
 returns, a short text or None, is a success and the health block's `note`; a Skip(note) says the
 run did nothing, and only sets `note`. What it raises is a failure: its class and text are
 `error`, and `failures` counts the failures since the last success (skips neither count nor
@@ -27,8 +31,8 @@ last_at, ok_at, note, error}: times are epoch seconds of the last run's end and 
 success (None before one), `error` the last failure's text while `failures` is not 0
 (else None).
 
-Nothing here knows any job: each is a module that gives a Job, registered in
-serve.machine_sources (Sources.jobs). The existing timers (the git sync, the backlog views, the
+Nothing here knows any job: each is a module of kitlib.hubjobs that gives a Job, found by
+kitlib.hubjobs.makers in serve.machine_sources (Sources.jobs). The existing timers (the git sync, the backlog views, the
 push worker) are not jobs.
 """
 import threading
@@ -54,7 +58,7 @@ class Skip(object):
 
 
 class Ctx(object):
-    """What a job's run gets: `stop` (threading.Event) and `event(word)`."""
+    """What a job's run gets: `stop` (threading.Event) and `event(word, detail=None)`."""
 
     def __init__(self, stop, event):
         self.stop = stop
@@ -139,7 +143,8 @@ class Jobs(object):
             s.running = True
         try:
             try:
-                note = s.job.run(Ctx(self._stop, lambda word: self._event(s, word)))
+                note = s.job.run(Ctx(self._stop,
+                                     lambda word, detail=None: self._event(s, word, detail)))
             except Exception as e:      # noqa: BLE001 - a job's failure is counted, never fatal
                 s.failures += 1
                 s.error = ('%s: %s' % (type(e).__name__, e))[:ERROR_MAX]
@@ -166,10 +171,13 @@ class Jobs(object):
                 s.running = False
         return True
 
-    def _event(self, s, word):
+    def _event(self, s, word, detail=None):
         if self.notify is None:
             return
         try:
-            self.notify(s.job.name, word)
+            if detail is None:          # a notify(name, word) of before `detail` still works
+                self.notify(s.job.name, word)
+            else:
+                self.notify(s.job.name, word, detail)
         except Exception as e:          # noqa: BLE001 - a push that fails never stops the job
             self.log('job %s: event %s not pushed: %s' % (s.job.name, word, type(e).__name__))

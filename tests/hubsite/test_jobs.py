@@ -1,14 +1,17 @@
 """kitlib.hubsite.jobs: the hub's timed jobs (cadence, the failure count and its pushes, the stop),
 their health block, the job push (kitlib.hubsite.push PushWorker.job_event) and their wiring in
 kitlib.hubsite.serve. The plugin refresh job is in tests/pluginsource/test_hub_job.py."""
+import importlib
 import os
 import shutil
+import sys
 import tempfile
 import threading
 import time
 import unittest
 from unittest import mock
 
+from kitlib import hubjobs
 from kitlib.hubsite import jobs, push, serve
 from tests.home import pm_repo
 from tests.hubsite.httpfix import get
@@ -166,6 +169,16 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(seen, [False, True])
         self.assertEqual(self.events, [('j', 'hello'), ('j', 'hello')])
 
+    def test_an_event_detail_reaches_notify_as_a_third_argument_only_when_given(self):
+        got = []
+
+        def run(ctx):
+            ctx.event('refreshed', 'abc123')
+            ctx.event('plain')
+        js = jobs.Jobs([jobs.Job('j', 300, run)], notify=lambda *a: got.append(a))
+        js.run_now('j')
+        self.assertEqual(got, [('j', 'refreshed', 'abc123'), ('j', 'plain')])
+
     def test_a_notify_that_raises_is_a_line_and_the_job_goes_on(self):
         def notify(name, word):
             raise RuntimeError('down')
@@ -222,6 +235,25 @@ class JobPushTest(PushCase):
         self.t += push.SCHEDULE_S[-1]
         self.worker.send_jobs()
         self.assertEqual(len(self.jobs_sent()), 3)
+
+    def test_a_detail_is_a_header_field_cut_to_its_alphabet_and_a_newer_event_replaces_it(self):
+        self.push.states['pm'] = push.NO_SESSION
+        self.worker.job_event('j', 'refreshed', 'abc123 to\ndef')
+        self.worker.send_jobs()
+        self.assertEqual(self.jobs_sent()[0].splitlines()[0],
+                         '[hub push] job j refreshed detail:abc123_to_def route:pm attempt:1')
+        self.push.states['pm'] = push.WRITTEN
+        self.worker.job_event('j', 'recovered')
+        self.worker.job_event('k', 'found', 7)
+        self.t += push.SCHEDULE_S[0]
+        self.worker.send_jobs()
+        heads = sorted(t.splitlines()[0] for t in self.jobs_sent()[1:])
+        self.assertEqual(heads, ['[hub push] job j recovered route:pm attempt:1',
+                                 '[hub push] job k found detail:7 route:pm attempt:1'],
+                         'one owed push per job: the newer event, with no detail, replaced it')
+        self.t += push.SCHEDULE_S[-1]
+        self.worker.send_jobs()
+        self.assertEqual(len(self.jobs_sent()), 3, 'both written: nothing owed')
 
     def test_a_job_name_is_cut_to_the_header_alphabet(self):
         self.worker.job_event('bad name\nline', 'fail ing')
@@ -283,18 +315,104 @@ class MachineJobsTest(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
 
-    def test_machine_sources_registers_the_plugin_job_only_with_sync(self):
+    def test_machine_sources_gives_every_discovered_job_only_with_sync(self):
         from kitlib.hubsite import plugin_job
         pm_repo(self, record=False)
         src = serve.machine_sources(self.home)
-        self.assertEqual(src.jobs, [plugin_job.make])
+        found = [m.module for m in hubjobs.makers()]
+        self.assertIn('kitlib.hubjobs.plugin_refresh', found)
+        self.assertEqual([m.module for m in src.jobs], found,
+                         'the server runs what discovery finds, no list of its own')
         self.assertEqual(src.home, self.home)
         self.assertEqual(serve.machine_sources(self.home, sync=False).jobs, [],
                          'a scratch store runs no job')
         self.assertEqual(serve.Sources().jobs, [])
-        job = plugin_job.make(src)
+        maker = src.jobs[found.index('kitlib.hubjobs.plugin_refresh')]
+        job = maker(src)
         self.assertEqual((job.name, job.every_s), (plugin_job.NAME, plugin_job.EVERY_S))
         self.assertEqual(job.run.home, self.home)
+
+
+class FakeJobs(object):
+    """A job package made in a temp folder and imported, for discovery: `pkg` the package,
+    `name` its import name. Each module is {file name: source}."""
+
+    def __init__(self, case, modules):
+        root = tempfile.mkdtemp(prefix='kit-hubjobs-pkg-')
+        case.addCleanup(shutil.rmtree, root, True)
+        self.name = 'fakehubjobs_%d' % id(self)
+        folder = os.path.join(root, self.name)
+        os.makedirs(os.path.join(folder, 'subpkg'))
+        for rel, text in dict(modules, **{'__init__.py': '', 'subpkg/__init__.py':
+                                          'def make(sources):\n    raise AssertionError\n'}).items():
+            with open(os.path.join(folder, rel), 'w', encoding='utf-8') as f:
+                f.write(text)
+        sys.path.insert(0, root)
+        case.addCleanup(self._forget, root)
+        self.pkg = importlib.import_module(self.name)
+
+    def _forget(self, root):
+        sys.path.remove(root)
+        for mod in [m for m in sys.modules if m == self.name or m.startswith(self.name + '.')]:
+            del sys.modules[mod]
+
+
+JOB = ('from kitlib.hubsite import jobs\n'
+       'def make(sources):\n'
+       '    return jobs.Job(%r, 300, lambda ctx: %r, first_s=0)\n')
+
+
+class DiscoveryTest(ServeCase):
+    def test_makers_find_each_module_but_private_ones_and_packages_and_import_nothing(self):
+        fake = FakeJobs(self, {'beta.py': JOB % ('beta', 'b'), 'alpha.py': JOB % ('alpha', 'a'),
+                               '_shared.py': 'raise AssertionError("a helper is not a job")\n'})
+        made = hubjobs.makers(fake.pkg)
+        self.assertEqual([m.module for m in made],
+                         [fake.name + '.alpha', fake.name + '.beta'])
+        self.assertNotIn(fake.name + '.alpha', sys.modules, 'nothing is imported by makers()')
+        self.assertEqual(made[0](None).name, 'alpha')
+
+    def test_build_runs_discovered_jobs_and_serves_past_a_broken_none_or_twice_named_one(self):
+        fake = FakeJobs(self, {
+            'a_ok.py': JOB % ('ok', 'ran'),
+            'b_broken.py': 'import no_such_module_anywhere\n',
+            'c_none.py': 'def make(sources):\n    return None\n',
+            'd_twin.py': JOB % ('ok', 'twin')})
+        hub = self.build(jobs=hubjobs.makers(fake.pkg))
+        self.assertEqual(hub.jobs.names(), ['ok'])
+        broken = [n for n in hub.notes if fake.name + '.b_broken' in n]
+        self.assertEqual(len(broken), 1, hub.notes)
+        self.assertIn('ModuleNotFoundError', broken[0])
+        twin = [n for n in hub.notes if fake.name + '.d_twin' in n]
+        self.assertEqual(len(twin), 1, hub.notes)
+        self.assertIn("named 'ok'", twin[0])
+        self.assertFalse(any('c_none' in n for n in hub.notes), 'None is left out silently')
+        hub.jobs.run_now('ok')
+        self.assertEqual(hub.jobs.status()['ok']['note'], 'ran', 'the first of the name runs')
+        self.assertTrue(hub.close())
+
+    def test_the_package_holds_only_job_modules_each_with_make(self):
+        for maker in hubjobs.makers():
+            mod = importlib.import_module(maker.module)
+            self.assertTrue(callable(getattr(mod, 'make', None)), maker.module)
+
+
+class CodeStampTest(unittest.TestCase):
+    def test_the_jobs_folder_is_hub_code_too(self):
+        self.assertIn(os.path.dirname(os.path.abspath(hubjobs.__file__)), serve.code_folders())
+
+    def test_a_job_module_added_changes_the_stamp(self):
+        a = tempfile.mkdtemp(prefix='kit-stamp-a-')
+        b = tempfile.mkdtemp(prefix='kit-stamp-b-')
+        for d in (a, b):
+            self.addCleanup(shutil.rmtree, d, True)
+        with open(os.path.join(a, 'x.py'), 'w') as f:
+            f.write('x = 1\n')
+        before = serve.code_stamp([a, b])
+        with open(os.path.join(b, 'new_job.py'), 'w') as f:
+            f.write('def make(sources):\n    return None\n')
+        self.assertNotEqual(serve.code_stamp([a, b]), before)
+        self.assertEqual(serve.code_stamp([a, b]), serve.code_stamp([a, b]))
 
 
 if __name__ == '__main__':

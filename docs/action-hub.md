@@ -163,20 +163,25 @@ no kind.
   site checks with the key's settings or the defaults; writing the key does not switch it.
 - `hub.py status` prints the running server's health, one line each: `revision N`, `store ...`,
   `git: ...` (`running, branch B, nothing pending`, or what is pending, a failed pass, or `git sync is
-  off on this server`), `backlog <repo>: fetched X ago`, the tunnel line, and `unavailable: ...` for a
-  view the server could not read. The tunnel line is `tunnel: on` (the Access keys were fetched),
+  off on this server`), `backlog <repo>: fetched X ago`, `code: current` or `code: stale: ` and the
+  restart ("Stale code" below), `jobs: ` with each timed job's `<name> runs R, failures F`, `, running`
+  while it runs, and its error while it is failing or else its last note (cut to 60 characters,
+  `serve.JOB_NOTE_MAX`), or `jobs: none` ("Timed jobs" under push notifications), the tunnel line, and
+  `unavailable: ...` for a view the server could not read. A server older than the `code` or `jobs`
+  field prints no such line. The tunnel line is `tunnel: on` (the Access keys were fetched),
   `tunnel: bound, keys not fetched` (until the first request with a token; a failed fetch adds ` (reason)`,
   such as `keys-fetch`) or `tunnel: off: <why>`. `on` does not say that a tunnel program reaches the
   listener.
-- **Stale code.** A running `hub serve` compares the `.py` files of `kitlib/hubsite` (name, modified
-  time, size; `serve.code_stamp`) with what they were at its start, at most every 30 seconds
+- **Stale code.** A running `hub serve` compares the `.py` files of `kitlib/hubsite` and of the timed
+  jobs' `kitlib/hubjobs` (name, modified time, size; `serve.code_stamp`) with what they were at its start, at most every 30 seconds
   (`CODE_LOOK_S`). When they differ it logs one error line and says so in a `code` object, `{"stale",
   "restart"}`, in GET health (the local listener; the tunnel's fixed health carries none) and GET
   snapshot (`kitlib.hubsite.codestale`). `restart` is the owner's to-do: `python <kit>/tools/hub.py
   restart`, or, with no autostart task, `hub.py stop` then `hub.py serve`. Three places show it: the
   page's banner (`#codeerr`), a `hub: WARN` line in the PM session-start checklist (docs/pm-start.md),
   and a `HUB` event of pm_watch (docs/pm-watch.md), said once per stale episode. Nothing restarts the hub
-  by itself. Known limits: only the hub package's own files are compared, so a landing that changes only
+  by itself; `hub.py status` prints it as its `code:` line. Known limits: only those two packages' own
+  files are compared, so a landing that changes only
   other packages the hub imports (`kitlib/pmdata`, `kitlib/config`) does not warn; `web/index.html` is
   read from disk per request (`httpd.static_file`), so a page-only change needs no restart.
 - Remote access is only through the tunnel listener: with `hub.access` set (an Access `team`, the
@@ -484,9 +489,17 @@ store's git push (the `push` setting).
   schedule. It fires again only after the heartbeat was fresh again, and never on a server that has not
   seen a fresh one (it is not kept across a restart). A pm_watch run with its own `--state` path is not
   seen.
-- Timed jobs (`kitlib.hubsite.jobs`; the one today is the plugin refresh, docs/plugin-source.md "Hub
-  refresh"): at a job's third failure in a row the worker pushes the PM once `[hub push] job <name>
-  failing route:pm attempt:<k>`, and `... recovered` at its next success (`job_event`).
+- Timed jobs: each job is a module of `kitlib/hubjobs` with `make(sources)`, found there by
+  `kitlib.hubjobs.makers` (pkgutil; a module named `_...` is a helper, not a job) and run by
+  `kitlib.hubsite.jobs`; adding one needs no edit to a shared file (the `kitlib.hubjobs` docstring
+  says how). The machine's server runs them all, a scratch store (`--store`) none; one whose module
+  will not import or whose `make` raises is a start-up note and the hub serves without it. The plugin
+  refresh is one (docs/plugin-source.md "Hub refresh"). At a job's third failure in a row the worker
+  pushes the PM once `[hub push] job <name> failing route:pm attempt:<k>`, and `... recovered` at its
+  next success (`job_event`). A job may push a word of its own with `ctx.event(word, detail=None)`;
+  a detail is one more header field, `[hub push] job <name> <word> detail:<detail> route:pm
+  attempt:<k>`, cut to the header alphabet like every field (a sha or a count, never prose). Each job
+  owes at most one push: a newer event replaces one not yet written, its detail with it.
 - Files, in `launcher.state_dir`: `push-outbox.json` (what is still to send, rewritten after each round
   that changed it, so a server ended without a clean close loses at most that round; read again at
   start: an entry whose item changed while the server was down fires afresh, one whose item is gone is
@@ -506,7 +519,8 @@ store's git push (the `push` setting).
   `PushWorker.watcher_status()`, `{"state": "up"|"down"|"none", "age": <seconds or null>}` at the
   worker's latest read (a status that raises is `down` with a null age); the tunnel's health leaves it
   out ("Serving it"). GET health (local) also carries `jobs`: null with no job, else `{<name>: {every_s,
-  runs, failures, running, last_at, ok_at, note, error}}`. `GET /api/v1/health` also carries `push`, the snapshot's value from
+  runs, failures, running, last_at, ok_at, note, error}}`, which `hub.py status` prints as its `jobs:`
+  line. `GET /api/v1/health` also carries `push`, the snapshot's value from
   `Api.push_seen`: null with no worker, else `{"state", "last", "undelivered"}`.
 - Stopping: `Hub.close` tells the worker to begin no further send before the store closes and joins it
   after, for at least `push.STOP_S` (15 s), longer than a host's delivery can take (Claude:

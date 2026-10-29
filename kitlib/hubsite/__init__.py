@@ -18,7 +18,7 @@
   httpd    one loopback HTTP listener in front of the api: the gate, the write rules, the waits
   tunnel   the listener a tunnel program points at: its Cloudflare Access gate, its write source
   push     the push notifications: an answer or a done to-do told to its session and the PM
-  jobs     the timed jobs: each on its own thread and cadence, its failures counted, in health
+  jobs     the timed jobs' runner: each on its own thread and cadence, its failures counted, in health (the jobs: kitlib.hubjobs)
   plugin_job the timed job that refreshes the pm-kit plugin export when kit main moves
   serve    the server: the store, the api, the views and the listeners, started and closed
   client   the client of the hub server on this machine: one call, its refusal, the exit codes
