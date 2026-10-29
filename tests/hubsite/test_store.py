@@ -461,6 +461,61 @@ class RingTest(StoreCase):
         self.assertLess(time.monotonic() - start, 15)
 
 
+class ReplaceRetryTest(StoreCase):
+    """_replace and _remove keep the store's behaviour on the shared kitlib.fs.replace loop."""
+
+    def setUp(self):
+        self.root = tmpdir(self)
+
+    def test_replace_waits_out_a_reader_for_REPLACE_S_then_raises_and_drops_the_temp(self):
+        path = os.path.join(self.root, 'doc.json')
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('old')
+        with mock.patch.object(store, 'REPLACE_S', 0.2),                 mock.patch('os.replace', side_effect=PermissionError(13, 'denied')) as m:
+            start = time.monotonic()
+            with self.assertRaises(PermissionError):
+                store._replace(path, 'new')
+        self.assertGreaterEqual(time.monotonic() - start, 0.2)
+        self.assertGreater(m.call_count, 2)
+        self.assertEqual(sorted(os.listdir(self.root)), ['doc.json'])
+        with open(path, encoding='utf-8') as f:
+            self.assertEqual(f.read(), 'old')
+
+    def test_replace_succeeds_once_the_reader_lets_go(self):
+        path = os.path.join(self.root, 'doc.json')
+        real, calls = os.replace, []
+
+        def flaky(a, b):
+            calls.append(1)
+            if len(calls) < 3:
+                raise PermissionError(13, 'denied')
+            real(a, b)
+        with mock.patch('os.replace', side_effect=flaky):
+            store._replace(path, 'new')
+        self.assertEqual(len(calls), 3)
+        with open(path, encoding='utf-8') as f:
+            self.assertEqual(f.read(), 'new')
+
+    def test_replace_raises_another_error_at_once(self):
+        path = os.path.join(self.root, 'doc.json')
+        with mock.patch('os.replace', side_effect=OSError(5, 'io')) as m:
+            with self.assertRaises(OSError):
+                store._replace(path, 'new')
+        self.assertEqual(m.call_count, 1)
+
+    def test_remove_a_missing_file_is_success_and_a_held_one_is_raised_after_REPLACE_S(self):
+        store._remove(os.path.join(self.root, 'nothing.json'))
+        path = os.path.join(self.root, 'doc.json')
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('x')
+        with mock.patch.object(store, 'REPLACE_S', 0.2),                 mock.patch('os.remove', side_effect=PermissionError(13, 'denied')) as m:
+            start = time.monotonic()
+            with self.assertRaises(PermissionError):
+                store._remove(path)
+        self.assertGreaterEqual(time.monotonic() - start, 0.2)
+        self.assertGreater(m.call_count, 2)
+
+
 class PendingTest(StoreCase):
     def test_pending_items(self):
         docs = {
