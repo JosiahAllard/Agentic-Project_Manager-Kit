@@ -2,7 +2,7 @@
 
 A repository's kit configuration, read and checked whole by `kitlib.config.load` (`load_at` reads it at a revision: a landing reads the base branch's). The schema is `kitlib/config/schema.py`; tests/config/test_user_docs.py keeps the lists below equal to it.
 
-- A section is an object or, except `repo`, `owner`, `hook` and `guard`, a string naming a repo-relative JSON file that holds it.
+- A section is an object or, except `repo`, `owner`, `hook`, `guard` and `modules`, a string naming a repo-relative JSON file that holds it.
 - A section is read only from `.kit.json` or the file it names: no `tools/*.json` is read because it exists.
 - An unknown section or key refuses, and so does a key written twice in one object. One error names every problem. A key starting `_`, or `comment`, is a note, allowed in every object.
 - A key whose default is unset may be `null`. Unset means the tool that reads it decides.
@@ -115,6 +115,8 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `machine_paths.scan` (list of string, default ["*"]): globs scanned
 - `machine_paths.fallback_vars` (list of string, default []): environment variables a machine path may fall back to
 - `maint_lint.gate_time` ({prefix, bound_s, session}): the gate-time check of tools/maint_lint.py (docs/maint-lint.md "Gate time"): bound_s (1 to 86400, default 900) the seconds a gate step's median time over full gates may reach; prefix the id prefix of the record a plain run files for a step over it (unset: none is filed); session the session that record carries; unset: the check runs at 900 s and files nothing
+- `modules.map` (repo path): the module map file: modules, messaging, allowed edges and ratchets (docs/module-map.md); --check refuses to run unless "owner".paths locks it; unset: no module map
+- `modules.ceilings` (repo path): the ratchet ceilings file, {ratchet id: ceiling} (docs/module-map.md "Ratchets"); unset: every ceiling is 0
 - `pieces`: a table the kit passes through unchecked (a file path or an object)
 - `preflight.engines` (list of string, default []): process-name prefixes listed as running engines
 - `preflight.report_hooks` (list of "module:function", default []): module:function report hooks
