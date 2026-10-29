@@ -1,5 +1,4 @@
-"""Renaming a coordinator's stem: handoff --stem, coordinators.json, and the autostart task's one
-name. The old coordinator name's one-release guards (the old state file name, the old stem, the old
+"""Renaming a coordinator's stem: handoff --stem and coordinators.json. The old coordinator name's one-release guards (the old state file name, the old stem, the old
 task name) are gone; nothing here reads or refuses them."""
 import io
 import os
@@ -100,7 +99,7 @@ class HandoffStem(unittest.TestCase):
 
 class RenamedStem(unittest.TestCase):
     """After handoff --stem, only the entry's own stem holds start --session and after-reboot: a
-    session under a different stem is another session."""
+    session under a different stem is another session. after-reboot starts plain entries only."""
 
     def setUp(self):
         self.h = Home(self)
@@ -120,38 +119,12 @@ class RenamedStem(unittest.TestCase):
         self.assertIn("-n 'alpha-coordinator-a1'", text)
 
     def test_after_reboot_starts_beside_another_stem(self):
-        host = FakeHost(self.h.root, [session(10, 'alpha-lead-a1', agent='coordinator')])
+        self.h.write_state('sessions.json', {'alpha': dict(self.renamed, agent=False)})
+        host = FakeHost(self.h.root, [session(10, 'alpha-lead-a1')])
         out = reboot.run(self.h.settings, host)
         self.assertIn('started alpha-coordinator-a1 (alpha) on account 1', out)
         self.assertFalse(any(line.startswith('alpha ') for line in out), out)
-        self.assertEqual([role_of(t) for t in host.opened], ['coordinator'])
-
-
-@mock.patch('kitlib.platform.NAME', 'windows')   # the Windows form, on any machine
-class Autostart(unittest.TestCase):
-    def test_install_registers_the_one_name_and_unregisters_nothing(self):
-        d = tempfile.mkdtemp(prefix='kit-autostart-')           # a pythonw.exe that is there
-        self.addCleanup(shutil.rmtree, d, True)
-        open(os.path.join(d, 'pythonw.exe'), 'w').close()
-        out = autostart.install('/kit/tools/launch.py', python=os.path.join(d, 'python.exe'), whatif=True)
-        script = out[1]
-        self.assertEqual(autostart.TASK_NAME, 'Claude coordinators after reboot')
-        self.assertIn("Register-ScheduledTask -TaskName 'Claude coordinators after reboot'", script)
-        self.assertNotIn('Unregister-ScheduledTask', script)
-
-    def test_the_install_line_names_the_task(self):
-        calls = []
-
-        class R(object):
-            returncode, stderr = 0, ''
-
-        def run(*a, **k):
-            calls.append(a[0])
-            return R()
-        out = autostart.install('/kit/tools/launch.py', python='/py/python.exe', run=run,
-                                isfile=lambda p: True)       # /py is not there: say pythonw is
-        self.assertEqual(len(calls), 1)
-        self.assertTrue(out[0].startswith("Installed 'Claude coordinators after reboot'. Test it"), out[0])
+        self.assertEqual([role_of(t) for t in host.opened], ['plain'])
 
 
 class Cli(unittest.TestCase):

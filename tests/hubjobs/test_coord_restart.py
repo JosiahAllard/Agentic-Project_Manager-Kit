@@ -193,7 +193,9 @@ class Ctx(object):
         self.events.append((word, detail))
 
 
-class Job(unittest.TestCase):
+class JobBase(unittest.TestCase):
+    """The job over a temporary state folder, with its process list, children and clock faked."""
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp, True)
@@ -214,8 +216,22 @@ class Job(unittest.TestCase):
         self.calls = []
         self.code = 0
         self.now = NOW
-        self.job = C.RestartJob(self.settings, procs=lambda: [proc(n) for n in self.live],
-                                child=self.child, clock=lambda: self.now, kit=self.tmp)
+        self.uptime = float('inf')      # no boot: the after-reboot one-shot stays out of the way
+        self.spawned = []
+        self.job = self.new_job()
+
+    def new_job(self):
+        return C.RestartJob(self.settings, procs=lambda: [proc(n) for n in self.live],
+                            child=self.child, clock=lambda: self.now, kit=self.tmp,
+                            uptime=lambda: self.uptime, detached=self.detached)
+
+    def detached(self, argv, cwd):
+        if isinstance(self.spawn_error, Exception):
+            raise self.spawn_error
+        self.spawned.append((argv, cwd))
+        return object()
+
+    spawn_error = None
 
     def write(self, name, data):
         with open(os.path.join(self.state, name), 'w', encoding='utf-8') as f:
@@ -235,6 +251,8 @@ class Job(unittest.TestCase):
         self.ctx = ctx or Ctx()
         return self.job(self.ctx)
 
+
+class Job(JobBase):
     def test_make_needs_a_state_dir(self):
         class S(object):
             home = self.tmp
@@ -315,7 +333,8 @@ class Job(unittest.TestCase):
         for _ in range(60):                 # five hours of runs, a fresh job object each hour
             if _ % 12 == 0:
                 self.job = C.RestartJob(self.settings, procs=lambda: [], child=self.child,
-                                        clock=lambda: self.now, kit=self.tmp)
+                                        clock=lambda: self.now, kit=self.tmp,
+                                        uptime=lambda: float('inf'), detached=self.detached)
             self.now += 300
             try:
                 self.job(ctx)
@@ -456,6 +475,90 @@ class Job(unittest.TestCase):
         self.now += 300
         self.run_job()                      # down once again, not twice
         self.assertEqual(self.calls, [])
+
+
+class BootDue(unittest.TestCase):
+    def test_only_soon_after_a_boot_and_once_per_boot(self):
+        self.assertTrue(C.boot_due(None, 240, NOW))
+        self.assertTrue(C.boot_due({}, C.BOOT_S - 1, NOW))
+        self.assertFalse(C.boot_due(None, C.BOOT_S, NOW))
+        self.assertFalse(C.boot_due(None, float('inf'), NOW))            # uptime unknown: never
+        self.assertFalse(C.boot_due({'boot_at': NOW - 240 + 30}, 240, NOW))   # this boot, already run
+        self.assertTrue(C.boot_due({'boot_at': NOW - 86400}, 240, NOW))       # an earlier boot
+        self.assertTrue(C.boot_due({'boot_at': 'x'}, 240, NOW))
+
+
+class AfterBoot(JobBase):
+    """The hub, as the only restarter, runs launch.py after-reboot once per boot (plain sessions
+    and the PM); the coordinators stay this job's."""
+
+    def setUp(self):
+        JobBase.setUp(self)
+        self.live = ['kit-coord-a1']                            # the coordinator runs: no start
+
+    def test_the_first_run_after_a_boot_starts_after_reboot_once(self):
+        self.uptime = 240
+        note = self.run_job()
+        self.assertNotIsInstance(note, jobs.Skip)
+        self.assertIn('after-reboot started', note)
+        (argv, cwd), = self.spawned
+        self.assertEqual(argv[-2:], [os.path.join(self.tmp, 'tools', 'launch.py'), 'after-reboot'])
+        self.assertEqual(cwd, self.tmp)
+        self.assertEqual(self.records()[C.BOOT_KEY], {'boot_at': NOW - 240})
+        self.assertEqual(self.calls, [])                        # no coordinator start on this run
+        self.now += 300
+        self.uptime += 300
+        self.assertIsInstance(self.run_job(), jobs.Skip)
+        self.assertEqual(len(self.spawned), 1)
+
+    def test_a_hub_restart_soon_after_the_boot_does_not_run_it_again(self):
+        self.uptime = 240
+        self.run_job()
+        self.job = self.new_job()                               # the hub restarted
+        self.now += 600
+        self.uptime += 600
+        self.assertIsInstance(self.run_job(), jobs.Skip)
+        self.assertEqual(len(self.spawned), 1)
+
+    def test_a_plain_hub_restart_never_runs_it(self):
+        self.uptime = 3 * 3600
+        self.assertIsInstance(self.run_job(), jobs.Skip)
+        self.uptime = 240                                       # the same process asks only once
+        self.now += 300
+        self.run_job()
+        self.assertEqual(self.spawned, [])
+        self.assertNotIn(C.BOOT_KEY, self.records() if os.path.exists(
+            os.path.join(self.state, C.STATE_FILE)) else {})
+
+    def test_a_bad_sessions_json_still_runs_it(self):
+        with open(os.path.join(self.state, 'sessions.json'), 'w') as f:
+            f.write('{not json')
+        self.uptime = 240
+        with self.assertRaises(Exception):
+            self.run_job()
+        self.assertEqual(len(self.spawned), 1)
+        self.assertIn(C.BOOT_KEY, self.records())
+
+    def test_a_child_that_cannot_start_fails_the_run_and_is_tried_again(self):
+        self.uptime = 240
+        self.spawn_error = OSError('no python')
+        with self.assertRaises(C.StartFailed):
+            self.run_job()
+        self.assertFalse(os.path.exists(os.path.join(self.state, C.STATE_FILE)))
+        self.spawn_error = None
+        self.now += 300
+        self.uptime += 300
+        self.run_job()
+        self.assertEqual(len(self.spawned), 1)
+        self.assertEqual(self.records()[C.BOOT_KEY], {'boot_at': NOW - 240})
+
+    def test_the_boot_record_is_not_a_coordinator(self):
+        self.write(C.STATE_FILE, {C.BOOT_KEY: {'boot_at': NOW - 86400}})
+        self.live = ['kit-coord-a2']                            # seen on account 2
+        self.run_job()
+        rec = self.records()
+        self.assertEqual(rec[C.BOOT_KEY], {'boot_at': NOW - 86400})
+        self.assertEqual(rec['kit']['account'], '2')
 
 
 if __name__ == '__main__':
