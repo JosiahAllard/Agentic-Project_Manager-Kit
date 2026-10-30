@@ -56,8 +56,8 @@ The analyst keeps the reviewer's light/high pin, so the "Reviewer model" rule is
 ## Specialty skills
 
 Seven folders `content/skills/specialty-<name>/SKILL.md`, long material in companion files, shipped
-by the existing render (Claude loads `content/skills/`; Codex gets the copy
-`hosts/codex/shell/skills/`, docs/content.md "Skills"). The `specialty-` prefix: a skill named
+by the existing render (Claude and Codex both load `content/skills/` from the plugin;
+docs/content.md "Skills"). The `specialty-` prefix: a skill named
 `branch-review` already exists (the coordinator's), a bare `records` would read as the retired type,
 and names start with a letter (`_NAME` in `kitlib/host/content.py`).
 
@@ -188,7 +188,7 @@ The owner accepted all eight recommendations.
 
 | branch | work | status |
 |---|---|---|
-| A skills | `content/skills/specialty-*/` (7), rendered `hosts/codex/shell/skills/`, tests | built |
+| A skills | `content/skills/specialty-*/` (7), then rendered into `hosts/codex/shell/skills/` (a copy since retired), tests | built |
 | B types and dispatch (atomic hard cut) | seven role files deleted, two added; dispatch and review skills, `coordinator.md`, rendered agents and manifest, docs, `templates/common/AGENTS.md`, tests, `command_canary.py` | built |
 | C guard | none (research returns text plus a scratch file, no `writes`) | not built, not needed |
 | D repo migration | the owner to-do above, in downstream repos | owner work |

@@ -11,10 +11,9 @@ rendered agent file says so in its header comment.
 | Part | Where | State |
 |---|---|---|
 | Registry entry | `hosts.json` `codex` | Windows; hooks PreToolUse, SessionStart, PostCompact, SubagentStart; no ask; no subagent identity in hooks; MCP; skills; TOML agents |
-| Hook entry | none of its own: `shell/boot/hook.py codex <event>`, the plugin's copy of the kit's one entry `boot/hook.py` | in the owner's unmarked session a tool `hosts.json` `hook.guarded_tools` leaves out passes before boot (`fast_path: unmarked`); else PreToolUse through `kitlib.host.hookmain` (`ADAPTER.DEADLINE`, 7 s for the whole call, boot included) with Codex's parse, screen and render; a start event adds the kit header (and a PM's or coordinator's start checks, `ADAPTER.start_text`) |
+| Hook entry | none of its own: `boot/hook.py codex <event>`, the kit's one entry, from the export folder Codex installed | in the owner's unmarked session a tool `hosts.json` `hook.guarded_tools` leaves out passes before boot (`fast_path: unmarked`); else PreToolUse through `kitlib.host.hookmain` (`ADAPTER.DEADLINE`, 7 s for the whole call, boot included) with Codex's parse, screen and render; a start event adds the kit header (and a PM's or coordinator's start checks, `ADAPTER.start_text`) |
 | Hook policy | `adapter/policy.py` | a marked session: unknown tools, other MCP servers' tools, `apply_patch` through the shell, calls the guard cannot fully judge (no named shell, cmd.exe, a TTY, fed input) and a read, test or lander role's edits in its own checkout refused |
-| Boot folder | `shell/boot/kitboot.py`, `shell/boot/hook.py`, `shell/hosts.json` | byte copies of `boot/kitboot.py` and `boot/hook.py`, and `hosts.json`'s Codex entry alone, drift-checked; a copied plugin verifies the kit it binds with them, and reads its hook data before the kit boots |
-| Agents, skills | `shell/agents/kit-<role>.toml`, `shell/skills/` | every role and skill, rendered from `content/` (`python tools/render_content.py`), each agent file opening with the generated-file line; the skills a byte copy until the live check below; the guard refuses a hand edit of either (docs/guard.md "Generated files"); review templates, not installed |
+| Agents | `shell/agents/kit-<role>.toml` | every role, rendered from `content/` (`python tools/render_content.py`), each agent file opening with the generated-file line; the skills are not copied: Codex loads `content/skills/` from the export; the guard refuses a hand edit (docs/guard.md "Generated files"); review templates, not installed |
 | Manifests | `shell/plugin.json`, `shell/mcp.json`, `shell/hooks/hooks.json` | rendered from `kit.json`; the plugin export places `shell/plugin.json` at `.codex-plugin/plugin.json`, stamped, and its paths (`./content/skills/`, the hooks file, `mcp.json`) are from the export folder's root (docs/plugin-source.md "Codex") |
 | Lock MCP | `shell/mcp/lock_server.py` | the lock's read tools, server `machine-lock`; the lock server has no write tools on any host (docs/lock-mcp.md "No write tools"), and `adapter/lock.py` lists and answers nothing else |
 | Hub MCP | `shell/mcp/hub_server.py` | the hub's tools (docs/hub-mcp.md), server `hub`; a marked session is refused them by `adapter/policy.py` |
@@ -72,8 +71,8 @@ What the owner's session leaves unjudged (a trade-off: the owner keeps an intera
   after a push to main, shows the four hooks as modified until the owner trusts them again. Not yet seen: a hook running in a model turn, and
   the owner's desktop install loading the export.
 - **Skills from outside the plugin folder.** Settled by the export: the Codex plugin root is now the
-  export folder, so `./content/skills/` is inside it and a cache copy carries it. `shell/skills/` and
-  the `shell/boot/` copies stay until the old `pm-kit-local` copy is retired.
+  export folder, so `./content/skills/` is inside it and a cache copy carries it. The old
+  `shell/skills/` and `shell/boot/` copies are retired (`adapter/content.py` `retired()`).
 - **Runtime.** The branch's canaries passed on that binary against fixtures; the native local Git
   preparation stayed refused (`workflow_canary` reports `complete=false`). Rerun them for any new
   binary. Live controller, store and lock contention, and landing are not accepted. A read or lander
@@ -87,7 +86,7 @@ What the owner's session leaves unjudged (a trade-off: the owner keeps an intera
   are refused in every marked session, and the launcher (`adapter/launcher.py`) plans a launch but
   runs nothing. The rendered roles name spawn_agent and send_message as not available to a Codex
   agent. On Codex the owner starts each agent session by hand.
-- `python <kit>/tools/plugin_refresh.py --apply`, from the owner's session, installs the export into Codex with `codex plugin add pm-kit@pm-kit` once config.toml names the export's `pm-kit` marketplace; it prints the switch steps while it names only the old `pm-kit-local` copy. That old copy (the cache and the marketplace copy) is refreshed by the same run, with Codex closed: it mirrors the export's `shell/` skills, agents, hooks and `.codex-plugin` into the folders `config.toml` names (`adapter/plugin_copy.py`, the step `ADAPTER.plugin_copy` hands it; docs/plugin-source.md "Host plugin copies"). A changed `hooks.json` makes Codex ask the owner to trust the hook again. The session-start hook still warns when the copy's skills are behind the kit's (`adapter/start.py` `stale_line`).
+- `python <kit>/tools/plugin_refresh.py --apply`, from the owner's session, installs the export into Codex with `codex plugin add pm-kit@pm-kit` once config.toml names the export's `pm-kit` marketplace; it prints the switch steps while it names only the old `pm-kit-local` copy. That old copy is no longer refreshed (`adapter/plugin_copy.py`, the step `ADAPTER.plugin_copy` hands it; docs/plugin-source.md "Host plugin copies"). Each install of a new version makes Codex ask the owner to trust the four hooks again.
 - A main checkout with no `.kit.json` lets a force push to main through, as the shared guard does
   on every host today (baseline behaviour, not this host's). The runtime broker refuses every call
   while a `.kit.json` exists but does not load (`host-runtime-error`).

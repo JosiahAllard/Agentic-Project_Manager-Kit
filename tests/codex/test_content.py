@@ -231,26 +231,11 @@ class Manifests(unittest.TestCase):
                 r.hooks()
 
 
-class Vendored(unittest.TestCase):
-    def test_the_plugin_ships_the_kits_boot_folder_byte_for_byte_and_its_hosts_entry(self):
-        files = cc.renderer().vendored(ROOT)
-        want = {}
-        for name in ('kitboot.py', 'hook.py'):
-            with open(os.path.join(ROOT, 'boot', name), 'rb') as f:
-                want['hosts/codex/shell/boot/' + name] = f.read()
-        with open(os.path.join(ROOT, 'hosts.json'), encoding='utf-8') as f:
-            entry = json.load(f)['codex']
-        self.assertEqual(json.loads(files.pop(cc.HOSTS_REL)), {'codex': entry})
-        self.assertEqual(files, want)
-        rendered = kcontent.render(ROOT, [cc.renderer()])
-        for path in list(want) + [cc.HOSTS_REL]:
-            self.assertIn(path, rendered)
-
+class Hook(unittest.TestCase):
     def load_hook(self):
-        """The plugin's copy of boot/hook.py, as a module."""
+        """boot/hook.py, the plugin's hook entry (the export's own boot folder), as a module."""
         import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            'codex_hook', os.path.join(ROOT, 'hosts', 'codex', 'shell', 'boot', 'hook.py'))
+        spec = importlib.util.spec_from_file_location('codex_hook', os.path.join(ROOT, 'boot', 'hook.py'))
         hook = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(hook)
         return hook

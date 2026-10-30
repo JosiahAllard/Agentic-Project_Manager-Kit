@@ -81,7 +81,6 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `content/skills/*/*.md` | one skill per folder, the source of every host's skills, and the folder Claude's plugin loads them from (`docs/content.md`) | editing a skill, reading what Claude loads | kw: skills, skill
 - `hosts/claude/shell/agents/*.md` | Claude's agent files, rendered from content/roles (never edit by hand) | reading what Claude loads | kw: agents, rendered
 - `hosts/codex/README.md` | the Codex host: what is ported, what runs, what is not verified | working on the Codex plugin | kw: codex, host, plugin, runtime, canary
-- `hosts/codex/shell/skills/*/*.md` | Codex's skills, copied from content/skills (never edit by hand) | reading what Codex loads | kw: skills, rendered, codex
 - `templates/stacks/godot/.claude/skills/godot-render-check/SKILL.md` | Godot render check and e2e tiers | Godot repos | kw: godot, render, e2e
 - `templates/common/AGENTS.md` | starter rules file (AGENTS.md) for a new repo | installing | kw: template, agents, rules
 - `templates/common/CLAUDE.md` | starter CLAUDE.md: imports AGENTS.md | installing | kw: template, claude

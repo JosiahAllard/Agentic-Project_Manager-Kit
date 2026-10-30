@@ -62,46 +62,18 @@ class Start(unittest.TestCase):
                          ['hookSpecificOutput']['additionalContext'], header.text(KIT))
 
 
-def _skills(root, skills):
-    for name, body in skills.items():
-        os.makedirs(os.path.join(root, 'skills', name))
-        with open(os.path.join(root, 'skills', name, 'SKILL.md'), 'w') as fh:
-            fh.write(body)
+class ExportLayout(unittest.TestCase):
+    """Codex installs the whole export: the hook's plugin root is the kit, its skills are under
+    content/skills/, and there is no skills/ copy to compare, so the start text has no copy line."""
 
-
-class Stale(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.kit = os.path.join(self.tmp.name, 'kit')
-        _skills(os.path.join(self.kit, 'hosts', 'codex', 'shell'), {'a': 'A', 'b': 'B', 'c': 'C'})
-        self.plugin = os.path.join(self.tmp.name, 'cache')
-
-    def test_a_copy_behind_the_kit_is_named_in_the_session_start_text(self):
-        _skills(self.plugin, {'a': 'A', 'b': 'old', 'gone': 'G'})
-        got = start.text('SessionStart', self.kit, {}, {}, plugin_root=self.plugin)
-        self.assertIn('missing: c; extra: gone; changed: b', got)
-        self.assertIn("see hosts/codex/README.md 'Known limits'", got)
-
-    def test_a_long_list_is_cut_to_three_names(self):
-        _skills(self.plugin, {'x%d' % i: 'x' for i in range(5)})
-        self.assertIn('extra: x0, x1, x2 +2 more', start.stale_line(self.plugin, self.kit))
-
-    def test_an_unreadable_plugin_root_is_one_could_not_check_line_never_a_raise(self):
-        os.makedirs(self.plugin)
-        got = start.text('SessionStart', self.kit, {}, {}, plugin_root=self.plugin)
-        self.assertIn('Codex plugin copy: could not check:', got)
-
-    def test_a_matching_copy_and_the_checkouts_own_shell_are_silent(self):
-        _skills(self.plugin, {'a': 'A', 'b': 'B', 'c': 'C'})
-        self.assertEqual(start.stale_line(self.plugin, self.kit), '')
-        real = os.path.join(os.path.dirname(os.path.abspath(start.__file__)), '..', 'shell')
-        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(start.__file__)))))
-        self.assertEqual(start.stale_line(real, root), '')
-
-    def test_the_plugin_root_comes_from_the_hook_entry_path(self):
-        self.assertEqual(start.hook_plugin_root([os.path.join(self.plugin, 'boot', 'hook.py')]), self.plugin)
-        self.assertIsNone(start.hook_plugin_root(['x/test_start.py']))
+    def test_a_start_from_the_export_layout_has_no_plugin_copy_line(self):
+        with tempfile.TemporaryDirectory() as kit:
+            os.makedirs(os.path.join(kit, 'content', 'skills', 'a'))
+            hook = os.path.join(kit, 'boot', 'hook.py')
+            with unittest.mock.patch('sys.argv', [hook, 'codex', 'SessionStart']):
+                got = start.text('SessionStart', kit, {}, {})
+            self.assertEqual(got, header.text(kit))
+            self.assertNotIn('plugin copy', got)
 
 
 import unittest.mock  # noqa: E402
