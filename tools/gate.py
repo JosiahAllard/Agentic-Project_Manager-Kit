@@ -75,6 +75,7 @@ if __name__ == '__main__':      # from the kit's main checkout: run from pushed 
 from kitlib import gate as G                                       # noqa: E402
 from kitlib import pluginsource                                    # noqa: E402
 from kitlib.config import policy                                  # noqa: E402
+from kitlib.coordstate import log as coordlog                       # noqa: E402
 from kitlib.gate import land as landmod                            # noqa: E402
 from kitlib.gate import budget, caller, measure, outfile, rerun, runner  # noqa: E402
 from kitlib.gate import result as resultmod                       # noqa: E402
@@ -190,10 +191,13 @@ def do_land(argv):
     if a.reviewed_by and not a.submit:
         p.error('%s goes with --submit' % submitmod.REVIEWED_BY)
     if a.submit:
-        return emit(submitmod.submit(
+        out = submitmod.submit(
             root, __file__, land_child_args(a, root), [a.branch], [a.expect_tip],
             expect_main=a.expect_main, reviewed_by=a.reviewed_by,
-            again=lambda ids: submitmod.again_line('gate.py', land_again_args(a, root), ids)))
+            again=lambda ids: submitmod.again_line('gate.py', land_again_args(a, root), ids))
+        code = emit(out)
+        coordlog.note_submit(out, [a.branch], [a.expect_tip], a.reviewed_by)   # docs/coord-state.md
+        return code
     submitted = None
     if a.submitted:
         try:

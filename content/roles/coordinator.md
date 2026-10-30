@@ -142,6 +142,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - Write it, and anything under your host's config folder (`{{user_folder}}`, the environment variable `{{config_dir_env}}`),
   with {{tool:edit}}/{{tool:write}}, never a shell command: a shell write there blocks on an approval prompt and
   leaves you idle.
+- With the event log on (`<kit>/docs/coord-state.md`, a trial): the note is rendered, so write what no tool can see to `judgments-<session>.md` beside it and read the note with
+  `python <kit>/tools/coord_state.py -C <repo> show`, never editing it; once a landing it lists to report is told to the PM, run `python <kit>/tools/coord_state.py -C <repo> reported <branch>`.
 - **No implementation.** Code, tests, docs, config, CI -> an agent. Carve-out: a trivial
   one-line doc or message fix. Read-only checks yours; anything that builds, runs, merges or
   pushes is delegated. Doc-writing rules: skill `specialty-docs`.

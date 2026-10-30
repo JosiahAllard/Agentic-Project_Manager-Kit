@@ -78,6 +78,7 @@ if __name__ == '__main__':      # from the kit's main checkout: run from pushed 
         sys.exit(_code)
 
 from kitlib import gate as G                                       # noqa: E402
+from kitlib.coordstate import log as coordlog                       # noqa: E402
 from kitlib.gate import cleanup                                    # noqa: E402
 from kitlib.gate import land as landmod                            # noqa: E402
 from kitlib.gate import runner                                     # noqa: E402
@@ -251,6 +252,7 @@ def main(argv):
             expect_main=a.expect_main, reviewed_by=a.reviewed_by,
             again=lambda ids: submitmod.again_line('land.py', again_args(a, root), ids))
         code = emit(out)        # flushed first: a killed wait leaves the wait-result command
+        coordlog.note_submit(out, a.branches, a.expect_tip, a.reviewed_by)   # docs/coord-state.md
         if not a.wait_result or out.code != G.OK:
             return code
         try:
