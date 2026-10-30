@@ -35,7 +35,7 @@ FIELDS = {
     'questions': (('status', 'title'), {
         'status': _STR, 'title': _STR, 'repo': _STR, 'from': _STR, 'asked_at': _STR,
         'context': _STR, 'options': _LIST, 'recommended': _INT, 'refs': _LIST, 'urgent': _BOOL,
-        'answer': _DICT, 'story': _STR, 'done_why': _STR, 'done_at': _STR,
+        'answer': _DICT, 'story': _STR, 'done_why': _STR, 'done_at': _STR, 'done_by': _STR,
         'record': _DICT, 'class': _STR, 'filing': _DICT, 'filed_at': _STR,
         'unfiled_why': _STR}),
     'inbox': (('text',), {

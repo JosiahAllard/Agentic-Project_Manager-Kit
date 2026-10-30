@@ -1126,5 +1126,259 @@ class StandingPushTest(FiledPushCase):
         self.assertIn('standing rule', self.push.to(push.PM_KEY)[0])
 
 
+class AutoDoneTest(FiledPushCase):
+    """A filed answer is marked done by the hub once its asker has it, pinned to the version the
+    push fired at (kitlib.hubsite.push "Done by the hub", docs/action-hub.md "Filing the
+    answer")."""
+
+    def q(self, qid):
+        return self.store.get('questions', qid)
+
+    def assert_hub_done(self, qid):
+        d = self.q(qid)
+        self.assertEqual((d['status'], d.get('done_by'), d.get('done_why'), d.get('via')),
+                         ('done', 'hub', 'filed into kit:EX-1', 'hub-push'), d)
+        self.assertTrue(d.get('done_at'))
+        self.assertIsNotNone(d.get('filed_as'), 'the filing is kept')
+
+    def assert_not_done(self, qid, status='filed'):
+        d = self.q(qid)
+        self.assertEqual((d['status'], d.get('done_by')), (status, None), d)
+
+    def pending_for(self, key):
+        return [p['id'] for p in self.ok('GET', '/pending', AGENT, query={'for': key})['items']]
+
+    def test_a_pulled_answer_is_marked_done_once_its_asker_picks_it_up(self):
+        self.bind('pulled')
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.worker.poll()
+        self.assert_not_done(qid)       # never in the filing's own write, nor at the push
+        self.later(130)
+        self.assertEqual(self.attempts('kit'), [1, 2], 'the filed push still reaches the asker')
+        self.assert_not_done(qid)
+        self.pick_up('kit')
+        self.later(400)
+        self.assert_hub_done(qid)
+        self.assertEqual(self.attempts('kit'), [1, 2])
+        self.assertEqual(self.pending_for('kit'), [])
+        self.later(3600)
+        self.assertEqual(self.attempts('kit'), [1, 2], 'the done fires no push')
+        self.assertEqual(self.push.to(push.PM_KEY), [])
+
+    def test_an_answer_picked_up_before_the_push_fired_is_marked_done_at_once(self):
+        self.bind('pulled')
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.pick_up('kit')
+        self.worker.poll()
+        self.assertEqual(self.push.calls, [])
+        self.assert_hub_done(qid)
+
+    def test_one_the_pm_asked_is_done_at_its_written_try_and_not_before(self):
+        self.bind('pulled')
+        self.push.states[push.PM_KEY] = push.NOT_WRITTEN
+        qid = self.ask_bound(asker='pm')
+        self.answer(qid)
+        self.worker.poll()
+        self.assert_not_done(qid)
+        self.push.states[push.PM_KEY] = push.WRITTEN
+        self.later(130)
+        self.assertEqual(self.attempts(push.PM_KEY), [1, 2])
+        self.assert_hub_done(qid)
+
+    def test_a_freed_record_still_pings_the_pm_and_stays_its_askers_until_it_reads_it(self):
+        self.bind('parked', 'open', live=())
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.worker.poll()
+        self.later(130)
+        self.later(400)
+        self.assertEqual([r for r, _t in self.push.calls], [push.PM_KEY],
+                         'the freed ping still fires; the asker is not sent it')
+        self.assertIn('no coordinator of repo kit is running', self.push.to(push.PM_KEY)[0])
+        self.assert_not_done(qid)
+        self.assertEqual(self.pending_for('kit'), [qid], 'pending for its asker (the wake)')
+        self.later(3600)
+        self.assert_hub_done(qid)
+
+    def test_an_asker_never_sent_it_counts_as_no_undelivered_try_and_no_give_up(self):
+        self.bind('parked', 'open', live=())
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.worker.poll()
+        self.later(push.GIVE_UP_S + 10)
+        self.assertEqual(self.undelivered(), [])
+        self.assert_not_done(qid)
+        self.assertEqual(self.pending_for('kit'), [qid], 'its asker still reads it at its start')
+
+    def test_a_held_answer_told_to_the_records_coordinator_waits_for_its_asker(self):
+        self.bind('blocked', live={'kit'})
+        qid = self.ask_bound(asker='zeta')
+        self.answer(qid)
+        self.worker.poll()
+        self.later(130)
+        self.assertEqual([r for r, _t in self.push.calls], ['kit'])
+        self.assert_not_done(qid)
+        self.pick_up('kit')
+        self.later(400)
+        self.assert_not_done(qid)       # the coordinator's read is not the asker's
+        self.pick_up('zeta')
+        self.later(900)
+        self.assert_hub_done(qid)
+
+    def test_a_held_answer_to_its_live_asker_is_done_when_it_picks_it_up(self):
+        self.bind('blocked', live={'zeta'})
+        qid = self.ask_bound(asker='zeta')
+        self.answer(qid)
+        self.worker.poll()
+        self.pick_up('zeta')
+        self.later(130)
+        self.assert_hub_done(qid)
+
+    def test_a_standing_a_failed_an_unbound_and_a_run_line_answer_are_never_marked_done(self):
+        for case in ('standing', 'failed', 'class', 'unbound pm', 'run line'):
+            with self.subTest(case=case):
+                self.bind('pulled')
+                if case == 'failed':
+                    self.views.fail = HubError('store', 'disk full', 'views')
+                if case == 'class':
+                    qid = self.ask(**{'from': 'kit'})
+                elif case == 'unbound pm':
+                    qid = self.ask()
+                elif case == 'run line':
+                    qid = self.ask(**{'from': 'kit', 'record': {'repo': 'kit', 'id': 'EX-1'},
+                                      'options': [{'label': 'run D-001 cap=2',
+                                                   'description': 'go'},
+                                                  {'label': 'hold', 'description': 'no'}]})
+                else:
+                    qid = self.ask_bound()
+                body = {'choice': 0, 'note': NOTE}
+                if case == 'standing':
+                    body['standing'] = True
+                self.ok('POST', '/questions/%s/answer' % qid, OWNER, body)
+                self.worker.poll()
+                self.pick_up('kit')
+                self.pick_up('pm')
+                self.later(130)
+                self.later(400)
+                d = self.q(qid)
+                self.assertNotEqual(d['status'], 'done', d)
+                self.assertIsNone(d.get('done_by'))
+
+    def test_a_re_answer_reopens_one_the_hub_marked_done_and_reaches_its_asker_again(self):
+        self.bind('pulled')
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.worker.poll()
+        self.pick_up('kit')
+        self.later(130)
+        self.assert_hub_done(qid)
+        self.answer(qid, choice=1)      # "Change answer" on the page
+        d = self.q(qid)
+        self.assertEqual((d['status'], d['answer']['choice'], d.get('done_by'),
+                          d.get('done_why'), d.get('done_at')),
+                         ('filed', 1, None, None, None))
+        self.worker.poll()
+        self.assertEqual(self.attempts('kit'), [1, 1],
+                         'the new answer is pushed: the old pick-up does not count for it')
+        self.assert_not_done(qid)
+        self.pick_up('kit')
+        self.later(400)
+        self.assert_hub_done(qid)
+        self.assertEqual(self.q(qid)['answer']['choice'], 1)
+
+    def test_a_promote_of_one_the_hub_marked_done_files_it_again_for_the_pm(self):
+        self.bind('pulled')
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.worker.poll()
+        self.pick_up('kit')
+        self.later(130)
+        self.assert_hub_done(qid)
+        self.promote(qid)
+        d = self.q(qid)
+        self.assertEqual((d['status'], d.get('done_by'), d.get('done_why')), ('filed', None, None))
+        self.assertIsInstance(d['standing'], dict)
+        self.worker.poll()
+        self.assertIn('standing rule', self.push.to(push.PM_KEY)[0])
+        self.pick_up('pm')
+        self.pick_up('kit')
+        self.later(400)
+        self.assert_not_done(qid)       # a standing rule is the PM's to log
+        self.log(qid)
+        self.assertEqual(self.q(qid)['status'], 'logged')
+
+    def test_a_write_after_the_push_fired_wins_and_the_done_is_skipped(self):
+        # mutation proof: a done written with no version pin overwrites this write's version
+        logged = []
+        self.bind('pulled')
+        self.worker.log = logged.append
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.worker.poll()
+        self.store.update('questions', qid, {'urgent': True})   # the answer is the same
+        self.pick_up('kit')
+        self.later(130)
+        self.assert_not_done(qid)
+        self.assertTrue(self.q(qid)['urgent'])
+        self.assertEqual(logged, ['push: %s not marked done: conflict' % qid])
+        self.assertEqual(self.attempts('kit'), [1], 'picked up: nothing more owed')
+
+    def test_a_re_answer_landing_as_the_done_is_written_wins(self):
+        self.bind('pulled')
+        logged = []
+        self.worker.log = logged.append
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.worker.poll()
+        self.pick_up('kit')
+        real = self.store.update
+        raced = []
+
+        def update(coll, doc_id, changes, **kw):
+            if changes.get('done_by') == 'hub' and not raced:
+                raced.append(True)
+                self.answer(qid, choice=1)  # the owner's "Change answer" gets in first
+            return real(coll, doc_id, changes, **kw)
+        with mock.patch.object(self.store, 'update', update):
+            self.later(130)
+        self.assertEqual(raced, [True], 'the done write was tried')
+        d = self.q(qid)
+        self.assertEqual((d['status'], d['answer']['choice'], d.get('done_by')), ('filed', 1, None))
+        self.assertEqual(logged, ['push: %s not marked done: conflict' % qid])
+        self.worker.poll()
+        self.assertEqual(self.attempts('kit'), [1, 1], 'the new answer reaches its asker')
+
+    def test_the_done_survives_a_restart_of_the_worker(self):
+        self.bind('parked', 'open', live=())
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.worker.poll()
+        self.worker = self.make()
+        self.pick_up('kit')
+        self.later(130)
+        self.assert_hub_done(qid)
+
+    def test_the_askers_own_done_of_one_the_hub_marked_done_is_no_conflict(self):
+        self.bind('pulled')
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.worker.poll()
+        stale = self.q(qid)['version']      # what the asker read with the answer
+        self.pick_up('kit')
+        self.later(130)
+        self.assert_hub_done(qid)
+        before = self.q(qid)
+        got = self.ok('POST', '/questions/%s/done' % qid, AGENT,
+                      {'why': 'read it', 'from': 'kit', 'if_version': stale})
+        self.assertEqual((got['status'], got['done_by'], got['version']),
+                         ('done', 'hub', before['version']))
+        self.assertEqual(self.q(qid), before, 'nothing written')
+        status, obj = self.api.call('POST', BASE + '/questions/%s/done' % qid, AGENT,
+                                    {'why': 'w', 'from': 'other', 'if_version': stale})
+        self.assertEqual((status, obj['error']['code']), (403, 'forbidden'), obj)
+
+
 if __name__ == '__main__':
     unittest.main()

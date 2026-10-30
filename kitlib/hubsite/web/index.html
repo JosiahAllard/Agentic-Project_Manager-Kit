@@ -1033,8 +1033,10 @@ ul.hist .sch-line{display:block}
   // An answer as the card sends it (POST /questions/<id>/answer, the version added by pin): the choice and the note,
   // and standing when the owner ticked the box on a bound question. The PM logs a standing rule in the ledger.
   const answerBody = (d, draft) => ({ choice: draft.choice, note: String(draft.note || "").trim(), ...(qBound(d) && draft.standing === true ? { standing: true } : {}) });
+  // A filed answer the hub marked done once its asker had it (done_by "hub"): it still takes a new answer and a promote.
+  const hubDone = d => !!d && d.status === "done" && d.done_by === "hub";
   // A filed answer the owner may still make a standing rule: the same route with standing and no choice.
-  const canPromote = d => qBound(d) && d.status === "filed" && !d.standing;
+  const canPromote = d => qBound(d) && (d.status === "filed" || hubDone(d)) && !d.standing;
   // pm-pure:end
 
   // An act note keeps its kind (the server refuses a change to or from act): its form offers no kind and its Save
@@ -2857,9 +2859,9 @@ ul.hist .sch-line{display:block}
         : el("p", {class:"status", role:"status", text: (APPROVAL_SAID[d.status] || String(d.status || "Decided")) + (d.decided_at ? " " + when(d.decided_at) : "") + "."}));
   }
 
-  // A question the owner has answered takes a new answer: one waiting for the PM, and one the hub filed into its record
-  // (the server files the new answer again).
-  const reanswerable = d => d.status === "answered" || d.status === "filed";
+  // A question the owner has answered takes a new answer: one waiting for the PM, and one the hub filed into its record,
+  // read by its asker or not (the server files the new answer again, and reopens one the hub marked done).
+  const reanswerable = d => d.status === "answered" || d.status === "filed" || hubDone(d);
   // Who reads a filed answer: the session that asked it, or the PM when the PM asked it (or no session is named).
   const filedFor = d => typeof d.from === "string" && d.from && d.from !== "pm" && d.from !== "you" ? d.from : "the PM";
   function card(d){
@@ -2956,7 +2958,7 @@ ul.hist .sch-line{display:block}
       parts.push(el("div", {class:"ans"},
         el("div", {}, el("b", {text: "Your answer: "}), pick, a.choice === rec ? " (the recommendation)" : ""),
         a.note ? el("div", {text: a.note}) : null,
-        el("div", {class:"status", text: (a.at ? "Submitted " + when(a.at) : "") + (d.status === "logged" ? " · logged" : d.status === "done" ? " · done, no ruling needed" : d.status === "filed" ? " · filed in " + (d.record && typeof d.record.id === "string" ? d.record.id : "its record") + " · waiting for " + filedFor(d) + " to read it" : qBound(d) ? " · waiting to be filed in " + (typeof d.record.id === "string" ? d.record.id : "its record") : " · waiting for the PM to log it") + (qBound(d) && d.standing ? " · a standing rule, for the PM to log" : "")})
+        el("div", {class:"status", text: (a.at ? "Submitted " + when(a.at) : "") + (d.status === "logged" ? " · logged" : hubDone(d) ? " · filed in " + (d.record && typeof d.record.id === "string" ? d.record.id : "its record") + " · done by the hub once " + filedFor(d) + " had it" : d.status === "done" ? " · done, no ruling needed" : d.status === "filed" ? " · filed in " + (d.record && typeof d.record.id === "string" ? d.record.id : "its record") + " · waiting for " + filedFor(d) + " to read it" : qBound(d) ? " · waiting to be filed in " + (typeof d.record.id === "string" ? d.record.id : "its record") : " · waiting for the PM to log it") + (qBound(d) && d.standing ? " · a standing rule, for the PM to log" : "")})
       ));
       if (canPromote(d)) {
         // A filed answer made a standing rule afterwards: the answer route with standing and no choice.

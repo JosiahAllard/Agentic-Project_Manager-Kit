@@ -1507,8 +1507,37 @@ class DomTest(unittest.TestCase):
                  ({"status": "filed", "record": rec, "standing": {"at": NOW, "via": "web"}}, False),
                  ({"status": "answered", "record": rec}, False),
                  ({"status": "logged", "record": rec}, False),
-                 ({"status": "filed"}, False)]
+                 ({"status": "filed"}, False),
+                 # one the hub marked done once its asker had it is still promoted; its asker's own
+                 # done is not
+                 ({"status": "done", "record": rec, "done_by": "hub"}, True),
+                 ({"status": "done", "record": rec}, False),
+                 ({"status": "done", "record": rec, "done_by": "hub",
+                   "standing": {"at": NOW, "via": "web"}}, False)]
         self.assertEqual(js("items.map(canPromote)", [c for c, _ in cases]), [w for _, w in cases])
+
+    def test_a_card_the_hub_marked_done_says_so_and_still_takes_a_new_answer(self):
+        base = dict(LISTS["questions"]["Q-1"], record=self.REC, filed_as="pulled", filed_at=NOW,
+                    answer={"choice": 0, "label": "one", "note": "", "at": NOW}, done_at=NOW)
+        lists = {"questions": {"Q-1": dict(base, status="done", done_by="hub", **{"from": "zeta"}),
+                               "Q-2": dict(base, status="done", done_why="read")}}
+        got = dom("""
+            await start();
+            await click($("#tabs [data-f=logged]"));
+            const out = {};
+            for (const id of ["Q-1", "Q-2"]) {
+              await click($("#row-" + id));         // the list is rows; the card is in the detail pane
+              out[id] = { said: text($("#q-" + id)), buttons: $$("#q-" + id + " button").map(text) };
+            }
+            return { hub: out["Q-1"].said, own: out["Q-2"].said,
+                     change: out["Q-1"].buttons, other: out["Q-2"].buttons };
+        """, snapshot(collections=lists))
+        self.assertIn("filed in EX-1 · done by the hub once zeta had it", got["hub"])
+        self.assertIn("Change answer", got["change"])
+        self.assertIn("Make it a standing rule", got["change"])
+        self.assertIn("done, no ruling needed", got["own"])
+        self.assertNotIn("Change answer", got["other"])
+        self.assertNotIn("Make it a standing rule", got["other"])
 
     def test_a_bound_question_offers_the_standing_box_and_sends_it_ticked(self):
         lists = {"questions": {
