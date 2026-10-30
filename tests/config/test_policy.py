@@ -32,12 +32,12 @@ class HeavyTest(TreeCase):
     def test_godot_is_heavy_by_any_path_and_case(self):
         entries = policy.heavy_programs()
         for prog in ('godot', 'C:\\Tools\\Godot_v4.4-stable_mono_win64.exe', '/opt/godot/godot.x86_64'):
-            self.assertEqual(policy.heavy_match(prog, [], entries)['kind'], 'engine-run', prog)
+            self.assertEqual(policy.heavy_match(prog, [], entries)['kind'], 'app-run', prog)
 
     def test_godot_glob_names_godot_builds_only(self):
         entries = policy.heavy_programs()
         for prog in ('godot.exe', 'Godot_v4.3-stable_win64_console.exe', 'godot_mono'):
-            self.assertEqual(policy.heavy_match(prog, [], entries)['kind'], 'engine-run', prog)
+            self.assertEqual(policy.heavy_match(prog, [], entries)['kind'], 'app-run', prog)
         for prog in ('godotenv', 'godotenv.exe', 'godot-tools', 'godots'):
             self.assertIsNone(policy.heavy_match(prog, [], entries), prog)
 
@@ -123,7 +123,7 @@ class LinuxHeavyTest(unittest.TestCase):
                            ('flatpak', ['--user', 'run', 'org.godotengine.Godot']),
                            ('/usr/bin/flatpak', ['run', '--branch=stable', 'org.godotengine.GodotSharp']),
                            ('/var/lib/flatpak/exports/bin/org.godotengine.Godot', ['-e'])):
-            self.assertEqual(self.kind(prog, args), 'engine-run', (prog, args))
+            self.assertEqual(self.kind(prog, args), 'app-run', (prog, args))
 
     def test_flatpak_management_and_other_apps_are_not_heavy(self):
         for prog, args in (('flatpak', ['run', 'org.gnome.Calculator']), ('flatpak', ['list']),
@@ -167,9 +167,9 @@ class WindowsHeavyUnchangedTest(unittest.TestCase):
 
     def test_windows_results_do_not_change(self):
         for prog, args, kind in (
-                ('godot.exe', [], 'engine-run'), ('C:\\Tools\\Godot_v4.4-stable_mono_win64.exe', [], 'engine-run'),
-                ('Godot_v4.3-stable_win64_console.exe', ['--headless'], 'engine-run'),
-                ('godot_mono', [], 'engine-run'), ('Godot.AppImage', [], 'engine-run'),
+                ('godot.exe', [], 'app-run'), ('C:\\Tools\\Godot_v4.4-stable_mono_win64.exe', [], 'app-run'),
+                ('Godot_v4.3-stable_win64_console.exe', ['--headless'], 'app-run'),
+                ('godot_mono', [], 'app-run'), ('Godot.AppImage', [], 'app-run'),
                 ('blender.exe', ['-b', 'x.blend'], 'render'), ('blender', ['--background'], 'render'),
                 ('godot4.exe', [], None), ('godot4', [], None), ('Godot4.exe', ['--path', 'game'], None),
                 ('godot3.exe', [], None), ('godotenv.exe', [], None), ('blender.exe', ['x.blend'], None),

@@ -47,11 +47,11 @@ DOTNET_BUILDS = ['build', 'test', 'publish', 'run', 'pack', 'msbuild', 'vstest']
 GRADLE_INFO = ['--version', '-v', '--help', '-h', '-?', '--stop', '--status']
 
 HEAVY_DEFAULTS = (
-    {'program': 'godot', 'kind': 'engine-run', 'when_args': [], 'unless_args': [],
+    {'program': 'godot', 'kind': 'app-run', 'when_args': [], 'unless_args': [],
      'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
-    {'program': 'godot.*', 'kind': 'engine-run', 'when_args': [], 'unless_args': [],
+    {'program': 'godot.*', 'kind': 'app-run', 'when_args': [], 'unless_args': [],
      'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
-    {'program': 'godot_*', 'kind': 'engine-run', 'when_args': [], 'unless_args': [],
+    {'program': 'godot_*', 'kind': 'app-run', 'when_args': [], 'unless_args': [],
      'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
     {'program': 'blender*', 'kind': 'render', 'when_args': ['-b', '--background'], 'unless_args': [],
      'why': 'machine_lock classify.py render: a background Blender run'},
@@ -83,11 +83,11 @@ BLENDER_FLATPAKS = ['org.blender.Blender']
 BLENDER_BACKGROUND = ['-b', '--background']
 
 LINUX_HEAVY_DEFAULTS = (
-    {'program': 'godot[0-9]*', 'kind': 'engine-run', 'when_args': [], 'unless_args': [],
+    {'program': 'godot[0-9]*', 'kind': 'app-run', 'when_args': [], 'unless_args': [],
      'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
-    {'program': 'org.godotengine.godot*', 'kind': 'engine-run', 'when_args': [], 'unless_args': [],
+    {'program': 'org.godotengine.godot*', 'kind': 'app-run', 'when_args': [], 'unless_args': [],
      'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
-    {'program': 'flatpak', 'kind': 'engine-run', 'when_args': GODOT_FLATPAKS, 'also_args': [['run']],
+    {'program': 'flatpak', 'kind': 'app-run', 'when_args': GODOT_FLATPAKS, 'also_args': [['run']],
      'unless_args': [], 'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
     {'program': 'org.blender.blender*', 'kind': 'render', 'when_args': BLENDER_BACKGROUND,
      'unless_args': [], 'why': 'machine_lock classify.py render: a background Blender run'},

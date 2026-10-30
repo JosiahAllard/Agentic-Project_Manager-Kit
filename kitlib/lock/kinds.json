@@ -1,8 +1,8 @@
 {
- "_note": "The kinds table: one per kind, read by the lock and by gate.py. cpu: a whole number of cpu slots 1..the layout agent_cap, set only by gate.py --measure and a reviewed commit; a run may ask for fewer (--cores), never more. medium (medium_cores) and heavy (the half cap, or every core inside an owner whole hold) stay as aliases. gpu: 0 (none) or pool (the whole gpu pool; share true lets --gpu-share training take one gpu slot). warn_min: a WARNING past this, never a kill. Sizes change only by a PM-reviewed commit.",
+ "_note": "The kinds table: one per kind, read by the lock and by gate.py. cpu: a whole number of cpu slots 1..the layout agent_cap, set only by gate.py --measure and a reviewed commit; a run may ask for fewer (--cores), never more. medium (medium_cores) and heavy (the half cap, or every core inside an owner whole hold) stay as aliases. gpu: 0 (none) or pool (the whole gpu pool; share true lets --gpu-share training take one gpu slot). warn_min: a WARNING past this, never a kill. Sizes change only by a PM-reviewed commit. aliases: a retired name and the kind it books now (generic names); a caller passing one still books, and a record written under one compares equal to the kind.",
  "kinds": {
-  "engine-test": {"cpu": "medium", "gpu": 0, "warn_min": 30},
-  "engine-run": {"cpu": "medium", "gpu": 0, "warn_min": 30},
+  "test": {"cpu": "medium", "gpu": 0, "warn_min": 30},
+  "app-run": {"cpu": "medium", "gpu": 0, "warn_min": 30},
   "build": {"cpu": "medium", "gpu": 0, "warn_min": 60},
   "graph-build": {"cpu": "heavy", "gpu": 0, "warn_min": 120},
   "daily-full": {"cpu": "heavy", "gpu": 0, "warn_min": 120},
@@ -11,5 +11,9 @@
   "render": {"cpu": "medium", "gpu": "pool", "share": true, "warn_min": 30},
   "measure": {"cpu": "heavy", "gpu": "pool", "share": false, "warn_min": 180},
   "maint-lint": {"cpu": 1, "gpu": 0, "warn_min": 15}
+ },
+ "aliases": {
+  "engine-test": {"to": "test", "why": "the generic name for a repository's test run"},
+  "engine-run": {"to": "app-run", "why": "the generic name for a run of the application (a game engine, a live client)"}
  }
 }

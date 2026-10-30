@@ -831,9 +831,9 @@ $vm = $o + "kitvm@$ip"
    `scp @o <scratch>\<name>.tar "kitvm@${ip}:kit-runs/"`;
    `ssh @vm "cd ~/kit-runs && rm -rf <name> && mkdir <name> && tar -xf <name>.tar -C <name> && rm <name>.tar"`.
 2. Run named tests under the host's machine lock. The VM is outside the lock's view; its 4 vCPUs
-   are two of the host's cpu slots, so the run is `engine-test`, and the resource keeps two VM
+   are two of the host's cpu slots, so the run is `test`, and the resource keeps two VM
    runs from sharing the VM:
-   `python <kit>/tools/machine_lock.py run --repo <repo> --slug <slug> --kind engine-test --resource vm:kit-linux-ref -- ssh @vm "cd ~/kit-runs/<name> && python3 -m unittest -v <module>[.<Class>] ..." > <scratch>\<log> 2>&1`
+   `python <kit>/tools/machine_lock.py run --repo <repo> --slug <slug> --kind test --resource vm:kit-linux-ref -- ssh @vm "cd ~/kit-runs/<name> && python3 -m unittest -v <module>[.<Class>] ..." > <scratch>\<log> 2>&1`
    (in PowerShell, `@vm` splats; write the ssh options out in Git Bash). The containment tier the
    tests saw: `python3 -c "from kitlib.platform.linux import contain; print(contain.probe().text)"`
    in the same folder.

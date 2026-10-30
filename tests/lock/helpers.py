@@ -25,6 +25,7 @@ if os.name == "nt":
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 KINDS = {"kinds": {
     "engine-test": {"cpu": "medium", "gpu": 0, "warn_min": 30},
+    "test": {"cpu": "medium", "gpu": 0, "warn_min": 30},
     "cpu-eval": {"cpu": "heavy", "gpu": 0, "warn_min": 60},
     "local-ai": {"cpu": "medium", "gpu": "pool", "share": True, "warn_min": 30},
     "measure": {"cpu": "heavy", "gpu": "pool", "share": False, "warn_min": 60},

@@ -82,6 +82,8 @@
   - Agent holds add `state` (upcoming, open or claiming) and `lapses_at`.
 - **`game`**: `kitlib.lock.game.state`, with fields {enabled, games [{exe, name, pin, anti_cheat}], running, hold, slots, would_take, pinned, anti_cheat_services}.
 - **`kinds`**: the kinds table, with `kinds_error`. A kind's `cpu` is a whole number of cpu slots or the alias `medium` or `heavy` (kitlib/lock/kinds.py). A whole number past the layout's `agent_cap` empties `kinds` and sets `kinds_error`.
+  - Kind names are generic: `test` (a repository's test run) and `app-run` (a run of the application: a game engine, a live client) replaced `engine-test` and `engine-run`. kinds.json's top-level `aliases` maps each retired name to its kind: a run or hold that passes one books the kind (`kinds.resolve`), and a record written under one compares equal to it (`kinds.canonical`): a hold's claim, `Store.history_expect`, `gate.py --measure` and a landing's booked kind. A record keeps the name it was written with.
+  - Known limit: a kit copy from before the rename (an older plugin folder still in use) has its own kinds.json with the old names only. It refuses `test` and `app-run` as unknown kinds, and cannot claim a hold made as `test`. It ends when those copies are retired.
 - **`stats`**: {range {since, until}, rows [{kind, repo, runs, done, failed, interrupted, held_s {median, p90, max}, wait_s {median, max}, cpu_s, peak_cpu_cores, peak_mem_mb}]}.
   - The rows come from the history lines (`Store.history_records`) in the range.
   - `failed` means the command exited non-zero. `interrupted` means it was stopped, cancelled or killed.

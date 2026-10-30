@@ -1026,7 +1026,7 @@ class Slot:
         self.launcher = Launcher(self)
 
     def held_text(self):
-        """'engine-test holds cpu slots 0-1 for repo/slug (engine-test, run r-...); the command
+        """'test holds cpu slots 0-1 for repo/slug (test, run r-...); the command
         runs on cores 0-3'"""
         if self.nested:
             return "nested: run %s already holds what it needs; the command runs in its job" % self.id
@@ -1634,7 +1634,7 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
 
 @contextlib.contextmanager
 def slot(kind, repo, slug, **kw):
-    """with slot("engine-test", repo, slug) as launch: launch.run([...]) -- book() as a context
+    """with slot("test", repo, slug) as launch: launch.run([...]) -- book() as a context
     manager yielding the Launcher; released on leaving the block."""
     s = book(kind, repo, slug, **kw)
     with s:

@@ -514,7 +514,7 @@ class BaseNamesAnotherKind(NodeCase):
         self.assert_landed_here(out)
         self.assertEqual(self.repo.git('rev-parse', out.merge + '^1'), moved)
         first, second = self.landing_books()
-        self.assertEqual((first['kind'], second['kind']), ('engine-test', 'cpu-eval'))
+        self.assertEqual((first['kind'], second['kind']), ('test', 'cpu-eval'))
         self.assertNotIn('cores', second)       # the base's kind at its own size
         self.assertEqual(second['resource'], land.queue_key(lander.lock.common))
         self.assertEqual(second['priority'], 'land')
@@ -522,7 +522,7 @@ class BaseNamesAnotherKind(NodeCase):
         self.assertFalse(second['no_wait'])
         line = [s for s in self.said if s.startswith('the base %s books' % moved[:10])]
         self.assertEqual(len(line), 1, self.said)
-        self.assertIn("releasing the landing's engine-test run and booking a cpu-eval run",
+        self.assertIn("releasing the landing's test run and booking a cpu-eval run",
                       line[0])
         self.assertLess(self.said.index(line[0]), second['said'])
         self.assertEqual(routes.names(), ['plan'])
@@ -542,10 +542,26 @@ class BaseNamesAnotherKind(NodeCase):
 
     def test_a_base_with_the_same_kind_books_once(self):
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
-        self.move_main('engine-test')
+        self.move_main('test')
         out = self.node_lander(Routes(where=None), tip).run()
         self.assert_landed_here(out)
-        self.assertEqual([b['kind'] for b in self.landing_books()], ['engine-test'])
+        self.assertEqual([b['kind'] for b in self.landing_books()], ['test'])
+
+    def test_a_base_naming_the_same_kind_by_its_retired_name_books_once(self):
+        """The base's config names the kind the landing booked under its retired name (an alias
+        in the lock's kinds table): it is the same kind, so no release and second booking, and
+        a node-routed gate is not sized again. Red before: the names as written differed."""
+        with open(self.kinds_path, encoding='utf-8') as f:
+            doc = json.load(f)
+        doc['aliases'] = {'old-test': {'to': 'test', 'why': 'renamed'}}
+        with open(self.kinds_path, 'w', encoding='utf-8') as f:
+            json.dump(doc, f)
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        self.move_main('old-test')
+        out = self.node_lander(Routes(where=None), tip).run()
+        self.assert_landed_here(out)
+        self.assertEqual([b['kind'] for b in self.landing_books()], ['test'])
+        self.assertFalse([s for s in self.said if 'books "gate".kind' in s], self.said)
 
     def test_a_node_routed_landing_asks_the_nodes_again_at_the_bases_kind(self):
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
@@ -561,7 +577,7 @@ class BaseNamesAnotherKind(NodeCase):
         [run] = [c for c in routes.calls if c[0] == 'run']
         self.assertEqual(run[6]['kind'], 'cpu-eval')
         [b] = self.landing_books()              # the node gates: the 1-slot run stays
-        self.assertEqual((b['kind'], b['cores']), ('engine-test', 1))
+        self.assertEqual((b['kind'], b['cores']), ('test', 1))
 
     def test_a_base_kind_that_cannot_be_sized_gates_here_at_that_kind(self):
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
@@ -576,7 +592,7 @@ class BaseNamesAnotherKind(NodeCase):
         self.assertEqual(len(why), 1, self.said)
         self.assertIn('cpu-eval cannot be sized here', why[0])
         self.assert_full_rebook(lander)
-        self.assertEqual([b['kind'] for b in self.landing_books()], ['engine-test', 'cpu-eval'])
+        self.assertEqual([b['kind'] for b in self.landing_books()], ['test', 'cpu-eval'])
 
 
 if __name__ == '__main__':
