@@ -18,6 +18,7 @@ from .world import event
 COORDINATOR = {context.ROLE_ENV: 'coordinator'}
 PM = {context.ROLE_ENV: 'pm'}
 OID = 'a' * 40
+YOURS = '<your worktree>'                      # backlogrole.YOUR_WORKTREE, written out
 
 
 class Rec(dict):
@@ -490,7 +491,7 @@ class OwnPullInstead(HeldStore):
                                   cwd=self.w.main))
         self.assertIn('The record in the store %s is pulled by kit/wt, but the run is in no linked worktree'
                       % self.store, d.reason)
-        self.assertEqual(d.instead, self.form('set X-1 --scope s', at=backlogrole.YOUR_WORKTREE))
+        self.assertEqual(d.instead, self.form('set X-1 --scope s', at=YOURS))
 
     def test_a_lead_row_or_a_reviewer_gets_no_form(self):
         self.held[self.store] = pulled_by('kit/wt')
@@ -520,14 +521,14 @@ class AsFromOutsideItsWorktree(HeldStore):
 
     def filled(self, d, tool='Bash'):
         """The refusal's Instead with the session's worktree filled in, run from the main checkout."""
-        self.assertIn(backlogrole.YOUR_WORKTREE, d.instead)
-        return self.cmd(d.instead.replace(backlogrole.YOUR_WORKTREE, self.wt), tool=tool, cwd=self.w.main)
+        self.assertIn(YOURS, d.instead)
+        return self.cmd(d.instead.replace(YOURS, self.wt), tool=tool, cwd=self.w.main)
 
     def test_the_instead_names_the_form_that_passes_for_its_own_pull(self):
         for tool in ('Bash', 'PowerShell'):
             with self.subTest(tool=tool):
                 d = self.refused(self.run_as('kit/wt', tool))
-                self.assertEqual(d.instead, self.form('set X-1 --scope s', at=backlogrole.YOUR_WORKTREE, tool=tool))
+                self.assertEqual(d.instead, self.form('set X-1 --scope s', at=YOURS, tool=tool))
                 self.assertIn('--as alone never shows the branch is yours', d.reason)
                 self.assertNotIn('Ask a session whose role may take it', d.reason)
                 self.allowed(self.filled(d, tool))
@@ -541,14 +542,14 @@ class AsFromOutsideItsWorktree(HeldStore):
         # --as its own branch on another branch's pull: no form, only the read
         d = self.refused(self.run_as('kit/wt'))
         self.assertTrue(d.instead.endswith('show X-1'), d.instead)
-        self.assertNotIn(backlogrole.YOUR_WORKTREE, d.instead)
+        self.assertNotIn(YOURS, d.instead)
 
     def test_no_placeholder_when_the_run_shows_another_branch(self):
         # -C a linked worktree on kit/wt with --as kit/other: the run's folder says another branch
         self.held = {self.wt: None, self.store: pulled_by('kit/other')}
         d = self.refused(self.cmd('python "%s" -C "%s" --as kit/other set X-1 --scope s' % (self.tool, self.wt),
                                   cwd=self.w.main))
-        self.assertNotIn(backlogrole.YOUR_WORKTREE, d.instead)
+        self.assertNotIn(YOURS, d.instead)
         self.assertNotIn('kit/other', d.instead)
 
 
