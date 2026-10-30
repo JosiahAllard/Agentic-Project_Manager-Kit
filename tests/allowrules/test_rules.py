@@ -97,6 +97,17 @@ class AllowedTest(unittest.TestCase):
         for tail in (' --lane full', ' --full'):
             self.assertIsNone(decide(submit(tail=tail)))
 
+    def test_wait_result_before_submit_allowed_and_land_takes_it(self):
+        """land.py --wait-result --submit (docs/gate.md "Submitting a landing") matches the
+        allow line as it is, and land.py parses it."""
+        for script in SPELLINGS:
+            with self.subTest(script=script):
+                self.assertEqual(decide(submit(script, middle='kit/a --reviewed-by r1 --wait-result')),
+                                 'allow')
+        a = land.parser().parse_args(['-C', R, 'kit/a', '--expect-tip', 'abc123', '--wait-result',
+                                      '--submit'])
+        self.assertEqual((a.wait_result, a.submit, a.wait), (True, True, None))
+
     def test_batch_two_branches_allowed(self):
         self.assertEqual(decide('%s -C %s kit/a kit/b --expect-tip a1 --expect-tip b2 --summary x-and-y --submit'
                                 % (P, R)), 'allow')

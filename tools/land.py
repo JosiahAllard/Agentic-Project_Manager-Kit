@@ -3,7 +3,7 @@
 
   land.py BRANCH [BRANCH ...] --expect-tip SHA [--expect-tip SHA ...] [--expect-main SHA]
           [-C DIR] [--summary TEXT] [--full] [--fresh] [--wait SECONDS]
-          [--log-dir D] [--keep-branch] [--reviewed-by REVIEWER_ID ... --submit]
+          [--log-dir D] [--keep-branch] [--reviewed-by REVIEWER_ID ... [--wait-result] --submit]
       from the main checkout: take the landing's turn in the machine lock's queue (one booking,
       whose slot the merged gate runs in) and the landing lock, fetch, merge each branch onto
       <remote>/<main> as it is then (main moved on since --expect-main: said, never refused) with
@@ -25,7 +25,11 @@
       --reviewed-by per branch, before --submit, in --expect-tip's order: the reviewer id of its
       verdict queued at its tip. Missing or miscounted: USAGE (2) with an `Instead:` line, the
       command with the queued ids; an id that is not the reviewer, or no verdict queued at the
-      tip: REFUSED (4); nothing written (docs/gate.md "Submitting a landing")
+      tip: REFUSED (4); nothing written (docs/gate.md "Submitting a landing").
+      --wait-result (before --submit): once SUBMITTED is printed, wait for the landing to end
+      and print its outcome lines, then each branch's RESULT line and record as gate.py
+      wait-result prints them; the exit code is the last record's (kitlib.gate.submit.follow).
+      Run it as a background command: it lasts as long as the landing
   land.py --queue [-C DIR]
       read-only: the landing lock's holder and the landings in the machine lock's queue
   land.py BRANCH [BRANCH ...] --check-strict [-C DIR]
@@ -123,6 +127,9 @@ def parser():
                    metavar='REVIEWER_ID',
                    help='--submit: the reviewer id of each BRANCH\'s verdict queued at its tip, '
                         'in the same order (required)')
+    p.add_argument('--wait-result', dest='wait_result', action='store_true',
+                   help='--submit: then wait for the landing\'s result and print it, as '
+                        'gate.py wait-result does, after the landing\'s own outcome lines')
     p.add_argument('--submit', action='store_true',
                    help='start the landing detached; print the wait-result command and exit 0')
     p.add_argument(submitmod.FLAG, dest='submitted', metavar='PAYLOAD', help=argparse.SUPPRESS)
@@ -145,7 +152,8 @@ def again_args(a, root):
     if a.log_dir:
         args += ['--log-dir', a.log_dir]
     return args + [flag for flag, on in (('--full', a.full), ('--fresh', a.fresh),
-                                         ('--keep-branch', a.keep_branch)) if on]
+                                         ('--keep-branch', a.keep_branch),
+                                         ('--wait-result', a.wait_result)) if on]
 
 
 def child_args(a, root):
@@ -206,6 +214,8 @@ def main(argv):
         p.error('--apply goes with --sweep-landed')
     if a.reviewed_by and not a.submit:
         p.error('%s goes with --submit' % submitmod.REVIEWED_BY)
+    if a.wait_result and not a.submit:
+        p.error('--wait-result goes with --submit')
     if a.sweep_landed:
         if (a.branches or a.expect_main or a.expect_tip or a.queue or a.keep_branch or a.full
                 or a.fresh or a.summary or a.wait is not None or a.log_dir
@@ -236,10 +246,19 @@ def main(argv):
     if a.submit and a.submitted:
         p.error('--submit starts the landing that --submitted runs; not both')
     if a.submit:
-        return emit(submitmod.submit(
+        out = submitmod.submit(
             root, __file__, child_args(a, root), a.branches, a.expect_tip,
             expect_main=a.expect_main, reviewed_by=a.reviewed_by,
-            again=lambda ids: submitmod.again_line('land.py', again_args(a, root), ids)))
+            again=lambda ids: submitmod.again_line('land.py', again_args(a, root), ids))
+        code = emit(out)        # flushed first: a killed wait leaves the wait-result command
+        if not a.wait_result or out.code != G.OK:
+            return code
+        try:
+            return emit(submitmod.follow(root, a.branches, a.expect_tip, out.facts.get('output')))
+        except KeyboardInterrupt:
+            wait = out.lines[-1].split(' wait: ', 1)[-1] if out.lines else 'gate.py wait-result'
+            print('Ctrl+C: the wait stopped; the landing goes on: %s' % wait, flush=True)
+            return 130
     submitted = None
     if a.submitted:
         submitted = restore(root, a)
