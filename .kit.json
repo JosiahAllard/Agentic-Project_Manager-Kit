@@ -1,5 +1,5 @@
 {
-  "landing": {"shared_paths": ["kitlib/*", "boot/*", "hosts/*", "githooks/*", "kit.json", "hosts.json"], "self_review_max_lines": 150},
+  "landing": {"shared_paths": ["kitlib/*", "boot/*", "hosts/*", "githooks/*", "kit.json", "hosts.json"], "self_review_max_lines": 150, "gate_once": true},
   "maint_lint": {"gate_time": {"prefix": "KIT-GATE-SLOW", "bound_s": 900, "session": "kit"}},
   "roles": {"lander": {"edit_main_checkout": true, "why": "landers fetch and fast-forward main from their worktree"}},
   "repo": {"name": "Agentic-Project_Manager-Kit"},
