@@ -290,6 +290,13 @@ class TheReadings(Fixture):
         self.assertEqual(code, 0, out)
         self.assertEqual(self.line(out, 'repo '), 'repo      %s' % os.path.normpath(self.root).replace('\\', '/'))
 
+    def test_a_checkout_path_with_a_space_is_printed_whole_in_forward_slashes(self):
+        top = 'Z:%smy dir%srepo' % (chr(92), chr(92))
+        with mock.patch.object(preflight.repo, 'toplevel', return_value=(top, None)),                 mock.patch.object(preflight.report, 'report', return_value=['repo      ' + top]):
+            code, out = self.run_preflight()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.line(out, 'repo '), 'repo      Z:/my dir/repo')
+
     def test_no_printed_path_has_a_backslash(self):
         out = self.run_preflight()[1]
         self.assertNotRegex(out, r'[A-Za-z]:\\')

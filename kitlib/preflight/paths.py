@@ -10,7 +10,7 @@ _MANGLED = re.compile(r'^([A-Za-z]):([^\\/].*)$')
 
 def forward(text, *known):
     """`text` with every Windows drive path (and each path in `known`, spaces included) in forward
-    slashes. Nothing else changes."""
+    slashes. Any `X:` followed by a backslash token in `text` is rewritten, whatever it is."""
     for path in known:
         if path and '\\' in path:
             text = text.replace(path, path.replace('\\', '/'))

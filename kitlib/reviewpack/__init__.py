@@ -538,10 +538,7 @@ def pack(path, branch, base=None, diff=None):
     if fixed:
         return Outcome(USAGE, ['%s: refused: %s' % (TOOL, paths.mangled_message(path, fixed))])
     try:
-        out = _pack(lines, path, branch, base, diff)
-        if not diff:
-            out.lines[:] = [paths.forward(line) for line in out.lines]
-        return out
+        return _pack(lines, path, branch, base, diff)
     except Stop as stop:
         lines.append(stop.line)
         return Outcome(USAGE, lines)

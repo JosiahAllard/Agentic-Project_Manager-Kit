@@ -88,7 +88,7 @@ def main(argv=None, lock_reader=None, home=None):
             board_lines = board.lines(top, cfg, KIT, base=a.base)
             rel = board.state_file(cfg)
     except ConfigError as e:
-        print_safe('preflight: refused: kit configuration: %s' % e)
+        print_safe(paths.forward('preflight: refused: kit configuration: %s' % e))
         return USAGE
     for line in lines + (board_lines or []):
         print_safe(paths.forward(line, top))
@@ -98,7 +98,7 @@ def main(argv=None, lock_reader=None, home=None):
             print_safe('preflight: refused: %s' % why)
             return USAGE
         size = state.write(where, time.strftime('%Y-%m-%d %H:%M'), '\n'.join(board.state_lines(lines, board_lines)))
-        print_safe(paths.forward('state written: %s (%d bytes)' % (where, size)))
+        print_safe(paths.forward('state written: %s (%d bytes)' % (where, size), where))
     return 0
 
 
