@@ -2,7 +2,9 @@
 session_host.py and executable.py).
 
   native_codex(explicit, environ)   the absolute codex.exe to run: `explicit`, else PM_KIT_CODEX_EXE,
-                                    else codex.exe on PATH; a relative path, a missing file or a
+                                    else codex.exe on PATH, else the desktop app's own
+                                    %LOCALAPPDATA%\\OpenAI\\Codex\\bin\\<hash>\\codex.exe, the newest
+                                    by mtime (desktop_codex); a relative path, a missing file or a
                                     .cmd/.bat shim is refused (no shell ever runs it)
   ReadOnlyAppServer(argv, timeout, popen)
         a context manager over `codex app-server proxy`: it attaches to the running app-server,
@@ -33,9 +35,27 @@ READ_METHODS = frozenset({'thread/list', 'thread/loaded/list', 'account/rateLimi
 RECORD = ('id', 'sessionId', 'name', 'cwd', 'status', 'updatedAt', 'source', 'agentRole', 'parentThreadId')
 
 
+def desktop_codex(environ=None):
+    """The Codex desktop app's own codex.exe: the newest by mtime of
+    %LOCALAPPDATA%\\OpenAI\\Codex\\bin\\<hash>\\codex.exe (an update adds a <hash> folder; a folder
+    without codex.exe is skipped). None when LOCALAPPDATA is unset or no folder holds one."""
+    env = os.environ if environ is None else environ
+    local = env.get('LOCALAPPDATA')
+    if not local:
+        return None
+    found = []
+    for exe in Path(local, 'OpenAI', 'Codex', 'bin').glob('*/codex.exe'):
+        try:
+            found.append((exe.stat().st_mtime, str(exe)))
+        except OSError:
+            continue
+    return max(found)[1] if found else None
+
+
 def native_codex(explicit=None, environ=None):
     env = os.environ if environ is None else environ
-    selected = explicit or env.get(EXE_ENV) or shutil.which('codex.exe', path=env.get('PATH', ''))
+    selected = (explicit or env.get(EXE_ENV) or shutil.which('codex.exe', path=env.get('PATH', ''))
+                or desktop_codex(env))
     if not selected:
         raise ValueError('codex.exe is unavailable; provide an absolute %s or --codex-exe path' % EXE_ENV)
     path = Path(selected)

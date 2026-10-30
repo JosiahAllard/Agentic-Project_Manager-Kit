@@ -1,16 +1,14 @@
-"""hosts.codex.adapter.plugin_copy: plugin_refresh --apply mirrors the export's hosts/codex/shell
-parts into the Codex marketplace copy and cache config.toml names, as the step the Codex adapter
-hands kitlib.pluginsource.refresh through tools/_host.py (docs/plugin-source.md "Host plugin
-copies"). A fake Codex home and marketplace under a temp folder only: no real ~/.codex is read."""
+"""hosts.codex.adapter.plugin_copy's Step as kitlib.pluginsource.refresh runs it, the step the Codex
+adapter hands it through tools/_host.py (docs/plugin-source.md "Host plugin copies"): a Codex home
+that names only the old hand-made pm-kit-local copy gets the switch steps, and that copy is never
+written again. A fake Codex home and marketplace under a temp folder only: no real ~/.codex is read."""
 import datetime
 import json
 import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
-from unittest import mock
 
 from hosts.codex.adapter import ADAPTER
 from hosts.codex.adapter import plugin_copy as codex
@@ -22,13 +20,20 @@ from tests.host.conformance import load_tool
 from tests.pluginsource import test_tool
 from tests.pluginsource.test_tool import TOOL, tree
 
+SWITCH = 'codex: the pm-kit plugin is the hand-made pm-kit-local copy'
 NOW = datetime.datetime(2026, 10, 11, 9, 0)
 UNMARKED = {}
 OLD = {'skills/old/SKILL.md': 'old skill\n', 'agents/kit-a.toml': 'old = 1\n',
        'hooks/hooks.json': '{"old": true}\n'}
 NEW = {'skills/new/SKILL.md': 'new skill\n', 'agents/kit-a.toml': 'new = 1\n',
-       'hooks/hooks.json': '{"new": true}\n', 'plugin.json': '{"version": "9.9.9"}\n',
-       'boot/hook.py': 'print(1)\n'}
+       'hooks/hooks.json': '{"new": true}\n', 'plugin.json': '{"version": "9.9.9"}\n'}
+
+
+def link(target, at):
+    """A junction at `at` to folder `target` (no admin right needed)."""
+    r = subprocess.run(['cmd', '/c', 'mklink', '/J', at, target], capture_output=True)
+    if r.returncode != 0:
+        raise unittest.SkipTest('cannot make a junction here: %r' % r.stderr)
 
 
 def write_files(top, files):
@@ -39,222 +44,32 @@ def write_files(top, files):
             fh.write(text)
 
 
-def parts(top, names=('skills', 'agents', 'hooks')):
-    """{relative path: bytes} of the mirrored parts under `top`."""
-    out = {}
-    for n in names:
-        for rel, data in tree(os.path.join(top, n)).items():
-            out[os.path.join(n, rel)] = data
-    return out
-
-
-def link(target, at):
-    """A junction at `at` to folder `target` (no admin right needed)."""
-    r = subprocess.run(['cmd', '/c', 'mklink', '/J', at, target], capture_output=True)
-    if r.returncode != 0:
-        raise unittest.SkipTest('cannot make a junction here: %r' % r.stderr)
-
-
 class Home(object):
     """A fake Codex home: config.toml naming pm-kit@pm-kit-local and its marketplace folder, the
     marketplace copy and the 0.4.0 cache holding OLD."""
 
-    def __init__(self, base, entry=None, cache=True, config=None):
+    def __init__(self, base):
         self.home = os.path.join(base, 'codex-home')
         self.market = os.path.join(base, 'market')
         self.copy = os.path.join(self.market, 'plugins', 'pm-kit')
         self.cache = os.path.join(self.home, 'plugins', 'cache', 'pm-kit-local', 'pm-kit', '0.4.0')
         os.makedirs(self.home)
         with open(os.path.join(self.home, 'config.toml'), 'w', encoding='utf-8') as fh:
-            fh.write(config if config is not None else
-                     "model = 'x'\n\n[marketplaces.pm-kit-local]\nsource = '%s'\n\n"
+            fh.write("model = 'x'\n\n[marketplaces.pm-kit-local]\nsource = '%s'\n\n"
                      "[plugins.\"pm-kit@pm-kit-local\"]\nenabled = true\n" % self.market)
         manifest = os.path.join(self.market, '.agents', 'plugins', 'marketplace.json')
         os.makedirs(os.path.dirname(manifest))
         with open(manifest, 'w', encoding='utf-8') as fh:
             json.dump({'name': 'pm-kit-local', 'plugins': [
-                {'name': 'pm-kit', 'source': entry or {'source': 'local', 'path': './plugins/pm-kit'}}]}, fh)
+                {'name': 'pm-kit', 'source': {'source': 'local', 'path': './plugins/pm-kit'}}]}, fh)
         write_files(self.copy, dict(OLD, **{'plugin.json': '{"version": "0.4.0"}\n'}))
-        if cache:
-            write_files(self.cache, dict(OLD, **{'plugin.json': '{"version": "0.4.0"}\n'}))
-
-    def snapshot(self, base):
-        return tree(base)
-
-
-class Case(unittest.TestCase):
-    def setUp(self):
-        self.base = tempfile.mkdtemp(prefix='kit-codex-')
-        self.addCleanup(gitfixture.rmtree, self.base)
-        self.shell = os.path.join(self.base, 'export', 'hosts', 'codex', 'shell')
-        write_files(self.shell, NEW)
-        self.lines = []
-
-    def out(self, line):
-        self.lines.append(line)
-
-    def run_codex(self, h, apply=True, environ=UNMARKED):
-        codex.refresh(self.shell, h.home, self.out, apply=apply, environ=environ)
-
-    def text(self):
-        return '\n'.join(self.lines)
-
-
-class MirrorTest(Case):
-    def test_apply_mirrors_the_parts_into_the_cache_and_the_marketplace_copy(self):
-        h = Home(self.base)
-        self.run_codex(h)
-        want = parts(self.shell)
-        self.assertEqual(parts(h.cache), want)
-        self.assertEqual(parts(h.copy), want)
-        for top in (h.cache, h.copy):                  # no version bump, no other file touched
-            with open(os.path.join(top, 'plugin.json'), encoding='utf-8') as fh:
-                self.assertEqual(json.load(fh)['version'], '0.4.0')
-            self.assertFalse(os.path.exists(os.path.join(top, 'boot')))
-            self.assertEqual(sorted(os.listdir(top)), ['agents', 'hooks', 'plugin.json', 'skills'])
-        self.assertIn('hooks changed', self.text())
-        self.lines = []
-        self.run_codex(h)                              # a second run finds both current
-        self.assertEqual(self.lines.count('codex: cache %s: current' % h.cache), 1, self.text())
-        self.assertNotIn('refreshed', self.text())
-
-    def test_a_dry_run_changes_nothing(self):
-        h = Home(self.base)
-        before = tree(self.base)
-        self.run_codex(h, apply=False)
-        self.assertEqual(tree(self.base), before)
-        self.assertIn('would be replaced', self.text())
-
-    def test_a_missing_cache_is_a_note_and_the_marketplace_copy_is_still_updated(self):
-        h = Home(self.base, cache=False)
-        self.run_codex(h)
-        self.assertIn('no cache folder', self.text())
-        self.assertEqual(parts(h.copy), parts(self.shell))
-        self.assertFalse(os.path.exists(h.cache))
-
-    def test_no_config_is_a_note_and_writes_nothing(self):
-        home = os.path.join(self.base, 'none')
-        codex.refresh(self.shell, home, self.out, apply=True, environ=UNMARKED)
-        self.assertIn('Codex is not set up here', self.text())
-        self.assertFalse(os.path.exists(home))
-
-    def test_a_marked_session_writes_nothing(self):
-        h = Home(self.base)
-        before = tree(self.base)
-        self.run_codex(h, environ={'PM_KIT_ROLE': 'pm'})
-        self.assertEqual(tree(self.base), before)
-        self.assertIn('codex: skipped: a marked session (pm)', self.text())
-
-
-class RefuseTest(Case):
-    def refused(self, h):
-        before = tree(self.base)
-        self.run_codex(h)
-        self.assertEqual(tree(self.base), before)
-        self.assertIn('codex: refused, nothing written', self.text())
-
-    def test_a_source_outside_the_marketplace_is_refused(self):
-        write_files(os.path.join(self.base, 'elsewhere'), dict(OLD, **{'plugin.json': '{"version": "0.4.0"}\n'}))
-        self.refused(Home(self.base, entry={'source': 'local', 'path': './../elsewhere'}))
-        self.assertIn('a path outside the marketplace', self.text())
-
-    def test_a_source_not_starting_dot_slash_is_refused(self):
-        self.refused(Home(self.base, entry='plugins/pm-kit'))      # the folder is there: the form refuses
-        self.assertIn('no local ./ path', self.text())
-
-    def test_an_absolute_source_is_refused(self):
-        self.refused(Home(self.base, entry={'source': 'local', 'path': os.path.join(self.base, 'market',
-                                                                                    'plugins', 'pm-kit')}))
-
-    def test_a_config_without_the_plugin_entry_is_refused(self):
-        h = Home(self.base, config="[marketplaces.pm-kit-local]\nsource = '%s'\n"
-                 % os.path.join(self.base, 'market'))
-        self.refused(h)
-        self.assertIn('[plugins."pm-kit@pm-kit-local"]', self.text())
-
-    def test_a_marketplace_with_no_local_source_is_refused(self):
-        self.refused(Home(self.base, config="[plugins.\"pm-kit@pm-kit-local\"]\nenabled = true\n"
-                          "[marketplaces.pm-kit-local]\nsource = 'https://example.invalid/x.git'\n"))
-
-    def test_a_marketplace_with_only_the_claude_plugin_manifest_is_refused(self):
-        h = Home(self.base)
-        agents = os.path.join(h.market, '.agents')
-        other = os.path.join(h.market, '.claude-plugin')
-        os.makedirs(other)
-        shutil.move(os.path.join(agents, 'plugins', 'marketplace.json'),
-                    os.path.join(other, 'marketplace.json'))
-        shutil.rmtree(agents)
-        self.refused(h)                                # nothing written, nothing deleted
-        self.assertIn('has no .agents/plugins/marketplace.json', self.text())
-
-    def test_a_junction_on_the_way_to_the_cache_is_refused(self):
-        h = Home(self.base, cache=False)
-        real = os.path.join(self.base, 'real-cache')
-        write_files(os.path.join(real, '0.4.0'), OLD)
-        os.makedirs(os.path.dirname(os.path.dirname(h.cache)))
-        link(real, os.path.dirname(h.cache))           # ...\pm-kit-local\pm-kit -> real-cache
-        self.refused(h)
-        self.assertIn('a link or junction at', self.text())
-        self.assertEqual(parts(os.path.join(real, '0.4.0')), {k.replace('/', os.sep): v.encode()
-                                                              for k, v in OLD.items()})
-
-    def test_a_part_that_is_a_junction_is_left_alone(self):
-        h = Home(self.base)
-        real = os.path.join(self.base, 'real-skills')
-        write_files(real, {'keep/SKILL.md': 'keep\n'})
-        shutil.rmtree(os.path.join(h.cache, 'skills'))
-        link(real, os.path.join(h.cache, 'skills'))
-        self.run_codex(h)
-        self.assertIn('is a link or junction, never followed', self.text())
-        self.assertEqual(tree(real), {os.path.join('keep', 'SKILL.md'): b'keep\n'})
-
-
-class SwapTest(Case):
-    def test_a_busy_file_leaves_the_old_copy_whole(self):
-        h = Home(self.base)
-        old = parts(h.cache)
-        fh = open(os.path.join(h.cache, 'skills', 'old', 'SKILL.md'), 'rb')
-        try:
-            self.run_codex(h)
-        finally:
-            fh.close()
-        self.assertIn('busy:', self.text())
-        self.assertEqual(parts(h.cache, ('skills',)), {k: v for k, v in old.items()
-                                                       if k.startswith('skills')})
-        self.assertEqual(sorted(n for n in os.listdir(h.cache) if 'pmkit' in n), [])
-        self.assertEqual(parts(h.copy), parts(self.shell))      # the other target still goes
-
-    def test_a_replace_that_fails_after_the_rename_puts_the_old_copy_back(self):
-        h = Home(self.base, cache=False)
-        old = parts(h.copy)
-        real = os.replace
-
-        def fail(a, b, *rest, **kw):
-            if os.path.basename(a).startswith('skills' + codex.NEW):
-                raise OSError(13, 'forced failure')
-            return real(a, b, *rest, **kw)
-        with mock.patch.object(codex.os, 'replace', fail):
-            self.run_codex(h)
-        self.assertIn('could not put the new copy in place', self.text())
-        self.assertIn('the old one is back', self.text())
-        got = parts(h.copy)
-        self.assertEqual({k: v for k, v in got.items() if k.startswith('skills')},
-                         {k: v for k, v in old.items() if k.startswith('skills')})
-        self.assertEqual(sorted(n for n in os.listdir(h.copy) if 'pmkit' in n), [])
-        self.assertEqual(got[os.path.join('agents', 'kit-a.toml')], b'new = 1\n')   # the others went
-
-    def test_a_copy_a_stopped_run_left_is_cleared(self):
-        h = Home(self.base)
-        write_files(os.path.join(h.cache, 'skills%s4242' % codex.OLD), {'x': 'x\n'})
-        self.run_codex(h)
-        self.assertEqual(sorted(n for n in os.listdir(h.cache) if 'pmkit' in n), [])
-        self.assertEqual(parts(h.cache), parts(self.shell))
+        write_files(self.cache, dict(OLD, **{'plugin.json': '{"version": "0.4.0"}\n'}))
 
 
 class RefreshWiringTest(unittest.TestCase):
-    """pluginsource.refresh with the Codex step in `copies`: the export's own hosts/codex/shell is
-    mirrored, also when the Claude side is current; a marked session (pm_watch's auto_refresh spawn
-    inherits the mark) mirrors nothing; a step that raises is a line, never the exit code."""
+    """pluginsource.refresh with the Codex step in `copies`: a home naming only pm-kit-local gets the
+    switch steps and its copy is left as it was; a marked session (pm_watch's auto_refresh spawn
+    inherits the mark) is skipped; a step that raises is a line, never the exit code."""
 
     def setUp(self):
         self.k = Kit(self)
@@ -276,24 +91,20 @@ class RefreshWiringTest(unittest.TestCase):
         return P.refresh(self.k.kit, self.s, self.f, self.lines.append, apply=apply, runner=runner,
                          now=NOW, own=(1234, 99), alive=lambda pid, ctime: False, copies=copies)
 
-    def shell(self):
-        sha = self.k.repo.git('rev-parse', 'refs/remotes/origin/main')
-        return os.path.join(self.k.root, sha[:12], 'hosts', 'codex', 'shell')
+    def old_copy(self):
+        return (tree(self.h.cache), tree(self.h.copy))
 
-    def test_apply_mirrors_and_a_current_claude_side_still_mirrors(self):
+    def test_apply_gives_the_switch_steps_and_never_writes_the_old_copy(self):
+        before = self.old_copy()
         self.assertEqual(self.refresh(), 0, self.lines)
-        self.assertEqual(parts(self.h.cache), parts(self.shell()))
-        write_files(self.h.cache, {'skills/new/SKILL.md': 'stale again\n'})
-        self.lines = []
-        self.assertEqual(self.refresh(), 0, self.lines)
-        self.assertIn('nothing to do', '\n'.join(self.lines))
-        self.assertEqual(parts(self.h.cache), parts(self.shell()))
+        self.assertIn(SWITCH, '\n'.join(self.lines))
+        self.assertEqual(self.old_copy(), before)
         self.assertFalse(os.path.exists(os.path.join(self.k.root, P.PIDFILE)))
 
-    def test_a_marked_session_mirrors_nothing_and_the_exit_code_is_the_claude_sides(self):
-        before = (parts(self.h.cache), parts(self.h.copy))
+    def test_a_marked_session_is_skipped_and_the_exit_code_is_the_claude_sides(self):
+        before = self.old_copy()
         self.assertEqual(self.refresh(environ={'PM_KIT_ROLE': 'pm'}), 0, self.lines)
-        self.assertEqual((parts(self.h.cache), parts(self.h.copy)), before)
+        self.assertEqual(self.old_copy(), before)
         self.assertIn('codex: skipped: a marked session (pm)', '\n'.join(self.lines))
 
     def test_the_claude_lines_and_exit_code_are_the_same_with_or_without_codex(self):
@@ -310,8 +121,7 @@ class RefreshWiringTest(unittest.TestCase):
         self.assertEqual((tree(self.h.home), tree(self.h.market)), before)
         self.assertFalse(os.path.exists(os.path.join(self.k.root, self.k.repo.git(
             'rev-parse', 'refs/remotes/origin/main')[:12])))
-        self.assertIn('would be replaced', '\n'.join(self.lines))
-
+        self.assertIn('codex: would write', '\n'.join(self.lines))
 
     def test_a_step_that_raises_is_a_line_and_the_next_step_still_runs(self):
         seen = []
@@ -325,7 +135,7 @@ class RefreshWiringTest(unittest.TestCase):
         self.assertIn('other: not refreshed: ValueError: boom', self.lines)
         sha = self.k.repo.git('rev-parse', 'refs/remotes/origin/main')
         self.assertEqual(seen, [(os.path.join(self.k.root, sha[:12]), True)])   # the export folder
-        self.assertEqual(parts(self.h.cache), parts(self.shell()))
+        self.assertIn(SWITCH, '\n'.join(self.lines))
 
 
 class HostEdgeTest(unittest.TestCase):
@@ -341,7 +151,8 @@ class HostEdgeTest(unittest.TestCase):
 
 class ToolMarkTest(unittest.TestCase):
     """tools/plugin_refresh.py --apply, as pm_watch's auto_refresh starts it: the Codex home is
-    <USERPROFILE>\\.codex (no --home, no CODEX_HOME); a marked session leaves it alone."""
+    <USERPROFILE>\\.codex (no --home, no CODEX_HOME); a marked session is skipped, and an unmarked
+    one gives the switch steps and leaves the old copy alone."""
 
     setUp = test_tool.ToolTest.setUp
 
@@ -356,7 +167,7 @@ class ToolMarkTest(unittest.TestCase):
                               capture_output=True, text=True, encoding='utf-8', errors='replace',
                               timeout=120)
 
-    def test_marked_skips_and_unmarked_mirrors(self):
+    def test_marked_skips_and_unmarked_gives_the_switch_steps(self):
         r = self.k.repo
         for rel, text in NEW.items():
             r.write('hosts/codex/shell/' + rel, text)
@@ -370,9 +181,8 @@ class ToolMarkTest(unittest.TestCase):
         self.assertIn('codex: skipped: a marked session (pm)', res.stdout, res.stdout + res.stderr)
         self.assertEqual((tree(cache), tree(h.copy)), before)
         res = self.apply({})
-        self.assertIn('codex: cache %s: refreshed' % cache, res.stdout, res.stdout + res.stderr)
-        self.assertEqual(parts(cache)[os.path.join('agents', 'kit-a.toml')], b'new = 1\n')
-        self.assertEqual(parts(h.copy)[os.path.join('agents', 'kit-a.toml')], b'new = 1\n')
+        self.assertIn(SWITCH, res.stdout, res.stdout + res.stderr)
+        self.assertEqual((tree(cache), tree(h.copy)), before)
 
 
 if __name__ == '__main__':
