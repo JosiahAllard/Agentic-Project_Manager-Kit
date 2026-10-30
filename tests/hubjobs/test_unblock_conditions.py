@@ -193,7 +193,46 @@ class Watched(Case):
         self.assertEqual(U.watched(snap), [('A', 'live-client', 'todo:T-1 done')])
 
 
+def user_path(*parts):
+    """A user-profile path (one kitlib.machinepaths flags), built here so no literal of one sits
+    in this file (tests/scrub)."""
+    return ':'.join(['C', '\\' + '\\'.join(('Users', 'exuser') + parts)])
+
+
+class MachinePathWatched(Case):
+
+    def test_a_condition_holding_a_machine_path_is_not_watched(self):
+        # the unblock's reason would carry it, which the store refuses: it would fail every pass
+        self.seed(rec('FOO', state='blocked', blocked_on='live-client',
+                      until='live-client path:%s absent' % user_path('flag')))
+        snap, _store = U.open_snapshot(self.repo.root)
+        self.assertEqual(U.watched(snap), [])
+        out = self.job()(Ctx())
+        self.assertIsInstance(out, jobs.Skip)
+        self.assertEqual(self.writes, [])
+
+
 class Faults(Case):
+
+    def test_a_committed_write_with_a_stale_index_is_pushed_and_counted(self):
+        # errors.IndexStale: the commit landed, so it is an unblock, not a failed pass
+        from kitlib.backlog import errors
+        self.seed(rec('FOO', state='blocked', blocked_on='live-client',
+                      until='live-client todo:T-1 done'))
+        self.doc('todos', 'T-1', 'done')
+        real = smod.Store.write
+
+        def stale(store, plan):
+            change, tip = real(store, plan)
+            if change.writes:
+                raise errors.IndexStale('index not updated', commit=tip, paths=['FOO.md'])
+            return change, tip
+        ctx = Ctx()
+        with mock.patch.object(smod.Store, 'write', stale):
+            note = self.job()(ctx)
+        self.assertEqual(note, 'unblocked kit:FOO')
+        self.assertEqual(ctx.events, [(U.EVENT, 'kit:FOO')])
+        self.assertEqual(self.get('FOO').get('state'), 'open')
 
     def test_an_unreadable_store_fails_the_pass_after_the_others(self):
         self.seed(rec('FOO', state='blocked', blocked_on='live-client',
@@ -232,6 +271,33 @@ class Readers(Case):
         r = U.Readers(self.hub, self.plugins, None)
         self.assertIs(r.plugin_present('live'), True)
         self.assertIs(r.plugin_present('gone'), False)
+
+    def test_a_path_off_a_local_drive_is_never_probed(self):
+        r = U.Readers(self.hub, self.plugins, None)
+        self.assertIs(r.path_exists(os.path.join(self.flags, 'flag')), False)
+        off = ['\\\\exhost\\share\\flag', '//exhost/share/flag', '\\\\?\\' + self.flags,
+               os.path.join(self.flags, '..', 'flag'), self.flags + '/../flag', 'flag']
+        with mock.patch.object(U.os.path, 'exists', side_effect=AssertionError('probed')):
+            for path in off:
+                self.assertIsNone(r.path_exists(path), path)
+
+    def test_a_variable_that_expands_off_a_local_drive_cannot_be_told(self):
+        from kitlib.backlog import conditions as condmod
+        r = U.Readers(self.hub, self.plugins, None)
+        for value in ('\\\\exhost\\share', os.path.join(self.flags, '..')):
+            with mock.patch.dict(os.environ, {VAR: value}), \
+                    mock.patch.object(U.os.path, 'exists', side_effect=AssertionError('probed')):
+                for cond in (FLAG, FLAG.replace('exists', 'absent')):
+                    self.assertIsNone(condmod.evaluate(condmod.parse(cond), r), (value, cond))
+
+    def test_a_record_file_missing_without_a_commit_is_not_closed(self):
+        snap = mock.Mock(get=lambda rid: None)
+        store = mock.Mock(uncommitted_removal=lambda rid: True, removal=lambda rid, s: None)
+        closed = U.RecordReader(Settings({'kit': self.repo.root}), snapshot=lambda root: (snap, store))
+        self.assertIsNone(closed('kit', 'FOO'))
+        store.removal = lambda rid, s: object()
+        self.assertIs(U.RecordReader(Settings({'kit': self.repo.root}),
+                                     snapshot=lambda root: (snap, store))('kit', 'FOO'), True)
 
     def test_record_closed_reads_the_named_repos_store(self):
         self.seed(rec('FOO'), rec('BAR'))

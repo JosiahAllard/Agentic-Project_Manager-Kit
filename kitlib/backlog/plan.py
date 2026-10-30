@@ -861,14 +861,17 @@ def plan_set(snap, ctx, rid, changes, unset=(), *, body=None, role_checked=False
 
 # --- block / unblock ------------------------------------------------------------------------------
 
-def plan_block(snap, ctx, rid, members, owner_ask=None, reason=None, until=None):
+def plan_block(snap, ctx, rid, members, owner_ask=None, reason=None, until=None,
+               role_checked=False):
     """`block` ADDS `members` to `blocked_on`, in order, after the blockers already there (one
     already present is not repeated); it never removes one, so it never releases the owner's hold:
     removing a blocker is `unblock --on`'s job.
     `until`, when given, is the end condition of the one member (exactly one `--on`, a member with
     no space in it), written as `until: <member> <condition>` and replacing that member's line;
     kitlib/backlog/conditions.py names the conditions the Action Hub checks, and an `owner` member
-    takes only an owner event (a to-do or a question).
+    takes only an owner event (a to-do or a question). An `until` on `owner` schedules the owner's
+    hold to end, so it is the `unblock-owner` row (policy.sort): without `role_checked` it refuses
+    (refuse_top).
     `reason`, when given, goes into the commit subject and onto one line appended to the body
     (`Blocked on M (date): T`), so `show` says why the record is held; no header key is written
     for it. A PULLED record is blocked only by whoever may stop its pull (stop_pull), and only
@@ -908,6 +911,8 @@ def plan_block(snap, ctx, rid, members, owner_ask=None, reason=None, until=None)
         why = condmod.owner_error(members[0], until)
         if why:
             raise Usage('refused `--until %s`: %s' % (until, why))
+        if members[0] == 'owner' and not role_checked:
+            refuse_top(rid, 'block', ['unblock-owner'])
     stop = None
     if rec.get('state') == 'pulled':
         if reason is None:
@@ -931,9 +936,15 @@ def plan_block(snap, ctx, rid, members, owner_ask=None, reason=None, until=None)
     changes = [('state', ['blocked']), ('blocked_on', after)]
     if owner_ask:
         changes.append(('owner_ask', [owner_ask]))
+    # A member this block adds gets no `until` line it did not give: a line an older plugin left
+    # behind on a member it cleared would otherwise come live again.
+    fresh = [m for m in members if m not in old]
+    kept = [v for v in rec.all('until') if condmod.split(v)[0] not in fresh
+            and (until is None or condmod.split(v)[0] != members[0])]
     if until is not None:
-        kept = [v for v in rec.all('until') if condmod.split(v)[0] != members[0]]
-        changes.append(('until', kept + ['%s %s' % (members[0], until)]))
+        kept.append('%s %s' % (members[0], until))
+    if kept != rec.all('until'):
+        changes.append(('until', kept))
     if stop is not None:
         changes += [(k, []) for k in rmod.PULL_KEYS + rmod.PREEMPT_KEYS]
     pairs = rmod.apply_changes(rec.pairs(), changes)

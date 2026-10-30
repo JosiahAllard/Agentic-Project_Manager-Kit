@@ -105,15 +105,16 @@ The dry run plans against a fresh read and runs the same checks a write does. `-
 
 - `todo:T-n done`: the hub to-do T-n is done.
 - `question:Q-n answered`: the hub question Q-n is answered, filed, logged or done.
-- `record:<repo>:<ID> closed`: record ID is gone from the store of `<repo>` (a `launcher.repos` name), removed by a commit (close, retire or delete).
-- `path:<path> exists|absent`: the file or folder is there, or not. `<path>` is absolute or starts with a `%VAR%`, filled from the hub server's environment when the job reads it; it may hold spaces. A machine path (a user profile, a `machine_path_folders` folder) is USAGE, as in any record line.
+- `record:<repo>:<ID> closed`: record ID is gone from the store of `<repo>` (a `launcher.repos` name), removed by a commit (close, retire or delete); a record file missing with no commit is not closed.
+- `path:<path> exists|absent`: the file or folder is there, or not. `<path>` is absolute or starts with a `%VAR%`, filled from the hub server's environment when the job reads it; it may hold spaces. A machine path (a user profile, a `machine_path_folders` folder) is USAGE, as in any record line, and the job skips one it finds in a hand-written line. Only a path on a local drive (a drive letter, a colon and a slash) after the `%VAR%` is filled is read: a UNC path (`\\host\share`) or a `..` part cannot be told, and the job never probes it.
 - `plugin:<folder> absent`: the plugin export folder is gone from the export root (`pluginsource` `export_dir`).
 
 Any other text is free text: it is written, the output says no program acts on it, and it is cleared by hand (`unblock --on M`). A condition that cannot be read (a hub document, a store or the export root that cannot be read, a `%VAR%` that is not set) is not met; the job tries again next pass.
 
 - `owner` ends only on an owner event: `--on owner --until` takes a `todo:` or `question:` condition (with the usual cited `--owner-ask` or `--reason`, "Commands"); any other form on `owner` is USAGE, and a hand-written one is a SCHEMA finding the job skips. The `until` line is not a citation for an `owner` or `deliberate` hold.
+- `--until` on `owner` schedules the owner's hold to end, so it is also the `unblock-owner` row (kitlib/backlog/policy.py `sort`), the owner's and the PM's: a coordinator may block on the owner but its `--until` there is REFUSED by the role check. A plan made without the role check (a library caller) refuses it too (`plan.refuse_top`).
 - `--until` takes exactly one `--on`, a member with no space in it; an empty condition is USAGE. Each refusal writes nothing.
-- One line per member: a re-block of M with `--until` replaces M's line and keeps the others, and a block of a member already there with `--until` adds or replaces its line.
+- One line per member: a re-block of M with `--until` replaces M's line and keeps the others, and a block of a member already there with `--until` adds or replaces its line. A block that adds M without `--until` drops any line for M an older plugin left behind, so it never comes live again.
 - Every write that clears M from `blocked_on` drops M's line (`unblock`, the owner's answer, an `item:` blocker closing, a `set` of `blocked_on`; `plan._text`, `record.prune_until`), so the job's own commit leaves nothing to act on and a second pass is a skip. The job writes nothing for a line a write since its read has removed.
 - `until` is a header key: a plugin older than this one reports it as an unknown key in `check`, but its writes still pass (a write refuses only a finding it adds), and a line it leaves behind on a cleared member is dropped by the next write of a current plugin.
 

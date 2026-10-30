@@ -302,6 +302,22 @@ class ConditionMet(Case):
         self.assertIs(again['unblocked'], False)
         self.assertEqual(self.tip(), tip)
 
+    def test_a_committed_write_with_a_stale_index_is_written_not_a_store_error(self):
+        # errors.IndexStale: the commit landed, so the route reports it as written
+        from kitlib.backlog import errors
+        real = smod.Store.write
+
+        def stale(store, plan):
+            change, tip = real(store, plan)
+            raise errors.IndexStale('index not updated for FOO', commit=tip, paths=['FOO.md'])
+        before = self.tip()
+        with mock.patch.object(smod.Store, 'write', stale):
+            out = recordwrite.condition_met(self.repo.root, 'FOO', 'live-client', 'todo:T-5 done')
+        self.assertIs(out['unblocked'], True)
+        self.assertEqual(out['lines'][-1], 'WARNING: index not updated for FOO')
+        self.assertNotEqual(self.tip(), before)
+        self.assertEqual(self.field('FOO', 'state'), ['open'])
+
     def test_free_text_is_invalid_and_writes_nothing(self):
         tip = self.tip()
         self.refused(lambda: recordwrite.condition_met(self.repo.root, 'FOO', 'live-client',

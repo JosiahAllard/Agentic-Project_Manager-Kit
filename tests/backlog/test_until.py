@@ -210,8 +210,31 @@ class BlockUntil(StoreCase):
 
     def test_owner_takes_a_question(self):
         self.seed(rec('FOO'))
-        self.verb('block', 'FOO', ['owner'], owner_ask='which one?', until='question:Q-9 answered')
+        self.verb('block', 'FOO', ['owner'], owner_ask='which one?', until='question:Q-9 answered',
+                  role_checked=True)
         self.assertEqual(self.get('FOO').all('until'), ['owner question:Q-9 answered'])
+
+    def test_an_owner_until_with_no_role_check_is_refused(self):
+        # the unblock-owner row (policy.sort): the role check decides it, not a library caller
+        self.seed(rec('FOO', **test_verbs.OWNER_BLOCKED))
+        tip = self.remote_tip()
+        with self.assertRaises(Refusal) as ctx:
+            self.verb('block', 'FOO', ['owner'], until='todo:T-1 done')
+        self.assertIn('unblock-owner', str(ctx.exception))
+        self.assertEqual((self.remote_tip(), self.get('FOO').all('until')), (tip, []))
+        self.verb('block', 'FOO', ['live-client'], until='todo:T-1 done')   # not the owner's
+
+    def test_a_newly_blocked_member_drops_a_stale_line_it_did_not_give(self):
+        # an older plugin's unblock left `until: live-client ...` behind; a re-block on that
+        # member without --until must not bring it back to life
+        self.seed(rec('FOO', state='blocked', blocked_on='item:BAR',
+                      until=['item:BAR todo:T-2 done', 'live-client todo:T-1 done']), rec('BAR'))
+        self.verb('block', 'FOO', ['live-client'])
+        r = self.get('FOO')
+        self.assertEqual((r.all('blocked_on'), r.all('until')),
+                         (['item:BAR', 'live-client'], ['item:BAR todo:T-2 done']))
+        self.verb('block', 'FOO', ['item:BAR'])             # already blocked on: its line stays
+        self.assertEqual(self.get('FOO').all('until'), ['item:BAR todo:T-2 done'])
 
     def test_unblock_drops_that_members_line(self):
         self.seed(rec('FOO'), rec('BAR'))

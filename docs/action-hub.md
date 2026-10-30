@@ -554,9 +554,12 @@ store's git push (the `push` setting).
   and writes nothing when the line is gone) and pushes `unblocked` with detail `<repo>:<ID>`. A
   to-do or question is read from its hub store document on disk, a record from the named
   repository's store, a plugin folder under `pluginsource` `export_dir`. Free text, a member the
-  record is not blocked on, an `owner` member on anything but a to-do or a question, and a condition
-  that cannot be read are never acted on; nothing met is a skip, and a store that cannot be read or
-  a refused write is a failure once the pass has done the rest. A stopped coordinator learns of the
+  record is not blocked on, an `owner` member on anything but a to-do or a question, a condition
+  holding a machine path, a path that is not on a local drive after its `%VAR%` is filled (a UNC
+  path, a `..` part; never probed), and a condition that cannot be read are never acted on; a
+  record counts as closed only when a commit removed it. Nothing met is a skip, and a store that
+  cannot be read or a refused write is a failure once the pass has done the rest; a write whose
+  commit landed with the index left stale (`IndexStale`) is an unblock, pushed and counted. A stopped coordinator learns of the
   opened record from `coord-restart`'s backlog wake; nothing else is pushed.
   `session-watch` (`kitlib/hubjobs/session_watch.py`, docs/pm-watch.md "Hub session-watch job") runs
   pm_watch's checks every 60 s, first at 30 s, and pushes at most once a run: one event as its kind

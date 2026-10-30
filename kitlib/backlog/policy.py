@@ -116,6 +116,17 @@ def _narrow(names):
     return [n for n in roles.ACTIONS if n in names and n not in over]
 
 
+def _until_rows(verb, given):
+    """`block --on owner --until C` sets the owner's hold to end on its own (the Action Hub's
+    unblock-conditions job clears it when C is met), so it is also the `unblock-owner` row, the
+    owner's and the PM's: a lead may block on the owner, never schedule the owner's hold to end.
+    An `--on` not read counts as `owner`."""
+    on = list(given.get('on') or ())
+    if verb == 'block' and given.get('until') and ('owner' in on or UNREAD in on or not on):
+        return {'unblock-owner'}
+    return set()
+
+
 def sort(verb, given=None, rec=None):
     """The ACTIONS rows (names) the command `verb` with `given` takes on the record `rec` (None: not
     read, so the strictest the record could make it), narrowed by `over`. A verb no row names takes
@@ -128,7 +139,8 @@ def sort(verb, given=None, rec=None):
     if verb in READS:
         return ['read']
     if given.get(UNKNOWN):                      # an unread word may be the --apply a dry run lacks
-        return _verb_rows(verb)
+        extra = _until_rows(verb, given)
+        return [n for n in roles.ACTIONS if n in extra or n in _verb_rows(verb)]
     if (verb in ('retarget', 'uncite') and not given.get('apply')) or \
             (verb == 'catch-up' and not given.get('apply')):
         return ['read']
@@ -159,6 +171,7 @@ def sort(verb, given=None, rec=None):
     elif verb == 'block':
         on = list(given.get('on') or ())
         rows.add('block-owner' if given.get('owner_ask') or 'owner' in on else 'block')
+        rows |= _until_rows(verb, given)
     elif verb == 'unblock':
         on = list(given.get('on') or ())
         owner = 'owner' in on or UNREAD in on or (not on and _owner_blocked(rec))
@@ -243,6 +256,7 @@ def given_of(args):
     on = getattr(args, 'on', None)
     given.update({
         'owner_ask': getattr(args, 'owner_ask', None) is not None,
+        'until': getattr(args, 'until', None) is not None,
         'on': on if isinstance(on, list) else [on] if on else [],
         'apply': (getattr(args, 'apply', None) is not None if args.verb == 'catch-up'
                   else bool(getattr(args, 'apply', None)))})     # `catch-up --apply` alone counts
@@ -421,7 +435,7 @@ def read_argv(words):
 
 def _given_add(given, verb, name, value):
     key = name[2:].replace('-', '_')
-    if key in ('owner_ask', 'apply'):
+    if key in ('owner_ask', 'apply', 'until'):
         given[key] = True
     elif key == 'on':
         given['on'].append(value)

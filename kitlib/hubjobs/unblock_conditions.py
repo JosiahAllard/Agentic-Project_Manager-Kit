@@ -18,15 +18,18 @@ line is gone), then one `unblocked` job push to the PM, detail `<repo>:<ID>`. Th
 
 Never acted on: free text (not one of the forms), a member the record is not blocked on, an
 `owner` member with any condition but a to-do or a question (the owner's own act; the job never
-clears the owner's hold on its own reading), and a condition that cannot be told (a hub document,
-a store or the plugin export root that cannot be read: conditions.evaluate's None). A coordinator
+clears the owner's hold on its own reading), a condition holding a machine path
+(kitlib.machinepaths: the store refuses it in the unblock's reason), and a condition that cannot
+be told (a hub document, a store or the plugin export root that cannot be read, a path that is
+not on a local drive after its %VAR% expansion or has a `..` part: conditions.evaluate's None). A coordinator
 learns of the opened record from coord_restart's backlog wake (a stopped coordinator whose offer
 gained it is restarted); a live one gets no push of its own.
 
 Where each condition is read: a to-do or question, the hub store's document on disk (read only,
 `<store>/todos/<T-n>.json`, `<store>/questions/<Q-n>.json`: the store writes each with
 os.replace, so a read sees a whole document); a record, the named repository's store (closed: gone
-from it, with a commit that removed it); a path, the file system; a plugin folder, the plugin
+from it, with a commit that removed it: a file missing with no commit is not closed); a path,
+the file system; a plugin folder, the plugin
 export root (kitlib.pluginsource settings, `export_dir`).
 
 Outcomes (kitlib.hubsite.jobs): nothing met is a skip; an unblock is a success whose note names
@@ -35,7 +38,9 @@ pass has done what it could (health shows it; the runner pushes `failing` at the
 A repository launcher.repos names whose store cannot be found is a note, not a failure.
 """
 import json
+import ntpath
 import os
+import re
 
 from kitlib.hubsite import jobs
 
@@ -43,6 +48,10 @@ NAME = 'unblock-conditions'
 EVERY_S = 300
 EVENT = 'unblocked'
 NOTE_MAX = 200
+# A path condition is read only on a local drive (a drive letter, a colon, then a slash or a
+# backslash): a UNC path (`\\host\share`) would
+# have the hub reach a network host every pass.
+LOCAL_DRIVE = re.compile(r'^[A-Za-z]:[\\/]')
 
 
 class ConditionsFailed(Exception):
@@ -77,12 +86,28 @@ class Readers(object):
         return self._status('questions', qid)
 
     def path_exists(self, path):
+        r"""True or False for a path on a local drive (conditions.evaluate expands its %VAR%
+        first); None, cannot tell, for any other (a UNC or device path, a `..` part), which is
+        never probed."""
+        if not local_path(path):
+            return None
         return os.path.exists(path)
 
     def plugin_present(self, folder):
         if not self.plugin_root:
             return None
         return os.path.isdir(os.path.join(self.plugin_root, folder))
+
+
+def local_path(path):
+    r"""True when `path` names a place on a local drive: a drive letter, a colon and a slash or
+    backslash first (LOCAL_DRIVE), no `..` part, and
+    a drive ntpath reads as a letter (not `\\?\` or `\\host\share`)."""
+    if not isinstance(path, str) or not LOCAL_DRIVE.match(path):
+        return False
+    if len(ntpath.splitdrive(path)[0]) != 2:
+        return False
+    return '..' not in re.split(r'[\\/]', path)
 
 
 def open_snapshot(root):
@@ -99,10 +124,13 @@ def open_snapshot(root):
 
 def watched(snap):
     """[(rid, member, condition)] of each blocked record's `until` lines whose member it is still
-    blocked on and that this job may act on: a readable condition, and on `owner` an owner event
-    only."""
+    blocked on and that this job may act on: a readable condition, on `owner` an owner event
+    only, and no machine path in it (kitlib.machinepaths: the unblock's reason and commit subject
+    would carry it, which the store refuses, so the line would fail every pass)."""
+    from kitlib import machinepaths
     from kitlib.backlog import conditions as condmod
     from kitlib.backlog import record as rmod
+    folders = None
     out = []
     for rec in snap.readable:
         if rec.get('state') != 'blocked':
@@ -112,6 +140,10 @@ def watched(snap):
             if member not in members or condmod.parse(cond) is None:
                 continue
             if condmod.owner_error(member, cond):
+                continue
+            if folders is None:
+                folders = machinepaths.folders()[0]
+            if machinepaths.find(cond, folders):
                 continue
             out.append((rec.id, member, cond))
     return out
@@ -210,7 +242,7 @@ class RecordReader(object):
         if snap.get(rid) is not None:
             return False
         try:
-            gone = store.uncommitted_removal(rid) or store.removal(rid, snap)
+            gone = store.removal(rid, snap)     # committed only: a file missing is not closed
         except Exception:               # noqa: BLE001
             return None
         return True if gone else None

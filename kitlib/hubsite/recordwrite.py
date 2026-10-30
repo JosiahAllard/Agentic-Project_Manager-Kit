@@ -37,7 +37,9 @@ store's own refusal names the backlog tool's path.
 
 What is raised is a HubError: NotFound `not_found`; Usage and any other refusal `invalid`, with the
 store's own text; a Failure (git, a publish, a folder store outside a linked worktree) `store`,
-whose text the Api gives the local owner only (kitlib.hubsite.api "What an agent is told"). The
+whose text the Api gives the local owner only (kitlib.hubsite.api "What an agent is told"). An
+IndexStale is not raised: its write is committed, so the route returns it as written, the
+WARNING line last in "lines" (condition_met's "unblocked" true). The
 implicit `ref` store (no "backlog".store in `.kit.json`) is refused as `store` before any write,
 since its refusal names the PM data worktree's path; answer refuses it as `no_store` instead, a
 code the hub's filing alone reads (kitlib.hubsite.api file_answer, which leaves that answer to
@@ -49,7 +51,7 @@ from kitlib.backlog import opener
 from kitlib.backlog import plan as pmod
 from kitlib.backlog import scope as bscope
 from kitlib.backlog import store as bstore
-from kitlib.backlog.errors import Failure, NotFound, Refusal
+from kitlib.backlog.errors import Failure, IndexStale, NotFound, Refusal
 
 from .store import HubError
 
@@ -73,10 +75,22 @@ def _open(root, no_store='store', session=SESSION):
 
 def _change(root, plan, no_store='store', session=SESSION):
     """The Change Store.write(plan(snapshot, ctx)) made on the store at root, its errors as
-    HubErrors; the implicit store is refused with the code `no_store`."""
+    HubErrors; the implicit store is refused with the code `no_store`. An IndexStale is a write
+    that is committed (errors.IndexStale), so it returns the change it planned, its WARNING line
+    added, as tools/backlog.py reports it, never a `store` error."""
     ctx = _open(root, no_store, session)
+    made = []
+
+    def planned(s):
+        made[:] = [plan(s, ctx)]
+        return made[0]
     try:
-        change, _tip = ctx.store.write(lambda s: plan(s, ctx))
+        change, _tip = ctx.store.write(planned)
+    except IndexStale as e:
+        if not made:
+            raise HubError('store', str(e), '')
+        made[0].lines = list(made[0].lines) + ['WARNING: %s' % ' '.join(str(e).split())]
+        return made[0]
     except NotFound as e:
         raise HubError('not_found', str(e), 'id')
     except Failure as e:
