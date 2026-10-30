@@ -252,10 +252,8 @@ def do_wait(argv):
         print('TIMEOUT: no final %s result record for %s at %s within %s s' % (
             a.kind, a.branch, a.tip, a.timeout))
         return resultmod.TIMEOUT
-    print('RESULT %s %s %s at %s: %s (%s)' % (rec.get('verdict'), a.kind, a.branch,
-                                             str(rec.get('tip'))[:10], rec.get('summary'),
-                                             rec.get('log')))
-    print(json.dumps(rec, sort_keys=True))
+    for line in resultmod.result_lines(rec, a.kind, a.branch):
+        print(line)
     return G.OK if rec.get('verdict') == 'pass' else G.FAILED
 
 

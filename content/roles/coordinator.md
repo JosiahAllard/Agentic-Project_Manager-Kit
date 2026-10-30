@@ -101,8 +101,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   else: count agents in flight against your cap and fill free slots from your work set,
   engine-free work beside lock-bound work. In flight = {{tool:list-agents}} `running`; an agent stopped on
   its own background gate is waiting, not in flight, and wakes when the gate exits (<kit>/docs/gate.md
-  "Waiting on a gate: who arms what"). A landing you submitted is not an agent: its `wait-result`
-  command is yours to keep running (skill `land-branch`). A gate whose
+  "Waiting on a gate: who arms what"). A landing you submitted is not an agent: its one
+  `land.py ... --wait-result --submit` background call is yours to keep running (skill `land-branch`). A gate whose
   process is gone with no report -> fresh agent re-gates the branch (the final gate `<kit>/docs/gate.md` "The final gate" names (when unsure, `--full`)). Nothing
   re-wakes you later.
 - Nothing startable left in the set and 1 or 2 items being built -> wind down (skill

@@ -570,6 +570,16 @@ def at_tip(rec, branch, kind, tip):
             and isinstance(got, str) and got.lower().startswith(tip.lower()))
 
 
+def result_lines(rec, kind, branch):
+    """The two lines a waiter gives for the final record `rec` of `branch` and `kind`: `RESULT
+    <verdict> <kind> <branch> at <tip[:10]>: <summary> (<log>)`, then the record as one JSON
+    line (gate.py wait-result, and land.py --wait-result through kitlib.gate.submit.follow)."""
+    return ['RESULT %s %s %s at %s: %s (%s)' % (rec.get('verdict'), kind, branch,
+                                               str(rec.get('tip'))[:10], rec.get('summary'),
+                                               rec.get('log')),
+            json.dumps(rec, sort_keys=True)]
+
+
 def valid_timeout(timeout_s):
     return timeout_s is None or (math.isfinite(timeout_s) and timeout_s >= 0)
 
