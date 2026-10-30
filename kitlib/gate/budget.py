@@ -111,8 +111,8 @@ def allow_path(root, branch):
 
 
 def legacy_path(root, branch):
-    """The allowance's .git copy: written for an older kit, and read when the folder has none
-    (allowance)."""
+    """The allowance's .git copy: the only copy with no dev_drive (a load node set up without
+    one); with a dev_drive it is neither written nor read (allow, allowance)."""
     return os.path.join(_common(root), DIR_NAME, '%s.json' % result.file_stem(branch))
 
 

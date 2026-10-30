@@ -121,10 +121,8 @@ class GitCopy(TipCase):
         os.makedirs(gate_ok.legacy_dir(self.repo.root), exist_ok=True)
         with open(gate_ok.legacy_path(self.repo.root, tip), 'w', encoding='utf-8') as f:
             f.write(body)
-        before = self.remote_main()
         out = self.lander(BRANCH, self.main, tip).run()
-        self.assertNotEqual(out.code, G.OK, out.lines)
-        self.assertEqual(self.remote_main(), before)
+        self.assert_refused(out, BRANCH, tip, wt, 'no gate-OK record for %s' % tip)
 
     def test_with_no_dev_drive_the_branch_gate_passes_with_only_the_git_copy(self):
         # Kept for load nodes set up without a dev_drive: a warning, not a fail.

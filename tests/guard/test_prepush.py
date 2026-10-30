@@ -102,7 +102,8 @@ class HookTest(pc.PrePushCase):
         self.passed(head, git_copy_only=True)
         self.assertIsNone(runner.verify_record(self.repo.root, head)[0])
         code, err = self.push('origin', 'main')
-        self.assertNotEqual(code, 0, err)
+        self.assertEqual(code, 1, err)
+        self.assertIn('pre-push: refused, %s has no gate-OK record' % head[:12], err)
         self.assertEqual(self.remote_main(), before)
 
     def test_refspec_to_main_is_checked_and_a_branch_is_not(self):
