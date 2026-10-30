@@ -5,7 +5,7 @@ description: Use when the coordinator says the main branch moved and your branch
 
 # Bringing a branch up to date
 
-The coordinator names a commit hash. You merge that hash, and nothing else. Run each command as one plain call, never wrapped in a directory change, a process launcher or a nested shell call: the kit's tool (`<kit>/tools/...`) with `-C <worktree>` naming your worktree.
+The coordinator names a commit hash. You merge that hash, and nothing else, with step 3's command, your worktree and that hash filled in: no `git fetch`, `git status` or `git merge` first (the tool fetches and checks the tree itself; the guard refuses a plain merge). Run each command as one plain call, never wrapped in a directory change, a process launcher or a nested shell call: the kit's tool (`<kit>/tools/...`) with `-C <worktree>` naming your worktree.
 
 1. Commit work in progress by explicit path first (`python <kit>/tools/commit.py -C <worktree> -m "<subject>" --model "<model name>" <path> ...`): the tracked tree must be clean.
 2. Untracked generated files the base now tracks make git refuse the merge: delete only those the repo profile's "Branches and worktrees" section names, nothing else.

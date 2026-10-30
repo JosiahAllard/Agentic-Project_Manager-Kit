@@ -63,7 +63,7 @@ class Preflight(Case):
         with contextlib.redirect_stdout(buf), \
                 mock.patch.object(preflight, 'KIT', KIT), \
                 mock.patch.object(report.stray, 'check', return_value=(0, [])):
-            preflight.main(['-C', self.root], lock_reader=free_reader, home=self.scratch_home())
+            preflight.main(['-C', self.root, '--full'], lock_reader=free_reader, home=self.scratch_home())
         return buf.getvalue()
 
     def line(self, out):
@@ -347,7 +347,7 @@ class NotCheckedAndTimeout(Case):
             for p in patches:
                 stack.enter_context(p)
             stack.enter_context(contextlib.redirect_stdout(buf))
-            preflight.main(['-C', self.root], lock_reader=free_reader, home=self.scratch_home())
+            preflight.main(['-C', self.root, '--full'], lock_reader=free_reader, home=self.scratch_home())
         [found] = [l for l in buf.getvalue().splitlines() if l.startswith('doc index')]
         return found
 
