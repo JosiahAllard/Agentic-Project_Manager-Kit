@@ -18,7 +18,7 @@ from . import offer as omod
 from . import policy
 from . import record as rmod
 from . import scope as smod
-from .errors import Failure, NotFound, Refusal, Usage
+from .errors import Ended, Failure, NotFound, Refusal, Usage
 from .store import PLAIN_ID, Change, add_plan_note, id_refusal
 
 MIN_REASON = 12
@@ -121,9 +121,13 @@ def require(snap, rid):
     return rec
 
 
+_ENDS = {'closes': 'closed', 'retires': 'retired', 'deletes': 'deleted'}
+
+
 def require_shown(snap, ctx, rid):
-    """require() for `show`: a missing id's NotFound also says which store commit removed it
-    (sha, date, session, subject; never an author name), or that none ever did. A main store's
+    """require() for `show`: a missing id says which store commit removed it (closed, retired or
+    deleted; sha, date, session, subject, the reason; never an author name) as Ended, exit 0;
+    NotFound (exit 1) stays for an id no commit removed, or none that can be read. A main store's
     record whose file HEAD tracks and the worktree no longer holds says so (closed or retired
     here - MainBackend writes commit nothing - or removed by hand). An id that is
     not plain (a glob or path character) is not looked up, and a history git cannot read (an
@@ -132,6 +136,7 @@ def require_shown(snap, ctx, rid):
     if rec is not None:
         return rec
     plain = 'no record with `id: %s` in %s' % (rid, snap.where)
+    gone_in = '%s is no longer in %s' % (rid, snap.where)
     if not PLAIN_ID.match(rid):
         raise NotFound('%s\n  history not searched: `%s` is not a plain id' % (plain, rid))
     try:
@@ -140,14 +145,16 @@ def require_shown(snap, ctx, rid):
     except Failure as exc:
         raise NotFound('%s\n  the store\'s history could not be read: %s' % (plain, exc))
     if pending:
-        then = ('its file is tracked at HEAD but missing from this worktree (closed or retired '
-                'here, or removed by hand); no commit names it yet')
-    elif gone is None:
-        then = 'no commit in the store\'s history removed it: the id is unknown'
-    else:
-        then = 'removed by %s on %s (session %s): %s' % (gone.sha, gone.when, gone.session or '-',
-                                                       gone.subject)
-    raise NotFound('%s\n  %s' % (plain, then))
+        raise Ended('%s\n  its file is tracked at HEAD but missing from this worktree (closed or '
+                    'retired here, or removed by hand); no commit names it yet' % gone_in)
+    if gone is None:
+        raise NotFound('%s\n  no commit in the store\'s history removed it: the id is unknown'
+                       % plain)
+    how = _ENDS.get(gone.subject.split(' ', 1)[0], 'removed')
+    said = '%s\n  %s by %s on %s (session %s): %s' % (gone_in, how, gone.sha, gone.when,
+                                                   gone.session or '-', gone.subject)
+    why = re.match(r'(?:closes|retires|deletes) %s: (.+)$' % re.escape(rid), gone.subject)
+    raise Ended(said + ('\n  reason: %s' % why.group(1) if why else ''))
 
 
 def _text(pairs, body):

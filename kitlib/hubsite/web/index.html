@@ -288,6 +288,7 @@ ul.hist .sch-line{display:block}
     <button class="sec" role="tab" data-s="backlog" aria-selected="false" id="sec-backlog">Backlog <span class="n" id="n-s">0</span><span class="n hot" id="n-sp" hidden></span></button>
     <button class="sec" role="tab" data-s="schedule" aria-selected="false" id="sec-schedule">Schedule <span class="n" id="n-sch">0</span></button>
     <button class="sec" role="tab" data-s="docs" aria-selected="false" id="sec-docs">Docs <span class="n" id="n-d">0</span></button>
+    <button class="sec" role="tab" data-s="landings" aria-selected="false" id="sec-landings">Landings <span class="n" id="n-l">0</span></button>
     <div class="sechead" id="sh-more">More</div>
     <button class="sec" role="tab" data-s="topm" aria-selected="false" id="sec-topm">Message the PM <span class="n" id="n-pm">0</span></button>
     <button class="sec" role="tab" data-s="info" aria-selected="false" id="sec-info">Usage</button>
@@ -398,7 +399,7 @@ ul.hist .sch-line{display:block}
 <script>
 (function(){
   const $ = s => document.querySelector(s);
-  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], skills: [], skilledits: [], skEdit: new Map(), notices: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "current", rec: null, infotab: "usage", inboxtab: "questions", afilter: "waiting", lintOpen: null, topm: [], approvals: [], decided: [], strong: false, pages: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set(), sel: null,
+  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], skills: [], skilledits: [], landings: [], skEdit: new Map(), notices: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "current", rec: null, infotab: "usage", inboxtab: "questions", afilter: "waiting", lintOpen: null, topm: [], approvals: [], decided: [], strong: false, pages: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set(), sel: null,
     // The Schedule view: its tab, the History filters, the Week grid's pick and shift, the reserve note and the run asked once.
     sch: { tab: "now", repo: "", kind: "", result: "", histOpen: false, shift: 0, pick: null, note: "", confirm: null, stats: null, days: 7, statsRev: null, statsWhy: "", status: "", bad: false, busy: false,
       // The open forms, each holding what is typed so a redraw never loses it: New hold, a hold's Edit (by its id), the games list, the division.
@@ -408,7 +409,7 @@ ul.hist .sch-line{display:block}
   // know leaves the page where it is.
   const ROUTES = { "#home": {section:"home"}, "#questions": {section:"questions"}, "#inbox": {section:"inbox"}, "#todo": {section:"todo"}, "#topm": {section:"topm"}, "#approvals": {section:"approvals"}, "#more": {section:"more"}, "#schedule": {section:"schedule"},
     "#backlog": {section:"backlog"}, "#stories": {section:"backlog"}, "#parked": {section:"backlog", sfilter:"parked"},
-    "#docs": {section:"docs"}, "#autotasks": {section:"autotasks"}, "#findings": {section:"findings"}, "#info": {section:"info"}, "#usage": {section:"info", infotab:"usage"}, "#agents": {section:"agents"}, "#skills": {section:"skills"}, "#notices": {section:"info", infotab:"notices"} };
+    "#docs": {section:"docs"}, "#autotasks": {section:"autotasks"}, "#findings": {section:"findings"}, "#info": {section:"info"}, "#usage": {section:"info", infotab:"usage"}, "#agents": {section:"agents"}, "#skills": {section:"skills"}, "#landings": {section:"landings"}, "#notices": {section:"info", infotab:"notices"} };
   const route = h => Object.prototype.hasOwnProperty.call(ROUTES, h) ? ROUTES[h] : null;
   try { const it = localStorage.getItem("oq.infotab"); if (it === "usage" || it === "notices") state.infotab = it; } catch(e){}
   Object.assign(state, route(location.hash));
@@ -604,6 +605,7 @@ ul.hist .sch-line{display:block}
     const pb = pmBadge(state.topm); $("#n-pm").textContent = pb.n; $("#n-pm").classList.toggle("hot", pb.hot);
     $("#repo").hidden = sc === "home" || sc === "info" || sc === "agents" || sc === "skills" || sc === "backlog" || sc === "topm" || sc === "autotasks" || sc === "findings" || sc === "approvals" || sc === "more" || sc === "schedule";
     $("#n-d").textContent = state.pages.length;
+    $("#n-l").textContent = state.landings.length;
     schCounts();
     // The phone's tab bar shows the sidebar's counts: each copies the one it names.
     document.querySelectorAll("#tabbar [data-of]").forEach(n => { const o = document.getElementById(n.dataset.of); n.textContent = o.textContent; n.className = o.className; });
@@ -612,7 +614,7 @@ ul.hist .sch-line{display:block}
     if (sc === "topm") pmCompose.fill();     // the repos arrive after the form is built: the menu is filled without a click
     $("#addform").hidden = sc !== "todo" || !ready;
     $("#rec-new").hidden = sc !== "backlog" || !ready;
-    sc === "home" ? renderHome() : q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "approvals" ? renderApprovals() : sc === "more" ? renderMore() : sc === "schedule" ? renderSchedule() : sc === "info" ? renderInfo() : sc === "agents" ? renderAgents() : sc === "skills" ? renderSkills() : sc === "docs" ? renderDocs() : sc === "autotasks" ? renderAutotasks() : sc === "findings" ? renderFindings() : renderBacklog();
+    sc === "home" ? renderHome() : q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "approvals" ? renderApprovals() : sc === "more" ? renderMore() : sc === "schedule" ? renderSchedule() : sc === "info" ? renderInfo() : sc === "agents" ? renderAgents() : sc === "skills" ? renderSkills() : sc === "docs" ? renderDocs() : sc === "landings" ? renderLandings() : sc === "autotasks" ? renderAutotasks() : sc === "findings" ? renderFindings() : renderBacklog();
     place($("#pane-detail"), detailKids); $("#pane-detail").hidden = !detailKids.length;
   }
 
@@ -693,6 +695,38 @@ ul.hist .sch-line{display:block}
     return el("article", {class:"q", id: "a-" + a.id},
       el("div", {class:"meta"}, el("span", {class:"id", text: a.id})),
       el("h2", {text: a.role || "(no description)"}), kv("Model", a.model || "inherit"), kv("Effort", a.effort || "default"));
+  }
+
+  // Landings: the event tools/land.py posts for each branch it landed (docs/action-hub.md "landings/L-NNN"), newest
+  // first, the latest LANDINGS_SHOWN (api.FEED_MAX), under a heading per new main: a batch is one main, many branches.
+  const LANDINGS_SHOWN = 200;
+  const lnum = d => parseInt(String(d.id).replace(/^\D+/, ""), 10) || 0;
+  const short = c => String(c || "").slice(0, 10);
+  function renderLandings(){
+    fillRepos(state.landings);
+    const rows = state.landings.filter(inR).sort((a, b) => lnum(b) - lnum(a)).slice(0, LANDINGS_SHOWN);
+    if (!rows.length) { const at = settle([]); show([], el("div", {class:"empty"}, el("strong", {text: !ready ? NOT_READY : state.repo ? "No landings for this repo" : "No landings yet"}), ready ? "Each branch tools/land.py lands is posted here once its push is verified." : NOT_READY_WHY)); pickDetail(at); return; }
+    const at = settle(rows.map(d => ["landing", d]));
+    const landingRow = d => rowCard("landing", { ...d, title: String(d.branch || "(no branch)") }, [d.repo ? el("span", {class:"chip", text: String(d.repo)}) : null,
+      el("span", {class: "chip" + (d.verdict === "pass" ? " ok" : ""), text: String(d.verdict || "?")}), d.mode ? el("span", {class:"chip", text: String(d.mode)}) : null,
+      d.deploy ? el("span", {class:"chip need", text:"Deploy"}) : null], d.posted_at ? "landed " + when(d.posted_at) : "");
+    const kids = []; let main = null;
+    for (const d of rows) {
+      if (d.main !== main) { main = d.main; kids.push(el("p", {class:"unote", text: (d.repo ? d.repo + " " : "") + (d.main_branch || "main") + " at " + short(d.main)})); }
+      kids.push(drawn(landingRow, d));
+    }
+    show([], kids);
+    pickDetail(at);
+  }
+  function landingCard(d){
+    const kv = (k, v) => el("p", {class:"kv"}, el("b", {text: k + ": "}), String(v));
+    const recs = Array.isArray(d.records) ? d.records : [];
+    return el("article", {class:"q", id: "l-" + d.id},
+      el("div", {class:"meta"}, el("span", {class:"id", text: d.id}), d.repo ? el("span", {class:"chip", text: String(d.repo)}) : null, d.posted_at ? el("span", {text: when(d.posted_at)}) : null),
+      el("h2", {text: String(d.branch || "(no branch)")}),
+      kv("Tip", short(d.tip)), kv("New " + (d.main_branch || "main"), short(d.main)), kv("Verdict", (d.verdict || "?") + (d.summary ? " · " + d.summary : "")),
+      kv("Gate", d.mode || "unknown"), kv("Records closed", recs.length ? recs.join(", ") : "none"),
+      d.deploy ? kv("Deploy", d.deploy) : null);
   }
 
   // Skills: the kit's skill sources (content/skills/<name>/SKILL.md). A row is a skill's name and description; its
@@ -1015,7 +1049,7 @@ ul.hist .sch-line{display:block}
     return { pages, revision: Number.isInteger(s.revision) ? s.revision : 0, gone, partial, stale, seen: s.pm_seen && typeof s.pm_seen === "object" ? s.pm_seen : null,
       push: s.push && typeof s.push === "object" ? s.push : null, code: s.code && typeof s.code === "object" ? s.code : null, watcher: s.watcher && typeof s.watcher === "object" ? s.watcher : null,
       docs: col("questions").map(d => ({ status: "open", ...d })), inbox: col("inbox"), todos: col("todos").map(d => ({ status: "open", ...d })),
-      stories: col("stories").map(d => ({ status: "submitted", ...d })), skilledits: col("skill_edits"), topm: col("to_pm").map(d => ({ status: "queued", ...d })),
+      stories: col("stories").map(d => ({ status: "submitted", ...d })), skilledits: col("skill_edits"), landings: col("landings"), topm: col("to_pm").map(d => ({ status: "queued", ...d })),
       repos: list(views.repos).map(r => ({ id: String(r.name || ""), ...r })), backlog, completed, parked: backlog.filter(b => b.status === "parked"), usage, agents, skills, notices: noticeRows(views.notices),
       approvals: col("approvals").filter(d => d.status === "pending").sort((x, y) => String(x.created_at || "").localeCompare(String(y.created_at || ""))),
       decided: col("approvals").filter(d => DECIDED.includes(d.status)).sort((x, y) => String(y.decided_at || "").localeCompare(String(x.decided_at || ""))), strong: s.strong === true };
@@ -1711,7 +1745,7 @@ ul.hist .sch-line{display:block}
   }
 
   // ---- More (the phone's last tab): the sections the tab bar has no room for, each with its count.
-  const MORE_ROWS = [["todo", "To-dos", "n-t"], ["backlog", "Backlog", "n-s"], ["docs", "Docs", "n-d"], ["topm", "Message the PM", "n-pm"], ["info", "Usage", "n-u"], ["agents", "Agents", "n-a"], ["skills", "Skills", "n-sk"], ["findings", "Lint findings", "n-f"], ["autotasks", "Automatic tasks", ""]];
+  const MORE_ROWS = [["todo", "To-dos", "n-t"], ["backlog", "Backlog", "n-s"], ["docs", "Docs", "n-d"], ["landings", "Landings", "n-l"], ["topm", "Message the PM", "n-pm"], ["info", "Usage", "n-u"], ["agents", "Agents", "n-a"], ["skills", "Skills", "n-sk"], ["findings", "Lint findings", "n-f"], ["autotasks", "Automatic tasks", ""]];
   function renderMore(){
     place($("#list"), MORE_ROWS.map(([sec, label, of]) => {
       const o = of ? document.getElementById(of) : null;
@@ -1777,7 +1811,7 @@ ul.hist .sch-line{display:block}
     if (!at) return;
     const [kind, d, extra] = at;
     openId = d.id;
-    const make = { approval: approvalCard, todo: todoCard, schedule: scheduleCard, finding: findingCard, item: b => itemCard(b, false), parked: b => itemCard(b, true), done: doneCard, doc: docCard, pm: pmCard, usage: usageCard, agent: agentCard, skill: skillCard }[kind] || card;
+    const make = { approval: approvalCard, todo: todoCard, schedule: scheduleCard, finding: findingCard, item: b => itemCard(b, false), parked: b => itemCard(b, true), done: doneCard, doc: docCard, pm: pmCard, usage: usageCard, agent: agentCard, skill: skillCard, landing: landingCard }[kind] || card;
     const c = drawn(make, d, extra);
     c.tabIndex = -1;
     place(dview, [dlinks, ...(notes || []), c]);
@@ -3197,7 +3231,7 @@ ul.hist .sch-line{display:block}
     lastCheap = cheap;
     rev = next.revision;
     const first = !ready; ready = true; lastRead = Date.now();
-    for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "skills", "skilledits", "notices", "pages", "gone", "partial", "stale", "seen", "push", "approvals", "decided", "strong"]) state[k] = next[k];
+    for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "skills", "skilledits", "landings", "notices", "pages", "gone", "partial", "stale", "seen", "push", "approvals", "decided", "strong"]) state[k] = next[k];
     // An edit outlasts its item: one that is gone, or no longer the owner's to edit, keeps its card (loseEdit).
     for (const id of [...state.pmEdit.keys()]) if (!state.topm.some(x => x.id === id && x.status === "queued")) loseEdit(state.pmEdit, id);
     for (const id of [...state.todoEdit.keys()]) if (!state.todos.some(t => t.id === id && t.from === "you")) loseEdit(state.todoEdit, id);

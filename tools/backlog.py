@@ -28,8 +28,9 @@ audit log, <pm_data>/audit/backlog.jsonl (kitlib.backlog.audit; docs/backlog.md 
 pm_data is a NOTE and a log that cannot be written a WARNING, on standard error, after the write.
 A marked session may not give `--session` a by-design writer's name (gate-land, owner-hub,
 daily-full, hub-condition: audit_check.BY_DESIGN): REFUSED before the store is opened.
-Exit codes: 0 OK, 1 NOT FOUND / ERROR / a red check / a landable that cannot tell, 2 USAGE /
-REFUSED / NOT LANDABLE.
+Exit codes: 0 OK (a `show` of a closed, retired or deleted id too: ENDED), 1 NOT FOUND (an id
+no commit removed) / ERROR / a red check / a landable that cannot tell, 2 USAGE / REFUSED /
+NOT LANDABLE.
 """
 import argparse
 import os

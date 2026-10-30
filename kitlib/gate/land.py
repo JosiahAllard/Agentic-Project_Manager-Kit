@@ -150,6 +150,11 @@
                  each opted-in load node's mirror of main (kitlib.loadnode.mirror.refresh, at
                  most its time cap); its lines go before the LANDED line, a failure or an
                  exception or Ctrl+C there is a WARNING, and the landing stands
+  14 feed        once the result records are finished and in the land ledger (Lander.run): one
+                 event per branch, built from its land record, posted to this machine's hub
+                 (Lander.post_landing; kitlib.hubsite.landings) with a short timeout; a hub that is
+                 down, older than the route, slow or without an agent token is a WARNING said as
+                 progress, the event dropped, and the landing, its lines and its exit code stand
 
 An exception or Ctrl+C under the lock (recover): before the push the lock is released and the
 merge dropped (a merge in progress in the landing tree aborted, best effort), main untouched, and
@@ -253,6 +258,8 @@ PUSH_NEVER_CONNECTED = re.compile(
 FETCH_TIMEOUT = 300
 MERGE_TIMEOUT = 300
 POLL_S = 5.0
+# a record close_pulled closed: at_landing.close_landed's line, `closed <id> in the backlog store`
+_CLOSED = re.compile(r'closed (\S+) in the backlog store\b')
 STEP_CMD = '    $ '      # a STUCK clear step's command line starts with this
 TREE_NAME = '_landing'   # the landing tree's folder, under the config's worktrees_dir
 TREE_LOCK = 'kit landing tree (kitlib.gate.land)'     # its git worktree lock reason
@@ -495,13 +502,16 @@ class Lander(object):
     finishes them), `output` (the file this process's output goes to) and `replaced` (the land
     records those running records replaced).
     `node_route`: where the merged gate runs (step 2b), an object with kitlib.loadnode.landroute's
-    plan, route_line, recheck, same_tree_why, run_on_node and Fallback (None: that module)."""
+    plan, route_line, recheck, same_tree_why, run_on_node and Fallback (None: that module).
+    `hub`: the client the landing feed is posted with (post_landing; None: this machine's hub)."""
 
     def __init__(self, root, branch, expect_main, expect_tip, summary=None,
                  full=False, wait_s=0, say=None, book_kw=None, git_env=None, lock_kw=None,
                  merged_gate=None, log_dir=None, poll_s=POLL_S, pid=None, keep_branch=False,
-                 fresh=False, book=None, submitted=None, tree=None, node_route=None):
+                 fresh=False, book=None, submitted=None, tree=None, node_route=None, hub=None):
         self.root = root
+        self.hub = hub              # the hub client the feed post uses (None: this machine's hub)
+        self.closed = {}            # branch -> the record ids close_pulled closed for it
         self.node_route = node_route    # None: kitlib.loadnode.landroute, imported when routed
         self.route = None           # the landroute.Route plan_route chose before the booking;
                                     # None again once a fallback gates on main (rebook_here)
@@ -2157,6 +2167,7 @@ class Lander(object):
         outcome's last line. The machine-lock slot is released however _run ends. The final and
         the `error` records carry gate_once and escalated (once_facts), and each is appended to
         the land ledger as one line (ledger; result.append_ledger), a failed append a WARNING.
+        Landed, the final records are then posted to the hub's landing feed (post_landing).
         facts['result_record']: the path (one branch), the list of paths (a batch), or None."""
         try:
             out = self._run()
@@ -2192,7 +2203,53 @@ class Lander(object):
             self.ledger(rr)
             paths.append(path)
         out.facts['result_record'] = (paths[0] if len(self.branches) == 1 else paths) if paths else None
+        if out.code == G.OK and out.facts.get('merge'):
+            self.post_landing()
         return out
+
+    def post_landing(self):
+        """Landed, the records finished and the lock released: one landing feed event per branch
+        posted to the hub (kitlib.hubsite.landings), built from the land record the ledger line
+        was (rr.last). Best-effort with a short timeout: each event the hub did not take is a
+        WARNING said as progress and dropped, and the outcome, its lines and its code stand
+        whatever happens here. Never raises."""
+        try:
+            from kitlib.hubsite import landings
+            repo_name = runner.repo_name(self.cfg, self.root)
+            mode = self.merged_mode()
+            events = []
+            for rr in self.result_runs:
+                if rr.last is None:
+                    continue            # ledger() said so; there is nothing to build it from
+                events.append(landings.event(
+                    rr.last, repo_name, self.cfg.main_branch, self.merge,
+                    records=self.closed.get(rr.branch, ()), mode=mode,
+                    deploy=self.deploy_note(rr.last.get('tip'))))
+            lines = landings.post(events, client=self.hub)
+        except BaseException as e:  # noqa: BLE001 - landed: only the feed misses it
+            lines = ['WARNING: the landing was not posted to the hub feed (%s); the landing '
+                     'stands' % _what(e)]
+        for line in lines:
+            try:
+                self.say(line)
+            except BaseException:   # noqa: BLE001 - the outcome stands
+                pass
+
+    def merged_mode(self):
+        """The mode of the merged gate's gate-OK record on the new main (gate_ok.MODES), or None."""
+        try:
+            rec, _ = gate_ok.read(self.root, self.merge)
+            return gate_ok.mode_of(rec) if isinstance(rec, dict) else None
+        except Exception:   # noqa: BLE001 - an event without it still says the landing
+            return None
+
+    def deploy_note(self, tip):
+        """The `Deploy:` note of the commit `tip` (kitlib.hubsite.landings.deploy_note), or None."""
+        from kitlib.hubsite import landings
+        if not tip:
+            return None
+        r = self.git('log', '-1', '--format=%B', tip)
+        return landings.deploy_note(cmd.text(r.out)) if r.rc == 0 else None
 
     def refresh_mirrors(self, out):
         """Step 13, landed and nothing held: the merge pushed to the load nodes' mirrors of main
@@ -2469,6 +2526,8 @@ class Lander(object):
         Each branch's `Closes:` lines are read from its tip down to the main it was merged onto
         (the batch's previous merge, else the base), so a stacked branch never re-reads the
         lines of the branch merged before it; the batch's other branches are no holder to tell.
+        The ids of each branch's `closed <id> in the backlog store` lines go in self.closed, for
+        the landing feed (post_landing).
         A batch not merged as a stack (fewer merges than branches) reads every branch's lines down
         to the base, which takes in an earlier batch branch's lines when the tip carries them: a
         WARNING says so for each branch after the first (its Part-of line can release what this
@@ -2487,9 +2546,11 @@ class Lander(object):
                     'them; see the lines read with: git log --format=%%B %s --not %s'
                     % (len(self.merges), len(self.pairs), b, str(base)[:10], b, t, base))
             try:
-                lines.extend(at_landing.close_landed(
+                said = at_landing.close_landed(
                     self.root, self.cfg, b, self.merge, tip=t, base=base,
-                    batch=[o for o in self.branches if o != b]))
+                    batch=[o for o in self.branches if o != b])
+                lines.extend(said)
+                self.closed[b] = [m.group(1) for m in map(_CLOSED.match, said) if m]
             except BaseException as e:
                 what = 'Ctrl+C' if isinstance(e, KeyboardInterrupt) else '%s: %s' % (
                     type(e).__name__, e)

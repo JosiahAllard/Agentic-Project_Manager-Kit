@@ -10,7 +10,7 @@ from tests.backlog import test_cli
 from tests.backlog.helpers import ADD_FLAGS
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-KINDS = ('Usage', 'Refusal', 'NotFound', 'Failure')
+KINDS = ('Usage', 'Refusal', 'NotFound', 'Failure', 'Ended')
 
 
 def parse(rel):
@@ -55,7 +55,8 @@ class Kinds(unittest.TestCase):
     def test_codes_and_labels(self):
         got = {k: (getattr(errors, k).label, getattr(errors, k).code) for k in KINDS}
         self.assertEqual(got, {'Usage': ('USAGE', 2), 'Refusal': ('REFUSED', 2),
-                               'NotFound': ('NOT FOUND', 1), 'Failure': ('ERROR', 1)})
+                               'NotFound': ('NOT FOUND', 1), 'Failure': ('ERROR', 1),
+                               'Ended': ('ENDED', 0)})
 
 
 class CliCodes(unittest.TestCase):
