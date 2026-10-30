@@ -171,9 +171,9 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   gate or landing step written in an indexed doc counts), and for CI permissions and secrets. A CI
   change that only adds strictness: skill branch-review.
 - Tracked `.codex/` files and AGENTS.md are owner-only: no session or agent edits them.
-- Message the PM only for: a decision you need (owner or PM); any landing result other than a
-  pass; a pass that carries a decision, a follow-up for the PM to price, or is the last of a batch
-  (no other landing you submitted is still queued or running); a refusal (Never); or something
+- Message the PM only for: a decision you need (owner or PM); a landing that needs an action (a
+  `stuck` landing, a record close that failed, or a deploy step its tip's `Deploy:` note names); a
+  follow-up for the PM to price; a refusal (Never); or something
   the owner must do or know (main or CI broken, a lock or resource stuck, a usage limit); plus the
   start check-in (step 3); and the ready-to-restart, ready-to-stop and hand-off replies, whose state
   note lists every landing not yet reported. Each landing message names every landing not yet
