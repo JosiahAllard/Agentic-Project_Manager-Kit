@@ -102,7 +102,7 @@ class ReviewerModel(GateRepoCase):
         self.plant('a' + '0' * 16, 'claude-haiku-5-5')
         self.assert_queued(self.add(**{'--risk': 'Low', '--reviewer': 'pm-kit:coordinator'}))
         self.assert_queued(self.add(**{'--risk': 'Low', '--reviewer-id': 'coord-1'}))  # --session
-        self.assert_queued(self.add(**{'--reviewer-id': 'kit-coordinator-a2-r4'}))
+        self.assert_queued(self.add(**{'--reviewer-id': 'demo-coordinator-b7-r1'}))
         self.assert_queued(self.add(**{'--reviewer-id': 'agent-r1'}))
         # a self-review is not looked up even when its id has a haiku transcript
         self.assert_queued(self.add(**{'--risk': 'Low', '--reviewer': 'pm-kit:coordinator',
@@ -149,7 +149,7 @@ class AgentModels(unittest.TestCase):
 
     def test_only_an_agent_id_is_looked_up(self):
         self.assertEqual(AM.models(RID, self.env, self.home), [])
-        for rid in ('kit-coordinator-a2-r4', 'agent-r1', 'a*', 'A13560C0143B859E7', RID + '0', ''):
+        for rid in ('demo-coordinator-b7-r1', 'agent-r1', 'a*', 'A13560C0143B859E7', RID + '0', ''):
             self.assertIsNone(AM.models(rid, self.env, self.home), rid)
 
     def test_the_read_stops_at_two_models_and_skips_what_is_not_a_turn(self):
