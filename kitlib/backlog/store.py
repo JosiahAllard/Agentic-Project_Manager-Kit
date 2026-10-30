@@ -1357,6 +1357,32 @@ def pm_data_live_store(root):
     return pm_root, named, None
 
 
+def worktree_live_store(top, cfg):
+    """`(pm_root, branch)` when a run from the checkout `top` opens the live store in the PM data
+    worktree instead of its own: `top`'s `.kit.json` (`cfg`) names no "backlog".store, `top` is a
+    linked worktree of its repository (git's own answer; the PM data worktree itself is excluded
+    by pm_data_live_store), that repository's PM data worktree names a store of its own
+    (pm_data_live_store, read without error), and `top` has a branch checked out, `branch`, the
+    one the run acts as. None otherwise: the main checkout, a detached HEAD, a named store or no
+    live store keep `top`'s own (the implicit ref, whose writes default_store_refusal refuses).
+    The same resolution `-C <pm data> --as <branch>` spells out by hand (docs/backlog.md
+    "The store a worktree opens")."""
+    if cfg.written('backlog', 'store') is not None:
+        return None
+    if gitrepo.classify(top).kind != gitrepo.LINKED:
+        return None
+    try:
+        pm_root, named, why = pm_data_live_store(top)
+    except Exception:                                # noqa: BLE001 - no live store found: none
+        return None
+    if pm_root is None or not named or why:
+        return None
+    branch, _why = refs.current_branch(top)
+    if not branch:
+        return None
+    return pm_root, branch
+
+
 def unreadable_kit_json(pm_root, why):
     """The clause naming a PM data worktree whose `.kit.json` cannot be read (pm_data_live_store)."""
     return 'the .kit.json of the PM data worktree %s cannot be read: %s' % (

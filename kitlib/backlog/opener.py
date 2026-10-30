@@ -5,7 +5,9 @@ docs/backlog.md).
   open_repo(root)   -> (top, cfg, rules); Failure when `root` is no repository or its `.kit.json`
                        cannot be read
   open_store(root, fetch=True, session=None, branch=None) -> plan.Context over the store, its
-                       `liveness` probe the worktree classifier's (liveness), its `cap` repo_cap's
+                       `liveness` probe the worktree classifier's (liveness), its `cap` repo_cap's;
+                       from a linked worktree naming no store, the PM data worktree's live store
+                       (store.worktree_live_store)
   repo_cap(top)     -> the main checkout's `.kit.json` backlog.cap `next` and `pull` share
   planner(args, ctx) -> the plan `Store.write` runs for `args.verb` (one of WRITES, `retarget` or
                        `uncite`); Usage for any other verb, raised before a plan exists
@@ -48,7 +50,16 @@ def open_repo(root):
 
 
 def open_store(root, fetch=True, session=None, branch=None):
+    """The plan.Context over the store `root`'s checkout opens. A linked worktree whose
+    `.kit.json` names no store opens the live store in its repository's PM data worktree, acting
+    as its own checked-out branch unless `branch` (`--as`) names one (store.worktree_live_store):
+    `-C <worktree>` then reads and writes what `-C <pm data> --as <its branch>` does."""
     top, cfg, rules = open_repo(root)
+    live = smod.worktree_live_store(top, cfg)
+    if live is not None:
+        pm_root, own = live
+        top, cfg, rules = open_repo(pm_root)
+        branch = branch or own
     section = cfg.section('backlog')
     backend = smod.open_backend(top, cfg, fetch=fetch)
     store = smod.Store(backend, rules, session=session)
