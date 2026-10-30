@@ -231,7 +231,7 @@ class TheDocsLine(BoardFixture):
     def test_the_docs_line_is_the_stale_reports_last_line_for_this_checkout(self):
         self.doc_index('import sys\nprint(" ".join(sys.argv[1:]))\n')
         out = self.board_part(self.run_board(where=self.wt)[1])
-        self.assertIn('docs: --stale -C %s' % os.path.normpath(self.wt), out)
+        self.assertIn('docs: --stale -C %s' % os.path.normpath(self.wt).replace('\\', '/'), out)
         self.doc_index('print("first")\nprint(%r)\n' % STALE)
         self.assertIn('docs: ' + STALE, self.board_part(self.run_board()[1]))
 
@@ -263,7 +263,7 @@ class TheStateFile(BoardFixture):
         self.assertIn('feature |', body)
         self.assertIn(board.HEADER, body)
         self.assertIn('## Landing queue', body)
-        self.assertIn(('state written: %s' % os.path.normpath(self.state())).lower(), out.lower())
+        self.assertIn(('state written: %s' % os.path.normpath(self.state()).replace('\\', '/')).lower(), out.lower())
         for folder in ('ops', 'docs'):
             self.assertFalse(os.path.exists(os.path.join(self.root, folder)))
         self.assertNotIn('state', self.git('status', '--porcelain'))
