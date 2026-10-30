@@ -3,12 +3,12 @@
 folder, the export or the machine config, and removes nothing. The owner runs the removals it
 names by hand.
 
-inventory(home, kit, export_dir=None) -> a dict: for each account folder (kitlib.pluginsource.claude
+inventory(home, kit, export_dir=None) -> a dict: for each account folder (kitlib.pluginsource
 account_folders), its launcher label, whether a credentials file exists (existence only, never read),
 the pm-kit plugin's state (migrated to the export, refreshed: kitlib.pluginsource state.json),
 the settings.json hooks that the managed settings template also carries (they run twice), and the
 leftover links (kitlib.machinesetup.links, each with the command that removes the link only). A
-`.claude-*` folder that no launcher account or org lists is flagged "not an account".
+folder other than the default one that no launcher account or org lists is flagged "not an account".
 
 Every path shown has the home folder written as %USERPROFILE%, so the text carries no user name.
 lines(result) is the plain text; the caller prints it. Nothing here prints or exits.
@@ -20,7 +20,6 @@ from kitlib import pluginsource as ps
 from kitlib.config import user
 from kitlib.launcher import accounts as laccounts
 from kitlib.launcher import settings as lsettings
-from kitlib.pluginsource import claude as pclaude
 
 from . import links, managed, settings
 from .common import Plan, kit_file, norm
@@ -144,9 +143,9 @@ def inventory(home, kit, export_dir=None):
     if why:
         notes.append(why)
     folders = []
-    for f in pclaude.account_folders(home):
+    for f in ps.account_folders(home):
         label = labels.get(norm(f))
-        unlisted = not label and os.path.basename(f).startswith('.claude-')
+        unlisted = not label and os.path.basename(f) != lsettings.DEFAULT_FOLDER
         if not label:
             label = [] if unlisted else [laccounts.DEFAULT_LABEL]
         plug = _plugin(f, state, state_why, export_dir)

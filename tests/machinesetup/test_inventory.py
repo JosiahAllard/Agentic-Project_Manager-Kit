@@ -14,7 +14,7 @@ from tests import gitfixture
 from tests.home import TempHomeCase, machine_config
 from tests.platforms import windows_only
 
-SECRET = 'SECRET-CREDENTIAL-VALUE'
+SECRET = 'fixture-credential-text'
 
 
 def write(path, text):
