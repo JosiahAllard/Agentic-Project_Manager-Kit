@@ -102,6 +102,12 @@ class Groups(Outputs):
         records = {'b1': record('b1', 'fail', tip=TIP2)}
         self.assertEqual(self.group_of(events, records), {'b1': render.TO_REPORT})
 
+    def test_a_mark_counts_only_on_a_final_record(self):
+        events = [submitted('b1', n=0), {'kind': 'reported', 'branch': 'b1', 'utc': 'u', '_n': 1}]
+        self.assertEqual(self.group_of(events, {}), {'b1': render.IN_FLIGHT})
+        self.assertEqual(self.group_of(events, {'b1': record('b1', 'running')}),
+                         {'b1': render.IN_FLIGHT})
+
     def test_reported_at_another_tip_clears_nothing(self):
         events = [submitted('b1', n=0), {'kind': 'reported', 'branch': 'b1', 'tip': 'bbbb', '_n': 1}]
         self.assertEqual(self.group_of(events, {'b1': record('b1', 'fail')}),
@@ -130,6 +136,10 @@ class Text(unittest.TestCase):
     def test_an_unreadable_queue_is_said(self):
         note = render.text('s', 'e', {}, [], None, 'bad file', '')
         self.assertIn('the verdict queue cannot be read: bad file', note)
+
+    def test_an_unknown_main_is_said_under_the_entries(self):
+        note = render.text('s', 'e', {}, [], [], 'main as fetched cannot be read (x)', '')
+        self.assertIn('Verdicts queued by s (0)\nmain as fetched cannot be read (x)', note)
 
     def test_keep_is_what_the_note_shows(self):
         old = [{'kind': 'backlog', 'id': str(i), '_n': i} for i in range(30)]

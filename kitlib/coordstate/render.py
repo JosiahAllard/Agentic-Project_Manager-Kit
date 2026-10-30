@@ -10,7 +10,9 @@ so nothing a tool can see is written by hand.
     with that WARNING, or its output cannot tell, until a `reported` event names it. A landing
     that landed with no WARNING and a LANDED line is on the hub feed (LANDED_POSTED). Between the
     final record and the feed post the output has neither: IN_FLIGHT.
-  - Verdicts queued by this session (kitlib.gate.verdicts, entries whose `session` is it).
+  - Verdicts queued by this session and still waiting to land: the queue (kitlib.gate.verdicts,
+    entries whose `session` is it) read as it stands, leaving out the ones verdicts.expired names
+    against main as last fetched. Nothing is dropped from the queue here.
   - The latest backlog writes.
   - The judgments file, verbatim: the one part the coordinator writes.
 
@@ -21,7 +23,11 @@ The note is held to CAP bytes by dropping the oldest lines of the least needed s
   feed_state(lines)                  POSTED, PENDING, UNKNOWN or the feed WARNING line itself
   judge(item, record, why, block)    the item's group and what it says
   build(root, events, read, block)   every landing judged: {group: [items]}, backlog events
-  queued_for(common_dir, session)    (entries, None) or (None, why)
+  landing(root, events, branch, tip, read, block)
+                                     the latest landing of `branch` judged, or None
+  main_as_fetched(root)              (main as last fetched, None) or (None, why); no network
+  queued_for(common_dir, session, main, main_why)
+                                     (entries, a caveat or None), or (None, why)
   text(...)                          the note
   keep(groups, backlog)              the `_n` of every event the note shows: a compaction keeps
                                      those
@@ -65,15 +71,21 @@ def fold(events):
                                   'reported': None, 'events': [ev.get('_n')]}
         elif kind == 'reported':
             item = latest.get(ev.get('branch'))
-            tip = ev.get('tip')
-            if item is None or (isinstance(tip, str) and tip
-                                and not (item['tip'] or '').lower().startswith(tip.lower())):
+            if item is None or not at_tip(item, ev.get('tip')):
                 continue
             item['reported'] = ev.get('utc') or '?'
             item['events'].append(ev.get('_n'))
         elif kind == 'backlog':
             backlog.append(ev)
     return list(latest.values()), backlog
+
+
+def at_tip(item, tip):
+    """Whether `item` is the landing a mark names: no `tip` names the latest, else its tip starts
+    with `tip`."""
+    if not isinstance(tip, str) or not tip:
+        return True
+    return (item['tip'] or '').lower().startswith(tip.lower())
 
 
 def feed_state(lines):
@@ -98,7 +110,9 @@ def _short(text, most=SUMMARY_MAX):
 
 def judge(item, record, why, block):
     """Set `item`'s group and say (what its line tells) from its land record `record` (or None
-    and `why`) and `block`, a callable giving the outcome lines of its output file."""
+    and `why`) and `block`, a callable giving the outcome lines of its output file. A `reported`
+    mark counts only on a final record: what was told before the end says nothing of how it
+    ended."""
     from kitlib.gate import result, submit
     tip = item.get('tip') or ''
     final = None
@@ -129,10 +143,18 @@ def judge(item, record, why, block):
         else:
             group = TO_REPORT
         item['say'] = said
-    if item.get('reported'):
+    if item.get('reported') and final is not None:
         group = REPORTED
     item['group'] = group
     return item
+
+
+def _judged(root, item, read, block):
+    try:
+        record, why = read(root, item['branch'], 'land')
+    except Exception as e:          # noqa: BLE001 - one unreadable record is said, not fatal
+        record, why = None, str(e)
+    return judge(item, record, why, block)
 
 
 def build(root, events, read=None, block=None):
@@ -144,23 +166,46 @@ def build(root, events, read=None, block=None):
     items, backlog = fold(events)
     groups = {TO_REPORT: [], IN_FLIGHT: [], LANDED_POSTED: [], REPORTED: []}
     for item in items:
-        try:
-            record, why = read(root, item['branch'], 'land')
-        except Exception as e:      # noqa: BLE001 - one unreadable record is said, not fatal
-            record, why = None, str(e)
-        judge(item, record, why, block)
+        _judged(root, item, read, block)
         groups[item['group']].append(item)
     return groups, backlog
 
 
-def queued_for(common_dir, session):
-    """`(entries, None)`: the verdict queue's entries this session queued, oldest first; or
-    `(None, why)` when the queue cannot be read."""
+def landing(root, events, branch, tip=None, read=None, block=None):
+    """The latest submitted landing of `branch`, judged, when `tip` names it; else None."""
+    from kitlib.gate import result, submit
+    for item in fold(events)[0]:
+        if item['branch'] == branch and at_tip(item, tip):
+            return _judged(root, item, read or result.read, block or submit.outcome_block)
+    return None
+
+
+def main_as_fetched(root):
+    """`(<remote>/<main branch> as last fetched, None)`, or `(None, why)`; no network."""
+    from kitlib import config as kconfig
+    from kitlib.git import refs
+    try:
+        cfg = kconfig.load(root)
+    except kconfig.ConfigError as e:
+        return None, 'the kit configuration cannot be read: %s' % e
+    sha, why = refs.remote_tip(cfg.remote, cfg.main_branch, root)
+    return (sha, None) if sha else (None, '%s/%s: %s' % (cfg.remote, cfg.main_branch, why))
+
+
+def queued_for(common_dir, session, main=None, main_why=None):
+    """`(entries, caveat)`: the verdict queue's entries this session queued that still wait to
+    land, oldest first, read only. The caveat, else None, says landed entries can be among them
+    because `main` (main as last fetched) is unknown. `(None, why)` when the queue cannot be
+    read."""
     from kitlib.gate import verdicts
     try:
-        return [e for e in verdicts.entries(common_dir) if e.get('session') == session], None
+        mine = [e for e in verdicts.entries(common_dir) if e.get('session') == session]
+        waiting = [e for e in mine if not verdicts.expired(common_dir, e, main)]
     except Exception as e:          # noqa: BLE001 - VerdictError or an OSError: said in the note
         return None, str(e)
+    if main:
+        return waiting, None
+    return waiting, 'main as fetched cannot be read (%s), so landed entries can be listed' % main_why
 
 
 def _landing_line(item):
@@ -205,7 +250,8 @@ def text(session, source, groups, backlog, queued, queued_why, judgments, skippe
                          'the verdict queue cannot be read: %s' % _short(queued_why, 300)])
     else:
         sections.append(['## Verdicts queued by %s (%d)' % (session, len(queued))]
-                        + [_queued_line(e) for e in queued])
+                        + [_queued_line(e) for e in queued]
+                        + ([_short(queued_why, 300)] if queued_why else []))
     trimmable = []
     for title, group in (('Landed and on the hub feed', LANDED_POSTED), ('Reported', REPORTED)):
         items = groups.get(group, [])

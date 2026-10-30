@@ -31,15 +31,15 @@ Limits, in `kitlib/coordstate/log.py`:
 - **The log is never created by an append.** An append to a log that is gone fails, so a `stop` cannot be undone by a tool that raced it.
 - **Concurrent tools never interleave.** An append holds the lock and writes its line in one write. A line a crash cut short is skipped on read and counted in the note's header; the next append starts a new line, so only the cut line is lost.
 - **A busy lock costs at most `BOUND` seconds** (0.72): tried for `WAIT` (0.2 s), plus up to 0.5 s the lock takes to read its holder's record. Then that event is dropped.
-- **A full log drops events.** At `MAX_BYTES` (512 KB) it takes no more lines until `show` compacts it. `show` compacts past `COMPACT_AT` (128 KB) to the events the note shows, keeping every line appended since its read; it says so in a `COMPACTED` line on stderr.
+- **A full log drops events.** At `MAX_BYTES` (512 KB) it takes no more lines until `show` compacts it. `show` compacts past `COMPACT_AT` (128 KB) to the events the note shows, keeping every line appended since its read; it says so in a `COMPACTED` line on stderr. A compaction that cannot run (a busy lock, a failed write) is a `NOT COMPACTED` line there and changes nothing else: the note is still written and printed, and the next `show` tries again.
 
 ## Who appends
 
 A tool's call (`log.note`, `note_submit`, `note_backlog`) is best effort: no session, no log, a busy lock, a full log or a failed write means no line, and it never raises or changes what the tool does, says or exits with. With no log on, a call costs one environment read and one folder listing.
 
-A subagent inherits the session's name, so its `backlog.py` write or submitted landing is logged like the coordinator's own. Nothing appends from the detached landing, a hook or the verdict queue: `show` reads what those record (The state note).
+A subagent inherits the session's name, so its `backlog.py` write or submitted landing is logged like the coordinator's own. Nothing appends from the detached landing, a hook or the verdict queue: `show` reads what those record (The state note). Verdicts are read from the queue each time, never appended. Gate results are not in the log or the note in this slice: they come in slice 2, with the dispatch event.
 
-A landing not submitted (`land.py` without `--submit`) has no `land_submit` event, so it is not in the note, and `reported` on its branch marks nothing.
+A landing not submitted (`land.py` without `--submit`) has no `land_submit` event, so it is not in the note, and `reported` on its branch says `NOT FOUND`.
 
 ## The state note
 
@@ -48,7 +48,7 @@ A landing not submitted (`land.py` without `--submit`) has no `land_submit` even
 1. **Judgments**: `judgments-<session>.md`, verbatim.
 2. **Landings to report to the PM**, until `reported` names them.
 3. **Landings in flight**.
-4. **Verdicts queued by this session** (`kitlib.gate.verdicts`, the entries whose `session` is it), or why the queue cannot be read.
+4. **Verdicts queued by this session** that still wait to land (`kitlib.gate.verdicts`, the entries whose `session` is it), or why the queue cannot be read. The queue keeps an entry after its branch lands, so `show` leaves out what `verdicts.expired` names against main as last fetched, with no network: a tip in main, or a branch that is gone. It only reads: every entry stays on disk. When main as fetched cannot be read, every entry is listed and a line under them says landed ones can be among them.
 5. **Landed and on the hub feed**, and **Reported**: the latest 5 of each.
 6. **Backlog writes**: the latest 15.
 
@@ -65,6 +65,8 @@ A landing is the latest `land_submit` of its branch: a new submission replaces t
 
 The result record says nothing of the hub feed. `Lander.post_landing` says its `WARNING: the landing of <branch> was not posted to the hub feed (<why>); the landing stands` (docs/gate.md "Landing feed") in the landing's own output, the `<stem>.<run_id>.land.log` of docs/gate.md "Submitting a landing", after the last `result record:` line and before the `LANDED` line, which is what `outcome_block` returns. A successful post says nothing, so "on the hub feed" is read from a `LANDED` line with no WARNING. In the moments between the final record and the post, the output has neither.
 
+A `reported` mark counts only on a final record at the tip. A landing in flight stays in flight, so a failed landing cannot fall into the trimmed Reported section on a mark made before it failed.
+
 A landing whose process died leaves a `running` record, and `show` reads without finishing it, so it stays in flight until a `gate.py wait-result` finishes it `error` (docs/gate.md "Result record").
 
 ## Commands
@@ -79,11 +81,13 @@ python <kit>/tools/coord_state.py -C <repo> stop
 | Command | What it does |
 |---|---|
 | `start` | Turns this session's log on: in the coordinator folder that holds its stopped log, state note or judgments, else `<agent temp>/<S>-coordinator` (S default: the main checkout's folder name). A state note not rendered by `show` is added to the judgments file first, since `show` overwrites it. Prints `STARTED <log>`, `RESUMED <log>` or `ALREADY ON <log>`. |
-| `show` | Prints the note and writes it to `state-<session>.md` by a temp file and a replace (`--no-write`: prints only). `--session` reads another session's: a successor's read of its predecessor. |
-| `reported` | Marks BRANCH's latest submitted landing as told to the PM (with `--tip`, only when its tip starts with SHA). Prints `MARKED <branch>`. |
+| `show` | Prints the note and writes it to `state-<session>.md` by a temp file and a replace. A note there that `show` did not render is added to the judgments file first, as `start` does, once however often either runs; if that fails it stays where it is (`NOT DONE`). `--no-write` prints only and touches neither file, so it does not show such a note. `--session` reads another session's: a successor's read of its predecessor. |
+| `reported` | Marks BRANCH's latest submitted landing as told to the PM (with `--tip`, only when its tip starts with SHA). Prints `MARKED <branch>`. Writes nothing and exits 1 with `NOT FOUND` when the log holds no such landing, or `NOT MARKED` when it is in flight. |
 | `stop` | Renames the log to `.off`. From then on the state note is written by hand again. Prints `STOPPED <off file>`. |
 
-Exit codes: 0 done; 1 not done (`NOT ON`: no log for the session; `NOT DONE: <why>`: no session, a file that cannot be read or written, a repository git cannot place); 2 usage.
+Exit codes: 0 done; 1 not done (`NOT ON`: no log for the session; `NOT FOUND` and `NOT MARKED`: above; `NOT DONE: <why>`: no session, a file that cannot be read or written, a repository git cannot place); 2 usage.
+
+Known limit: an edit to a rendered note (one that still begins with its `# Coordinator state:` line, say after `stop`) is not added to the judgments file, and the next `show` overwrites it. Write such a thing in the judgments file.
 
 ## Hand-off
 

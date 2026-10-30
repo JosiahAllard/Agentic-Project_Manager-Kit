@@ -93,6 +93,19 @@ class On(TempAgentFolder):
         with open(f.judgments, encoding='utf-8') as fh:
             self.assertEqual(fh.read(), 'earlier\nby hand after the stop\n')
 
+    def test_a_hand_written_note_is_added_once_over_start_stop_start(self):
+        folder = os.path.join(self.temp, SLUG + log.FOLDER_SUFFIX)
+        os.makedirs(folder)
+        with open(os.path.join(folder, 'state-%s.md' % SESSION), 'w', encoding='utf-8') as fh:
+            fh.write('hand written\n')
+        got = log.start(self.env, slug=SLUG)
+        self.assertTrue(got.seeded)
+        log.stop(self.env)
+        self.assertFalse(log.start(self.env).seeded)
+        self.assertFalse(log.seed(got.files))
+        with open(got.files.judgments, encoding='utf-8') as fh:
+            self.assertEqual(fh.read(), 'hand written\n')
+
     def test_stop_then_start_keeps_the_lines(self):
         f = self.turn_on()
         log.note('backlog', self.env, verb='add', id='A')

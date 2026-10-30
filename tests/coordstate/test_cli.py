@@ -1,6 +1,8 @@
 """tools/coord_state.py's verbs and exit codes (docs/coord-state.md "Commands"): start, show
 (written to state-<session>.md, or printed only; another session's with --session), reported,
-stop; 1 when the log is off, 2 on usage. Run in process against a temp repository."""
+stop; 1 when the log is off or a mark names no ended landing, 2 on usage; a hand-written note is
+kept and a compaction that cannot run leaves the note standing. Run in process against a temp
+repository."""
 import os
 import unittest
 from unittest import mock
@@ -45,6 +47,7 @@ class Cli(TempAgentFolder):
         self.assertIn('- kit/b at dddddddddd', out)
         with open(f.state, encoding='utf-8') as fh:
             self.assertEqual(fh.read(), out)
+        result.write(self.repo.root, result.build('kit/b', TIP, None, 'land', 1, summary='red'))
         out, _ = self.ok('reported', 'kit/b', '--tip', TIP[:8])
         self.assertEqual(out.strip(), 'MARKED kit/b at %s' % TIP[:8])
         out, _ = self.ok('show', '--no-write')
@@ -71,6 +74,60 @@ class Cli(TempAgentFolder):
         self.assertIn('Landings to report to the PM (0)', out)
         self.assertIn('## Reported (latest 1 of 1)', out)
 
+    def test_a_mark_that_names_no_ended_landing_is_not_written(self):
+        self.ok('start', '--slug', SLUG)
+        f = log.files(log.locate(self.env), SESSION)
+        log.note('land_submit', self.env, branches=['kit/b'], tips=[TIP], output=None)
+        for args, word in ((('reported', 'kit/none'), 'NOT FOUND'),
+                           (('reported', 'kit/b', '--tip', 'beef'), 'NOT FOUND'),
+                           (('reported', 'kit/b'), 'NOT MARKED')):
+            rc, out, err = self.run_tool(*args)
+            self.assertEqual((rc, out), (1, ''), args)
+            self.assertIn(word, err)
+        self.assertEqual([e['kind'] for e in self.events(f)], ['land_submit'])
+
+    def test_a_landing_whose_feed_post_is_not_said_yet_is_not_marked(self):
+        self.ok('start', '--slug', SLUG)
+        output = os.path.join(self.temp, 'kit-b.1.land.log')
+        with open(output, 'w', encoding='utf-8') as fh:
+            fh.write('result record: X\n')
+        log.note('land_submit', self.env, branches=['kit/b'], tips=[TIP], output=output)
+        result.write(self.repo.root, result.build('kit/b', TIP, None, 'land', 0, summary='landed'))
+        rc, _out, err = self.run_tool('reported', 'kit/b')
+        self.assertEqual(rc, 1)
+        self.assertIn('NOT MARKED', err)
+        with open(output, 'a', encoding='utf-8') as fh:
+            fh.write('LANDED kit/b on main at abc\n')
+        self.ok('reported', 'kit/b')
+
+    def test_show_keeps_a_hand_written_note(self):
+        self.ok('start', '--slug', SLUG)
+        f = log.files(log.locate(self.env), SESSION)
+        with open(f.state, 'w', encoding='utf-8') as fh:
+            fh.write('by hand\n')
+        out, _ = self.ok('show', '--no-write')
+        self.assertFalse(os.path.exists(f.judgments))
+        with open(f.state, encoding='utf-8') as fh:
+            self.assertEqual(fh.read(), 'by hand\n')
+        out, err = self.ok('show')
+        self.assertIn('by hand', out)
+        self.assertIn('edit that file from now on', err)
+        self.ok('show')
+        with open(f.judgments, encoding='utf-8') as fh:
+            self.assertEqual(fh.read(), 'by hand\n')
+
+    def test_a_note_that_cannot_be_kept_is_not_overwritten(self):
+        self.ok('start', '--slug', SLUG)
+        f = log.files(log.locate(self.env), SESSION)
+        with open(f.state, 'w', encoding='utf-8') as fh:
+            fh.write('by hand\n')
+        with mock.patch.object(log, 'seed', side_effect=OSError('no disk')):
+            rc, _out, err = self.run_tool('show')
+        self.assertEqual(rc, 1)
+        self.assertIn('NOT DONE', err)
+        with open(f.state, encoding='utf-8') as fh:
+            self.assertEqual(fh.read(), 'by hand\n')
+
     def test_a_successor_reads_its_predecessors_note(self):
         self.ok('start', '--slug', SLUG)
         with open(log.files(log.locate(self.env), SESSION).judgments, 'w', encoding='utf-8') as fh:
@@ -91,6 +148,20 @@ class Cli(TempAgentFolder):
         self.assertIn('COMPACTED', err)
         events = log.read_events(log.files(log.locate(self.env), SESSION).events)[0]
         self.assertEqual([e['id'] for e in events], ['R%d' % i for i in range(25, 40)])
+
+    def test_a_compaction_that_cannot_run_leaves_the_note_standing(self):
+        self.ok('start', '--slug', SLUG)
+        f = log.files(log.locate(self.env), SESSION)
+        log.note('backlog', self.env, verb='set', id='R1')
+        for failure in (log.Busy('held'), OSError('no disk')):
+            with mock.patch.object(log, 'COMPACT_AT', 1), \
+                    mock.patch.object(log, 'compact', side_effect=failure):
+                os.path.exists(f.state) and os.remove(f.state)
+                out, err = self.ok('show')
+            self.assertIn('R1', out)
+            self.assertIn('NOT COMPACTED', err)
+            with open(f.state, encoding='utf-8') as fh:
+                self.assertEqual(fh.read(), out)
 
     def test_off_and_usage(self):
         rc, _out, err = self.run_tool('reported', 'kit/b')

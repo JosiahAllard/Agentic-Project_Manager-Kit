@@ -12,16 +12,19 @@
       <off file>`, or `NOT ON` (exit 1).
   coord_state.py show [--session NAME] [--no-write] [-C DIR]
       render the state note of this session (or NAME: a successor reads its predecessor's) from
-      its log, the judgments file and DIR's records (land result records, the verdict queue, a
-      submitted landing's output); print it and write it to `state-<session>.md` unless
-      --no-write. A log past its compaction size is compacted to what the note shows, said in a
-      `COMPACTED` line on stderr.
+      its log, the judgments file and DIR's records (land result records, the verdict queue read
+      against main as last fetched, a submitted landing's output); print it and write it to
+      `state-<session>.md` unless --no-write. A note written by hand is first added to the
+      judgments file. A log past its compaction size is compacted to what the note shows, said in
+      a `COMPACTED` line on stderr; a compaction that cannot run is a `NOT COMPACTED` line there
+      and the note stands.
   coord_state.py reported BRANCH [--tip SHA] [-C DIR]
       mark BRANCH's latest submitted landing (only when its tip starts with SHA) as told to the
-      PM. Prints `MARKED <branch>`.
+      PM, once its land record is final. Prints `MARKED <branch>`; `NOT FOUND` (exit 1) when the
+      log has no such landing, `NOT MARKED` (exit 1) when it has not ended.
 
 The session is PM_KIT_SESSION_NAME, which the kit launcher sets. -C: a path in the repository
-(default: here); only start's default slug and show read it.
+(default: here); stop does not read it.
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.coordstate, prints and
 exits. Exit codes: 0 done; 1 not done (no session, no log on, a file that cannot be read or
@@ -111,12 +114,22 @@ def do_reported(a):
     folder = log.locate(session=session)
     if folder is None:
         return _not_on(session)
+    root, why = repo.toplevel(a.root)
+    if root is None:
+        return _err('NOT DONE: %s' % why)
+    events = log.files(folder, session).events
+    named = '%s%s' % (a.branch, ' at %s' % a.tip if a.tip else '')
     try:
-        log.append(log.files(folder, session).events,
-                   log.entry('reported', {'branch': a.branch, 'tip': a.tip}), log.WAIT * 10)
+        item = render.landing(root, log.read_events(events)[0], a.branch, a.tip)
+        if item is None:
+            return _err('NOT FOUND: no submitted landing of %s in %s' % (named, events))
+        if item['group'] == render.IN_FLIGHT:
+            return _err('NOT MARKED: the landing of %s has not ended (%s); mark it once its end '
+                        'is told to the PM' % (named, item.get('say')))
+        log.append(events, log.entry('reported', {'branch': a.branch, 'tip': a.tip}), log.WAIT * 10)
     except (log.LogError, OSError) as e:
         return _err('NOT DONE: %s' % e)
-    print('MARKED %s%s' % (a.branch, ' at %s' % a.tip if a.tip else ''))
+    print('MARKED %s' % named)
     return DONE
 
 
@@ -151,19 +164,31 @@ def do_show(a):
     try:
         events, skipped, size = log.read_events(f.events)
         groups, backlog = render.build(root, events)
-        queued, queued_why = (render.queued_for(common, session) if common
-                              else (None, why))
+        queued, queued_why = (render.queued_for(common, session, *render.main_as_fetched(root))
+                              if common else (None, why))
+        if not a.no_write and log.seed(f):
+            sys.stderr.write('added %s to %s: edit that file from now on\n' % (f.state, f.judgments))
         note = render.text(session, f.events, groups, backlog, queued, queued_why,
                            _read(f.judgments), skipped, datetime.datetime.now(datetime.timezone.utc))
-        if size > log.COMPACT_AT and log.compact(f.events, render.keep(groups, backlog), size):
-            sys.stderr.write('COMPACTED %s: kept the %d event(s) the note shows\n'
-                             % (f.events, len(render.keep(groups, backlog))))
         if not a.no_write:
             _write(f.state, note)
     except (log.LogError, OSError) as e:
         return _err('NOT DONE: %s' % e)
+    if size > log.COMPACT_AT:
+        _compact(f.events, render.keep(groups, backlog), size)
     sys.stdout.write(note)
     return DONE
+
+
+def _compact(events, keep, size):
+    """Best effort: the note is what show is for, so a compaction that cannot run is said and
+    left to the next show."""
+    try:
+        if log.compact(events, keep, size):
+            sys.stderr.write('COMPACTED %s: kept the %d event(s) the note shows\n'
+                             % (events, len(keep)))
+    except (log.LogError, OSError) as e:
+        sys.stderr.write('NOT COMPACTED %s: %s\n' % (events, e))
 
 
 def safe_stdio():

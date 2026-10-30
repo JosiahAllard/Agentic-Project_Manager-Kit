@@ -33,6 +33,7 @@ or a failed write: no line.
   note_backlog(verb, id, branch)     after a backlog write: a backlog event
   read_events(path)                  (events, skipped lines, bytes read)
   compact(path, keep, seen, wait)    keep only the `keep` lines of what was read, under the lock
+  seed(files)                        add a hand-written state note to the judgments file
   start(environ, slug)               turn the log on; Started
   stop(environ)                      turn it off; the OFF path, or None when it was not on
 """
@@ -258,12 +259,36 @@ def compact(path, keep, seen, wait=WAIT):
     return True
 
 
+def seed(f):
+    """Add this session's state note to its judgments file when it was written by hand (it does
+    not begin with NOTE_HEAD), since `show` overwrites the note: True when added. A note the
+    judgments file already holds is left, so a start, a stop, another start and a show add it
+    once."""
+    try:
+        with open(f.state, encoding='utf-8', errors='replace') as src:
+            text = src.read()
+    except FileNotFoundError:
+        return False
+    if not text.strip() or text.startswith(NOTE_HEAD):
+        return False
+    try:
+        with open(f.judgments, encoding='utf-8', errors='replace') as src:
+            held = src.read()
+    except FileNotFoundError:
+        held = ''
+    if text.strip() in held:
+        return False
+    with open(f.judgments, 'a', encoding='utf-8', newline='\n') as dst:
+        dst.write('\n' if held and not held.endswith('\n') else '')
+        dst.write(text if text.endswith('\n') else text + '\n')
+    return True
+
+
 def start(environ=None, slug=None):
     """Turn this session's log on. A log already on stays as it is; a stopped one (OFF) is put
     back; else an empty log is made in the folder holding this session's state note, or in
-    `<agent temp>/<slug>-coordinator`. A state note written by hand (it does not begin with
-    NOTE_HEAD) is added to the judgments file, since `show` overwrites the note from then on.
-    LogError when there is no session, or no folder and no slug."""
+    `<agent temp>/<slug>-coordinator`. A state note written by hand is added to the judgments
+    file (seed). LogError when there is no session, or no folder and no slug."""
     session = session_name(environ)
     if not session:
         raise LogError('%s is not set to a session name (letters, digits, ".", "_", "-"), so this '
@@ -284,14 +309,7 @@ def start(environ=None, slug=None):
                        'was given' % (session, temp))
     f = files(folder, session)
     os.makedirs(folder, exist_ok=True)
-    seeded = False
-    if os.path.isfile(f.state):
-        with open(f.state, encoding='utf-8', errors='replace') as src:
-            text = src.read()
-        if text.strip() and not text.startswith(NOTE_HEAD):
-            with open(f.judgments, 'a', encoding='utf-8', newline='\n') as dst:
-                dst.write(text if text.endswith('\n') else text + '\n')
-            seeded = True
+    seeded = seed(f)
     if os.path.isfile(f.off):
         from kitlib.fs import replace
         replace.replace(f.off, f.events)
