@@ -764,6 +764,33 @@ class LandingWrites(fixtures.GateRepoCase):
                          [(red, 'fail', G.FAILED), (green, 'pass', G.OK)])
         self.assertNotEqual(got[0]['run_id'], got[1]['run_id'])
 
+    def test_a_conflict_and_a_red_gate_differ_in_ledger_summary(self):
+        _, red = self.branch('red', {'RED': 'x\n'})
+        out = self.lander('kit/red', self.main, red).run()
+        self.assertEqual(out.code, G.FAILED, out.lines)
+        _, tip = self.branch('feature', {'README.md': 'branch\n'})
+        self.repo.write('README.md', 'main\n')
+        self.main = self.repo.commit('main edit', 'README.md')
+        self.repo.git('push', '-q', 'origin', 'main')
+        out = self.lander('kit/feature', self.main, tip).run()
+        self.assertEqual(out.code, G.FAILED, out.lines)
+        gate_red, conflict = ledger_lines(self.repo.root)
+        self.assertEqual([(l['branch'], l['verdict']) for l in (gate_red, conflict)],
+                         [('kit/red', 'fail'), ('kit/feature', 'fail')])
+        self.assertTrue(gate_red['summary'].startswith('NOT LANDED: the merge of kit/red was '
+                                                       'undone; '), gate_red['summary'])
+        self.assertTrue(conflict['summary'].startswith('CONFLICT kit/feature with main '),
+                        conflict['summary'])
+
+    def test_a_land_record_that_was_not_built_warns_and_appends_nothing(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        said = []
+        lander = self.lander('kit/feature', self.main, tip, say=said.append)
+        lander.ledger(result.Run(self.repo.root, 'land', 'kit/feature', tip))   # .last is None
+        self.assertEqual(said, ['WARNING: no land record was built, so no ledger line for '
+                                'kit/feature; the outcome stands'])
+        self.assertEqual(ledger_lines(self.repo.root), [])
+
     def test_a_landing_refused_before_its_checks_appends_nothing(self):
         self.branch('feature', {'a.py': 'x = 1\n'})
         out = self.lander('kit/feature', self.main, 'c' * 40).run()    # wrong --expect-tip

@@ -1061,8 +1061,13 @@ class Lander(object):
 
     def ledger(self, rr):
         """The land ledger line of the record `rr` (a result.Run) just built: appended; a line
-        that cannot be appended is said as a WARNING and the outcome stands. Never raises."""
+        that cannot be appended, or a record that was never built (rr.last None), is said as a
+        WARNING and the outcome stands. Never raises."""
         try:
+            if rr.last is None:
+                self.say('WARNING: no land record was built, so no ledger line for %s; the '
+                         'outcome stands' % rr.branch)
+                return
             _, warning = result.append_ledger(self.root, rr.last)
             if warning:
                 self.say(warning)

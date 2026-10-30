@@ -128,7 +128,7 @@ DEVICES = frozenset(['con', 'prn', 'aux', 'nul'] + ['com%d' % i for i in range(1
                     + ['lpt%d' % i for i in range(10)])
 LEDGER = 'land-ledger.jsonl'
 LEDGER_FIELDS = ('branch', 'tip', 'run_id', 'started_at', 'finished_at', 'verdict', 'code',
-                 'gate_once', 'escalated')
+                 'summary', 'gate_once', 'escalated')
 VERDICTS = {G.OK: 'pass', G.FAILED: 'fail', G.USAGE: 'usage', G.STUCK: 'stuck',
             G.REFUSED: 'refused', G.BUSY: 'busy', G.LANDED_UNGATED: 'landed-ungated'}
 
