@@ -338,6 +338,51 @@ class QueueTime(LandCase):
         self.assertGreaterEqual(rec['finished_at'], stamps['booked'], (rec, stamps))
 
 
+class GateOnceLedger(LandCase):
+    """A base that sets "landing".gate_once: the land record and its land ledger line say so,
+    and say whether once_escalate made the merged gate --full (docs/gate.md "Result record")."""
+    KIT = dict(LandCase.KIT, landing={'gate_once': True})
+
+    def ledger(self):
+        with open(result.ledger_path(self.repo.root), encoding='utf-8') as f:
+            return [json.loads(l) for l in f.read().splitlines()]
+
+    def once_of(self, rec):
+        return rec['gate_once'], rec['escalated']
+
+    def test_an_escalated_landing_records_escalated_true(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        said = []
+        out = self.lander(BRANCH, self.main, tip, say=said.append).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertTrue(any(l.startswith('GATE ONCE: ') for l in said), said)
+        rec = result.read(self.repo.root, BRANCH, 'land')[0]
+        self.assertEqual(self.once_of(rec), (True, True))
+        line, = self.ledger()
+        self.assertEqual((line['verdict'], line['tip'], line['run_id']),
+                         ('pass', tip, rec['run_id']))
+        self.assertEqual(self.once_of(line), (True, True))
+
+    def test_a_red_escalated_landing_records_escalated_true(self):
+        _, tip = self.branch('feature', {'RED': 'x\n'})
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(out.code, G.FAILED, out.lines)
+        line, = self.ledger()
+        self.assertEqual((line['verdict'], line['code']), ('fail', G.FAILED))
+        self.assertEqual(self.once_of(line), (True, True))
+
+    def test_a_full_landing_is_not_escalated(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        said = []
+        out = self.lander(BRANCH, self.main, tip, full=True, say=said.append).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertFalse(any(l.startswith('GATE ONCE: ') for l in said), said)
+        line, = self.ledger()
+        self.assertEqual(self.once_of(line), (True, False))
+        self.assertEqual(self.once_of(result.read(self.repo.root, BRANCH, 'land')[0]),
+                         (True, False))
+
+
 class TakeTurns(LandCase):
     def test_two_landings_into_one_repo_serialise(self):
         _, tip_a = self.branch('feature', {'a.py': 'a\n'})
