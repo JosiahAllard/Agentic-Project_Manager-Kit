@@ -323,6 +323,9 @@ EXAMPLES = {
     'hub.py to-pm add': 'hub.py to-pm add --text "<text>"',
     'hub.py to-pm send': 'hub.py to-pm send',
     'hub.py to-pm reply': 'hub.py to-pm reply M-1 "<reply>"',
+    'hub.py handoffs': 'hub.py handoffs --from kit',
+    'hub.py handoffs add': 'hub.py handoffs add --kind restart --state "<state file path>" '
+                           '--from kit',
     'hub.py inbox': 'hub.py inbox',
     'hub.py inbox add': 'hub.py inbox add --text "<text>"',
     'hub.py inbox read': 'hub.py inbox read I-1',
