@@ -5,8 +5,8 @@ the kit commands to run next (docs/preflight.md).
   preflight.py [-C DIR] [--fetch] [--base REV] [--full] [--board [--write-state]]
 
 By default it prints the repo, branch and base lines, the kit folder and any failing or warning
-check; --full prints every line. -C names the checkout to report on (default: here). --fetch fetches the remote first. --base
-names the base (any revision; default `.kit.json` "repo".main_branch when set, else main when it
+check; --full prints every line. -C names the checkout to report on (default: here). --fetch
+fetches the remote first. --base names the base (any revision; default `.kit.json` "repo".main_branch when set, else main when it
 exists, else master). --board adds the coordinator's board after the report: a row per worktree
 against the base and the stale-doc line. --write-state (only with --board) rewrites the board
 block of the coordinator's state file (docs/preflight.md "--board"). Exit 0 with the report; 2 on

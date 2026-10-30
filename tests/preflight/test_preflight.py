@@ -1248,6 +1248,13 @@ class TheShortReport(unittest.TestCase):
         self.assertIn('kit       Z:/kit', out)
         self.assertLess(len(out), len(self.LINES))
 
+    def test_a_leftovers_list_is_kept_and_leftovers_none_is_dropped(self):
+        head = self.LINES[:3]
+        kept = report.brief(head + ['leftovers 1 under w', '            a [x]  landed'], '/k')
+        self.assertIn('leftovers 1 under w', kept)
+        self.assertIn('            a [x]  landed', kept)
+        self.assertFalse(any(l.startswith('leftovers') for l in report.brief(head + ['leftovers none under w'], '/k')))
+
     def test_a_problem_line_and_its_continuation_are_kept(self):
         lines = self.LINES[:3] + ['docs      DOC BUDGET FAILED x', 'dirty     2 file(s)', '            M a', '            M b',
                                   'daily     RED abc', 'config    BROKEN - x', 'worktrees 1', '            /r  abc [main]']

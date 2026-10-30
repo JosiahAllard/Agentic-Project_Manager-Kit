@@ -125,6 +125,7 @@ def report(top, cfg, kit_root, base=None, fetch=False, lock_reader=lockline.read
 # later, is kept.
 QUIET = ('worktrees', 'dirty', 'docs', 'doc index', 'config', 'pointer', 'index', 'lock', 'daily',
          'main checkout clean', 'next', 'traps', 'engines', 'ports', 'hook', 'leftovers')
+QUIET_ONLY = {'dirty': 'dirty     0 ', 'leftovers': 'leftovers none'}
 PROBLEM = ('FAIL', 'NOT CHECKED', 'UNKNOWN', 'WARN', 'DIFFERENT', 'RED', 'STALE', 'BROKEN', 'refused', 'unknown (')
 
 
@@ -145,7 +146,7 @@ def brief(lines, kit_root):
         if line[:1] != ' ':
             label = _label(line)
             quiet = label in QUIET and not any(m in line for m in PROBLEM)
-            if label == 'dirty' and not line.startswith('dirty     0 '):
+            if label in QUIET_ONLY and not line.startswith(QUIET_ONLY[label]):
                 quiet = False
             keep = not quiet
         if keep:

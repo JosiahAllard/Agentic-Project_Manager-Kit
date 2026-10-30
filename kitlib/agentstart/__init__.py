@@ -53,7 +53,7 @@ def text(cwd, kit, role=None, budget=None):
     rows = lines(cwd, kit, budget)
     took = int((time.monotonic() - start) * 1000)
     title = ('Agent start (%s): the folder this agent starts in, read at %s by the start hook with no '
-             'fetch (%d ms); tools/preflight.py has the full report:'
+             'fetch (%d ms); tools/preflight.py --full has the full report:'
              % (role or 'subagent', time.strftime('%H:%M'), took))
     return title + '\n' + '\n'.join('- ' + r for r in rows)
 
