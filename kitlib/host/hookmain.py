@@ -26,7 +26,8 @@ lives here once:
         in a marked session is judged as an agent of its mark's role (unidentified()). `args`: the
         entry's arguments, named in the reproduce line after `entry`. With `kit` (the kit the hook
         booted), the header-update line of a session whose header named an older plugin export
-        (kitlib.host.headerfollow.line, once per refresh) goes with the verdict whatever it is, through
+        (kitlib.host.headerfollow.line: at once when the folder the header named is gone, else at
+        most once an hour) goes with the verdict whatever it is, through
         the adapter's optional tool_context(event_name, text, rendered) (none: no line), so a
         reason keeps its format; the record is rewritten only after the answer is written. A deny,
         whatever made it, is then logged before run returns: one line in

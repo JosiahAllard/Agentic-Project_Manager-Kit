@@ -92,6 +92,7 @@ A command line the parser cannot read cleanly also goes through kitlib.guard.fal
 unreadable, is a warning by default).
 "Agent session" and "the owner's own" are the session mark's (docs/guard.md "Session mark").
 """
+import contextvars
 import fnmatch
 import json
 import ntpath
@@ -129,13 +130,45 @@ def tag(rule, role):
     return TAG % (rule, role)
 
 
+CITE_MAX = 120                  # the most of the command a warning quotes (cited)
+ELIDED = ' [...]'
+_COMMAND = contextvars.ContextVar('kit_guard_command', default=None)   # the shell text decide() judges
+
+
+def cited(what, command, cap=CITE_MAX):
+    """`what` with each backtick quote of the shell text `command` (or of a part of it) longer than
+    `cap` cut to its first `cap` characters and ELIDED. A quote runs from a backtick to the furthest
+    later backtick whose text between is all in `command`, so a PowerShell escape inside it does not
+    end it; text `command` does not hold is never cut."""
+    if not command or len(command) <= cap or '`' not in what:
+        return what
+    ticks = [i for i, c in enumerate(what) if c == '`']
+    out, done, k = [], 0, 0
+    while k < len(ticks):
+        i, end = ticks[k], None
+        for n in range(k + 1, len(ticks)):
+            if what[i + 1:ticks[n]] not in command:
+                break
+            end = n
+        if end is not None and ticks[end] - i - 1 > cap:
+            out.append(what[done:i + 1 + cap] + ELIDED)
+            done, k = ticks[end], end + 1
+        else:
+            k += 1
+    return ''.join(out) + what[done:]
+
+
 def refuse(rule, role, what, instead, kind=DENY):
     """The refusal `rule` makes, or None when its mode (kitlib.guard.modes) is warn, which keeps the
-    reason as the call's warning, or off."""
-    reason = '%s Instead: %s %s' % (what.rstrip(), instead.strip(), tag(rule, role))
+    reason as the call's warning, or off. A warning quotes at most CITE_MAX characters of the
+    command decide() judges (cited); the Instead text and the tag stay whole, and a refusal keeps
+    its full text."""
     m = modes.mode(rule)
     if m == modes.OFF:
         return None
+    if m == modes.WARN:
+        what = cited(what, _COMMAND.get())
+    reason = '%s Instead: %s %s' % (what.rstrip(), instead.strip(), tag(rule, role))
     if m == modes.WARN:
         modes.note(reason)
         return None
@@ -260,9 +293,19 @@ def decide(event, ctx=None, environ=None, profile=None):
     allow or ask then meets the role policy (kitlib.guard.rolepolicy; its refusal wins over an ask), which is off for a role whose
     .kit.json entry names no mode, and, when it adds write-jail roots, the shared rules again.
     Each refusal meets its rule's mode (kitlib.guard.modes): an allow that a warn-mode rule
-    refused carries the warnings (rule WARNED, reason WARNING plus each refusal's reason)."""
+    refused carries the warnings (rule WARNED, reason WARNING plus each refusal's reason), each
+    quoting at most CITE_MAX characters of a shell call's text (refuse, cited)."""
     from . import rolepolicy
     ctx = ctx or context.Ctx(environ=environ, profile=profile)
+    command = getattr(event, 'command', None) if getattr(event, 'kind', None) == 'shell' else None
+    token = _COMMAND.set(command if isinstance(command, str) else None)
+    try:
+        return _decide(event, ctx, rolepolicy)
+    finally:
+        _COMMAND.reset(token)
+
+
+def _decide(event, ctx, rolepolicy):
     with modes.judging(ctx) as warnings:
         asked = Asked()                         # an ask still meets the role policy, whose refusal wins
         d = asked.firm(judge(event, ctx))
