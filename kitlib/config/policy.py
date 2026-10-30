@@ -16,7 +16,8 @@ Roles. role_name(action) is `main` for a kitlib.host.Action of the main session 
   ROLE_DEFAULTS.
 
 Kinds table: kitlib/lock/kinds.json, written by the lock package and committed by the
-  PM; this module only reads it.
+  PM; this module only reads it. A repository's own kinds are its `.kit.json` "kinds" section
+  (repo_kinds); kitlib.lock.kinds.repo_entry reads one, for a name the kit table does not have.
 
 Repo hook module: `<root>/<tools_dir>/<module>.py`, named by `.kit.json` "hook".module.
   Loaded from the working tree only, never from a revision. Gate checks: the module's
@@ -195,6 +196,16 @@ def kinds_table(path=None):
     bad = sorted(k for k, v in out.items() if not isinstance(v, dict))
     if bad:
         raise ConfigError('the kinds table %s: entries %s must be objects' % (path, ', '.join(bad)))
+    return out
+
+
+def repo_kinds(cfg=None):
+    """{kind: entry} of the repository's `.kit.json` "kinds" section, notes dropped at both levels
+    ({} with no cfg). Each entry is as written, checked by the schema; the lock takes one only for
+    a name that is neither a kit kind nor a kit alias (kitlib.lock.kinds.with_repo)."""
+    out = {}
+    for name, entry in (cfg.section('kinds') if cfg is not None else {}).items():
+        out[name] = {k: copy.deepcopy(v) for k, v in entry.items() if not is_note(k)}
     return out
 
 

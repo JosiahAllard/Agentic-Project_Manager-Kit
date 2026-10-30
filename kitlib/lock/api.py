@@ -496,12 +496,14 @@ def _hold_spec(spec, now):
     return out
 
 
-def hold_create(actor, spec, store=None, kinds_table=None):
+def hold_create(actor, spec, store=None, kinds_table=None, checkout=None):
     """Makes a hold. spec: {owner: owner | agent, scope (owner: whole | half | slots), start
     (ISO, default now), end (ISO) or for_s, note, job (optional; holds.job_of names it: OWNER for an
     owner hold, repo/slug for an agent hold), and by scope: slots: slots {cpu: [...], gpu:
     [...]}; agent: repo, slug, kind, gpu_share}. A whole hold names nothing more: it is the
-    owner's, for the owner's own runs. Game holds are made by game mode only. result:
+    owner's, for the owner's own runs. Game holds are made by game mode only. checkout: the
+    folder the hold is made from (the CLI's current directory): an agent hold's kind may then be
+    a repository kind of its main checkout's `.kit.json` (run.book's checkout). result:
     {hold, notes}."""
     def go(store):
         me = who(actor, store)
@@ -522,6 +524,11 @@ def hold_create(actor, spec, store=None, kinds_table=None):
         if table and s.get("kind"):
             try:
                 s["kind"] = kinds_mod.resolve(s["kind"], table, store.kinds_path)
+                if s.get("owner") == "agent":
+                    merged = kinds_mod.with_repo(table, s["kind"], checkout, store.kinds_path)
+                    if merged is not table:     # the repo kind's size against the layout
+                        kinds_mod.check_cap({s["kind"]: merged[s["kind"]]}, L["agent_cap"])
+                    table = merged
             except kinds_mod.KindsError as e:
                 raise ApiError("store", str(e))
         h, notes = hl.create(store, L, s, me, table, now)

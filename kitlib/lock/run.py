@@ -1448,7 +1448,7 @@ def check_resource(resource):
 def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, no_wait=False,
          expect_s=None, note=None, on_release_cmd=None, cmd=None, store=None, kinds_table=None,
          env=None, rid=None, detached=False, log=None, gate=False, resource=None, priority=None,
-         within=None, tree=None, branch=None):
+         within=None, tree=None, branch=None, checkout=None):
     """Waits for a run of kind `kind` for repo/slug to hold its slots and returns its Slot.
     Raises LockError (the CLI's exit code) when it does not. cores: fewer cpu slots than the
     kind's size, 1..that size, never more; the kind's size is its whole number of cores
@@ -1473,7 +1473,9 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     and kept in its history line, so a gate's run is matched to the exact tree it tested;
     Slot.note_tree records it on a run already held. branch: the git branch the run is for (a
     branch gate's, which kitlib.gate.budget counts its runs by), recorded as `branch` and kept in
-    its history line."""
+    its history line. checkout: the folder the run is booked from (the CLI's current directory):
+    a kind that is neither a kit kind nor a kit alias is looked up in the "kinds" section of its
+    repository's main checkout `.kit.json` (kitlib.lock.kinds.with_repo); None: kit kinds only."""
     store = store or Store()
     env = dict(os.environ if env is None else env)
     try:
@@ -1482,10 +1484,14 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
         raise LockError(EXIT_REQUIRE, "require-lock: %s; the command was not run" % e)
     try:
         kind = kinds_mod.resolve(kind, table, store.kinds_path)
+        table = kinds_mod.with_repo(table, kind, checkout, store.kinds_path)
     except kinds_mod.KindsError as e:
         raise LockError(EXIT_REQUIRE, "require-lock: %s; the command was not run" % e)
     if kind not in table:
-        raise LockError(EXIT_USAGE, "usage: unknown kind %r (known: %s)" % (kind, ", ".join(sorted(table))))
+        raise LockError(EXIT_USAGE, "usage: unknown kind %r (known: %s%s)" % (
+            kind, ", ".join(sorted(table)), "" if checkout is None else
+            "; a repository's own kinds are read from the \"kinds\" section of the .kit.json "
+            "in the main checkout of %s" % checkout))
     k = table[kind]
     if not repo or not slug:
         raise LockError(EXIT_USAGE, "usage: a run names its repo and slug")

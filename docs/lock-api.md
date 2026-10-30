@@ -217,3 +217,21 @@ Known limits:
 - First come, first served: the lowest ticket for a resource holds it, nothing goes ahead of an earlier entry, and nothing takes a resource from its holder.
 - An entry stands while its process holds the entry's run mutex (`store.run_mutex`), as a run's queue entry does; a caller that dies leaves an entry the next look drops (`store.run_dead`).
 - It is read and written only under the store mutex `resources`. A file that exists and cannot be read raises `ResourceUnreadable` after `settings.queue_read_s`; it is never read as an empty queue.
+
+## Repository kinds
+
+A repository may name its own run kinds in its `.kit.json` `kinds` section (docs/kit-json.md), beside the kit's (`kitlib/lock/kinds.json`), so a repository-specific heavy run (a world graph build, a model evaluation) books by its own name without a kit change. Each entry is a kinds.json entry plus a required `why`: `{"cpu": <1..agent_cap | "medium" | "heavy">, "gpu": 0 | "pool", "share": false, "warn_min": 60, "why": "..."}` (`gpu`, `share` and `warn_min` optional, with those defaults). A kind name is `[a-z][a-z0-9-]*`. The section is always inline in `.kit.json`, never a file beside it.
+
+- Who reads it: `machine_lock.py run` and `machine_lock.py hold agent`, for the current directory (`kitlib.lock.run.book(checkout=)`, `kitlib.lock.api.hold_create(checkout=)`, `kitlib.lock.kinds.with_repo`). The library default is no checkout: kit kinds only.
+- Where it is read: the working-tree `.kit.json` of the main checkout of the current directory's repository (`kitlib.git.repo.main_checkout_toplevel`), never a linked worktree's, so an agent's uncommitted edit in its worktree cannot size a run. Outside any git work tree there are no repository kinds.
+- The kit wins a clash: a name that is a kit kind or a kit alias (`aliases` in kinds.json) books the kit's entry, the repository's entry of that name is ignored, and `.kit.json` is not read at all, so a broken `.kit.json` never stops a kit kind.
+- Sizes: the entry is checked as a kinds.json entry is (`kinds.check_entry`); `--cores N` asks for fewer, never more. The agent cap is checked when the run or hold is booked, against the layout in force: a whole number past it is refused with exit 10, as is a `.kit.json` that does not load when a repository kind is asked for (fail closed). An unknown kind is usage, exit 2, and the message names the checkout whose main checkout `.kit.json` was looked in.
+- Records: a run or hold on a repository kind is recorded under its name, as any kind is: history, `history_expect` and `stats` group by it. The section is not part of the gate's config hash (`kitlib.gate.runner.gate_config`).
+
+Known limits:
+
+- Only the CLI passes a checkout. `gate.py`, `land.py`, `redfirst.py`, `daily_full.py` and other library callers of `book()` book kit kinds only, so a repository kind in `.kit.json` `gate.kind` is an unknown kind there.
+- Load nodes: dispatch sizes a run from the kit table only (`kitlib.loadnode.route.need_of`), declines a repository kind quietly, and the run stays on this machine.
+- No aliases: a repository kind cannot be renamed while keeping its history under one name, as kinds.json's `aliases` do for kit kinds. A renamed kind starts a new history; a renamed kind used as `gate.kind` would also need a `HASH_KIND_AS` entry (`kitlib.gate.runner`).
+- The snapshot's `kinds` is the kit's table only, and `gate.py --measure` proposes sizes for kit kinds only.
+- Rollout: a kit from before this section refuses a `.kit.json` that has it as an unknown section, and every kit tool reads `.kit.json`. Add a `kinds` section only once every plugin folder in use has this change.

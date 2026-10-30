@@ -196,10 +196,11 @@ class ListOf(T):
 
 
 class MapOf(T):
-    """An object whose keys are free (non-empty strings) and whose values share one type."""
+    """An object whose keys are free (non-empty strings; `key`, a type, checks each one when
+    given) and whose values share one type."""
 
-    def __init__(self, value, what='key'):
-        self.value, self.what = value, what
+    def __init__(self, value, what='key', key=None):
+        self.value, self.what, self.key = value, what, key
 
     def check(self, v, where, errs):
         if not isinstance(v, dict):
@@ -210,6 +211,8 @@ class MapOf(T):
                 continue
             if not k.strip():
                 errs.append('%s has an empty key' % where)
+            elif self.key is not None:
+                self.key.check(k, '%s key' % where, errs)
             self.value.check(x, '%s[%r]' % (where, k), errs)
 
     def describe(self):

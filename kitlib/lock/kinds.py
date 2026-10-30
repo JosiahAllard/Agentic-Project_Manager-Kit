@@ -8,8 +8,15 @@ measurement (gate.py --measure) and a reviewed commit; a run may ask for fewer
 medium takes the division's medium_cores; heavy takes the half cap (every core inside an owner
 whole hold). gpu "pool" takes the whole gpu pool, or one gpu slot with --gpu-share training when
 share is true.
+
+Repository kinds: a repository may name its own kinds in its `.kit.json` "kinds" section, each
+entry this shape plus a `why`. with_repo adds one to the table for a run from one of its checkouts,
+only for a name that is neither a kit kind nor a kit alias: the kit wins a clash, and the repo
+entry is ignored. It is read from the main checkout's `.kit.json` (where agents do not work),
+never a linked worktree's, so an agent's uncommitted worktree edit cannot size a run.
 """
-from kitlib.config import ConfigError, policy
+from kitlib.config import ConfigError, load as load_config, policy
+from kitlib.git import repo as gitrepo
 
 # One file, one reader: kitlib.config.policy owns both.
 KINDS_FILE = policy.KINDS_FILE
@@ -80,6 +87,53 @@ def check_cap(table, agent_cap):
                              "size is 1..agent_cap)" % (name, cpu, agent_cap))
 
 
+def check_entry(name, e, agent_cap=None):
+    """{cpu, gpu, share, warn_min} of entry `e` of kind `name`, checked; KindsError when the lock
+    cannot size it (fail closed). Its other keys (a repo kind's `why`) are dropped."""
+    cpu, gpu = e.get("cpu"), e.get("gpu", 0)
+    warn = e.get("warn_min", 60)
+    if cpu not in ALIASES and not is_size(cpu):
+        raise KindsError("kind %s: cpu must be medium or heavy, or a whole number of cores "
+                         "from 1%s, not %r" % (
+                             name, " to %d" % agent_cap if agent_cap else "", cpu))
+    if not (gpu == "pool" or (type(gpu) is int and gpu == 0)):
+        raise KindsError("kind %s: gpu must be 0 or \"pool\", not %r" % (name, gpu))
+    if type(warn) is not int or warn <= 0:
+        raise KindsError("kind %s: warn_min must be a whole number of minutes" % name)
+    return {"cpu": cpu, "gpu": gpu, "share": bool(e.get("share")) and gpu == "pool",
+            "warn_min": warn}
+
+
+def repo_entry(kind, checkout):
+    """The checked entry (check_entry) the `.kit.json` "kinds" section of the main checkout of
+    `checkout`'s repository gives `kind`, or None when `checkout` is in no git work tree git can
+    place or the section does not name `kind`. KindsError when that `.kit.json` cannot be read or
+    the entry cannot be sized: fail closed, no run on a repo kind whose size is unreadable."""
+    top = gitrepo.main_checkout_toplevel(checkout)
+    if not top:
+        return None
+    try:
+        e = policy.repo_kinds(load_config(top)).get(kind)
+    except ConfigError as err:
+        raise KindsError("the repository kinds of %s cannot be read: %s" % (top, err))
+    return None if e is None else check_entry(kind, e)
+
+
+def with_repo(table, kind, checkout, path=None):
+    """`table`, or a copy with `kind`'s repo entry (repo_entry) added when `checkout` is given and
+    `kind` is text that is neither a kind of `table` nor an alias of the kinds table at `path`
+    (None: the kit's): the kit wins a clash, so a kit name never reads `.kit.json`. KindsError as
+    repo_entry. The caller checks the cap (check_cap) on what it gets."""
+    if checkout is None or not isinstance(kind, str) or kind in table or kind in aliases(path):
+        return table
+    e = repo_entry(kind, checkout)
+    if e is None:
+        return table
+    out = dict(table)
+    out[kind] = e
+    return out
+
+
 def load(path=None, agent_cap=None):
     """{kind: {cpu, gpu, share, warn_min}} checked; KindsError on any entry the lock cannot
     size (fail closed). With `agent_cap` (the layout in force) a whole-number cpu past it fails
@@ -87,18 +141,7 @@ def load(path=None, agent_cap=None):
     path = path or KINDS_FILE
     out = {}
     for name, e in sorted(_read(path).items()):
-        cpu, gpu = e.get("cpu"), e.get("gpu", 0)
-        warn = e.get("warn_min", 60)
-        if cpu not in ALIASES and not is_size(cpu):
-            raise KindsError("kind %s: cpu must be medium or heavy, or a whole number of cores "
-                             "from 1%s, not %r" % (
-                                 name, " to %d" % agent_cap if agent_cap else "", cpu))
-        if not (gpu == "pool" or (type(gpu) is int and gpu == 0)):
-            raise KindsError("kind %s: gpu must be 0 or \"pool\", not %r" % (name, gpu))
-        if type(warn) is not int or warn <= 0:
-            raise KindsError("kind %s: warn_min must be a whole number of minutes" % name)
-        out[name] = {"cpu": cpu, "gpu": gpu, "share": bool(e.get("share")) and gpu == "pool",
-                     "warn_min": warn}
+        out[name] = check_entry(name, e, agent_cap)
     if not out:
         raise KindsError("the kinds table %s names no kinds" % path)
     try:                            # the aliases are checked with the table (fail closed)
