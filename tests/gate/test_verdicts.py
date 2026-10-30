@@ -37,11 +37,14 @@ class Check(unittest.TestCase):
 
 
 class SelfReviewWhy(unittest.TestCase):
-    """A High-risk verdict the queueing coordinator reviewed itself is refused (verdicts.
-    self_review_why); a Low or Medium self-read, or a High one by another reviewer, is not."""
+    """A Medium or High-risk verdict the queueing coordinator reviewed itself is refused (verdicts.
+    self_review_why); a Low self-read, or a Medium or High one by another reviewer, is not."""
 
-    def test_a_high_risk_coordinator_self_review_is_refused_with_the_instead_line(self):
+    def test_a_medium_or_high_risk_coordinator_self_review_is_refused_with_the_instead_line(self):
         tip = 'a' * 40
+        for risk in ('Medium', 'High'):
+            why = V.self_review_why(given('kit/a', tip, risk=risk, reviewer_id='coord-1'))
+            self.assertIn('a %s-risk verdict needs a reviewer other than the coordinator' % risk, why or '')
         for over in ({'reviewer_id': 'coord-1'}, {'reviewer_id': ' Coord-1 '},
                      {'reviewer_id': 'agent-x / coord-1'},
                      {'session': ' Coord-1 ', 'reviewer_id': 'coord-1'},
@@ -54,16 +57,16 @@ class SelfReviewWhy(unittest.TestCase):
                 self.assertEqual(why.splitlines()[-1], V.SELF_REVIEW_INSTEAD)
                 self.assertIn('--reviewer pm-kit:analyst --reviewer-id <its agent id>', why)
 
-    def test_a_small_self_read_and_another_reviewer_stay_allowed(self):
+    def test_a_low_self_read_and_another_reviewer_stay_allowed(self):
         tip = 'a' * 40
-        for risk in ('Low', 'Medium'):
-            for over in ({'reviewer_id': 'coord-1'}, {'reviewer': 'pm-kit:coordinator'}):
+        for over in ({'reviewer_id': 'coord-1'}, {'reviewer': 'pm-kit:coordinator'}):
+            with self.subTest(risk='Low', **over):
+                self.assertIsNone(V.self_review_why(given('kit/a', tip, risk='Low', **over)))
+        for risk in ('Medium', 'High'):
+            for over in ({}, {'reviewer': 'pm-kit:analyst', 'reviewer_id': 'agent-a7'},
+                         {'reviewer_id': 'coord-10'}, {'reviewer': 'pm-kit:coordinators-helper'}):
                 with self.subTest(risk=risk, **over):
                     self.assertIsNone(V.self_review_why(given('kit/a', tip, risk=risk, **over)))
-        for over in ({}, {'reviewer': 'pm-kit:analyst', 'reviewer_id': 'agent-a7'},
-                     {'reviewer_id': 'coord-10'}, {'reviewer': 'pm-kit:coordinators-helper'}):
-            with self.subTest(**over):
-                self.assertIsNone(V.self_review_why(given('kit/a', tip, risk='High', **over)))
 
 
 class FakeClock(object):
@@ -131,13 +134,11 @@ class SelfReviewSize(QueueCase):
 
     def test_a_self_read_over_the_cap_is_refused_with_the_counts(self):
         _, tip = self.branch('a', {'a.txt': lines(3), 'b.txt': lines(2)})
-        for risk in ('Low', 'Medium'):
-            with self.subTest(risk=risk):
-                why = self.refused(tip, risk=risk, reviewer_id='coord-1')
-                self.assertIn('covers at most 4 changed lines', why)
-                self.assertIn('changes 5 (+5 -0 in 2 files; the larger of the range given and %s...%s from '
-                              'main as fetched)' % (self.main[:10], tip[:10]), why)
-                self.assertIn('its reviewer id coord-1 is the session queueing it', why)
+        why = self.refused(tip, risk='Low', reviewer_id='coord-1')
+        self.assertIn('covers at most 4 changed lines', why)
+        self.assertIn('changes 5 (+5 -0 in 2 files; the larger of the range given and %s...%s from '
+                      'main as fetched)' % (self.main[:10], tip[:10]), why)
+        self.assertIn('its reviewer id coord-1 is the session queueing it', why)
 
     def test_the_coordinator_role_as_reviewer_counts_as_a_self_read(self):
         _, tip = self.branch('a', {'a.txt': lines(5)})
@@ -229,11 +230,12 @@ class SelfReviewSize(QueueCase):
         _, stored = self.add(tip, base='nosuchbase', reviewer='pm-kit:analyst', reviewer_id='a7')
         self.assertEqual(stored['tip'], tip)
 
-    def test_a_high_risk_self_review_is_still_refused_whatever_its_size(self):
+    def test_a_medium_or_high_risk_self_review_is_still_refused_whatever_its_size(self):
         _, tip = self.branch('a', {'a.txt': lines(1)})
-        with self.assertRaises(V.SelfReview) as cm:
-            self.add(tip, risk='High', reviewer_id='coord-1')
-        self.assertIn('a High-risk verdict needs a reviewer other than', str(cm.exception))
+        for risk in ('Medium', 'High'):
+            with self.subTest(risk=risk), self.assertRaises(V.SelfReview) as cm:
+                self.add(tip, risk=risk, reviewer_id='coord-1')
+            self.assertIn('a %s-risk verdict needs a reviewer other than' % risk, str(cm.exception))
 
 
 class SelfReviewSizeRenames(QueueCase):
@@ -332,15 +334,16 @@ class Queue(QueueCase):
                 V.add(self.common, e)
         self.assertEqual(self.folder_names(), [])
 
-    def test_a_high_risk_self_review_is_refused_and_nothing_written(self):
+    def test_a_medium_or_high_risk_self_review_is_refused_and_nothing_written(self):
         _, tip = self.branch('a', {'a.txt': 'a\n'})
-        for over in ({'reviewer_id': 'coord-1'}, {'reviewer': 'pm-kit:coordinator'}):
-            with self.subTest(**over), self.assertRaises(V.SelfReview) as cm:
-                V.add(self.common, given('kit/a', tip, risk='High', **over))
-            self.assertIsInstance(cm.exception, V.BadEntry)
+        for risk in ('Medium', 'High'):
+            for over in ({'reviewer_id': 'coord-1'}, {'reviewer': 'pm-kit:coordinator'}):
+                with self.subTest(risk=risk, **over), self.assertRaises(V.SelfReview) as cm:
+                    V.add(self.common, given('kit/a', tip, risk=risk, **over))
+                self.assertIsInstance(cm.exception, V.BadEntry)
         self.assertEqual(self.folder_names(), [])
-        _, stored = V.add(self.common, given('kit/a', tip, risk='Medium', reviewer_id='coord-1'))
-        self.assertEqual(stored['reviewer_id'], 'coord-1')       # a small self-read is queued
+        _, stored = V.add(self.common, given('kit/a', tip, risk='Low', reviewer_id='coord-1'))
+        self.assertEqual(stored['reviewer_id'], 'coord-1')       # a small Low self-read is queued
 
     def test_a_windows_device_name_is_refused(self):
         for name in ('con', 'NUL', 'com1', 'aux.x'):
