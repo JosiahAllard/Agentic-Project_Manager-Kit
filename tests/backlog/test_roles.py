@@ -50,7 +50,7 @@ DESIGN = {
     'catch-up': ('medium', CPO, {}),
     'raw-write': ('high', (), {}),
 }
-VERBS = {'next', 'show', 'list', 'check', 'stale', 'landable', 'find', 'add', 'set', 'block', 
+VERBS = {'next', 'show', 'list', 'check', 'stale', 'landable', 'find', 'add', 'set', 'block',
          'unblock',
          'pull', 'release', 'close', 'retire', 'delete', 'clear-review', 'set-status', 'unpark',
          'retarget', 'migrate', 'catch-up'}
