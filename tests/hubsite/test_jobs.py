@@ -285,6 +285,17 @@ class WiredTest(ServeCase):
         self.assertFalse(any(t.name == 'hub-job-demo' for t in threading.enumerate()),
                          'the close ended the job thread')
 
+    def test_a_maker_gets_the_apis_read_only_pending_in_sources(self):
+        seen = []
+
+        def maker(sources):
+            seen.append(sources.pending)
+            return None
+        hub = self.build(jobs=[maker])
+        self.assertEqual(seen, [hub.api.pending])     # set before the jobs are made
+        self.assertEqual(hub.api.pending('kit'), [])
+        self.assertEqual(hub.api._handed, {})         # reading it hands nothing over
+
     def test_no_jobs_is_null_in_health_and_a_maker_that_raises_is_a_note(self):
         def broken(sources):
             raise RuntimeError('no')
