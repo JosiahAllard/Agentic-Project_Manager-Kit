@@ -1002,16 +1002,16 @@ def item(kind, doc_id, at, sender='kit', **more):
 
 class OwnerParts(unittest.TestCase):
     def test_owner_wake_names_answers_and_decisions_newer_than_since(self):
-        w = C.owner_wake('kit', [item('question', 'Q-2', NOW + 5), item('approval', 'A-3', NOW + 9),
-                                 item('question', 'Q-1', NOW - 5)], NOW)
-        self.assertEqual(w.ids, ['Q-2', 'A-3'])
-        self.assertEqual(w.reason, 'an owner answer is pending for it: Q-2; '
-                                   'an approval it asked for is decided: A-3')
+        w = C.owner_wake('kit', [item('question', 'EX-Q2', NOW + 5), item('approval', 'EX-A3', NOW + 9),
+                                 item('question', 'EX-Q1', NOW - 5)], NOW)
+        self.assertEqual(w.ids, ['EX-Q2', 'EX-A3'])
+        self.assertEqual(w.reason, 'an owner answer is pending for it: EX-Q2; '
+                                   'an approval it asked for is decided: EX-A3')
         self.assertEqual(w.then, 'run hub pending --for kit')
 
     def test_nothing_newer_or_a_bad_stamp_wakes_nothing(self):
-        self.assertIsNone(C.owner_wake('kit', [item('question', 'Q-1', NOW - 5)], NOW))
-        self.assertIsNone(C.owner_wake('kit', [{'kind': 'question', 'id': 'Q-1', 'at': 'x'}], NOW))
+        self.assertIsNone(C.owner_wake('kit', [item('question', 'EX-Q1', NOW - 5)], NOW))
+        self.assertIsNone(C.owner_wake('kit', [{'kind': 'question', 'id': 'EX-Q1', 'at': 'x'}], NOW))
         self.assertIsNone(C.owner_wake('kit', [], NOW))
 
     def test_since_is_the_session_start_else_the_stop_less_a_stamp(self):
@@ -1025,10 +1025,10 @@ class OwnerParts(unittest.TestCase):
                          'records: EX-B. Read your state note (x.md), then run backlog next.')
 
     def test_owner_items_keeps_answers_and_approvals_for_the_key(self):
-        got = C.owner_items(lambda key: [item('question', 'Q-1', NOW), item('approval', 'A-1', NOW),
-                                         item('todo', 'T-1', NOW), item('question', 'Q-2', NOW, 'pm')],
+        got = C.owner_items(lambda key: [item('question', 'EX-Q1', NOW), item('approval', 'EX-A1', NOW),
+                                         item('todo', 'EX-T1', NOW), item('question', 'EX-Q2', NOW, 'pm')],
                             'kit')
-        self.assertEqual([i['id'] for i in got], ['Q-1', 'A-1'])
+        self.assertEqual([i['id'] for i in got], ['EX-Q1', 'EX-A1'])
 
     def test_owner_items_unread(self):
         from kitlib.hubsite.store import HubError
@@ -1086,28 +1086,28 @@ class OwnerJob(JobBase):
 
     def test_an_answer_that_came_in_while_it_wound_down_wakes_it(self):
         self.held_run()                                           # last seen NOW, stopped NOW + 60
-        self.items = [item('question', 'Q-7', NOW + 30)]          # between the sighting and the stop
+        self.items = [item('question', 'EX-Q7', NOW + 30)]          # between the sighting and the stop
         note = self.down()
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.calls[0][-2:], ['--prompt', 'Started by the hub: an owner answer is '
-                         'pending for it: Q-7. Read your state note (x.md), then run hub pending '
+                         'pending for it: EX-Q7. Read your state note (x.md), then run hub pending '
                          '--for kit.'])
-        self.assertIn('(woken: an owner answer is pending for it: Q-7)', note)
+        self.assertIn('(woken: an owner answer is pending for it: EX-Q7)', note)
         self.assertEqual(self.reads, [])                          # the cheaper read decided
         self.assertEqual(self.ctx.events, [('restarted-unchecked', 'kit:a1')])
 
     def test_a_decided_approval_and_a_class_question_wake_it(self):
         self.held_run()
-        self.items = [item('approval', 'A-4', NOW + 100),
-                      item('question', 'Q-8', NOW + 100, **{'class': 'c'})]
+        self.items = [item('approval', 'EX-A4', NOW + 100),
+                      item('question', 'EX-Q8', NOW + 100, **{'class': 'c'})]
         self.down()
         self.assertEqual(len(self.calls), 1)
-        self.assertIn('an owner answer is pending for it: Q-8; an approval it asked for is decided: A-4',
+        self.assertIn('an owner answer is pending for it: EX-Q8; an approval it asked for is decided: EX-A4',
                       self.calls[0][-1])
 
     def test_an_answer_older_than_the_session_start_does_not_wake_it(self):
         self.held_run()
-        self.items = [item('question', 'Q-1', NOW - 7200)]        # pending before it started
+        self.items = [item('question', 'EX-Q1', NOW - 7200)]        # pending before it started
         self.down(3)
         self.assertEqual(self.calls, [])
         self.assertTrue(self.reads)                               # the records flow still ran
@@ -1116,14 +1116,14 @@ class OwnerJob(JobBase):
         self.created = None
         self.held_run()
         self.assertNotIn('started_at', self.records()['kit'])
-        self.items = [item('question', 'Q-1', NOW + 30)]          # before the stop at NOW + 60
+        self.items = [item('question', 'EX-Q1', NOW + 30)]          # before the stop at NOW + 60
         self.down()
         self.assertEqual(self.calls, [])
-        self.items.append(item('question', 'Q-2', NOW + 90))
+        self.items.append(item('question', 'EX-Q2', NOW + 90))
         self.down(1)
         self.assertEqual(len(self.calls), 1)
-        self.assertIn('Q-2', self.calls[0][-1])
-        self.assertNotIn('Q-1', self.calls[0][-1])
+        self.assertIn('EX-Q2', self.calls[0][-1])
+        self.assertNotIn('EX-Q1', self.calls[0][-1])
 
     def test_started_at_is_the_process_creation_time(self):
         self.live = ['kit-coord-a1']
@@ -1132,7 +1132,7 @@ class OwnerJob(JobBase):
 
     def test_the_pending_read_waits_for_the_cheap_holds(self):
         self.held_run()
-        self.items = [item('question', 'Q-7', NOW + 30)]
+        self.items = [item('question', 'EX-Q7', NOW + 30)]
         self.now += 300
         self.run_job()                                            # down 1 of 2
         self.assertEqual(self.pend_reads, [])
@@ -1147,7 +1147,7 @@ class OwnerJob(JobBase):
         self.live = ['kit-coord-a1']
         self.run_job()
         self.live = []
-        self.items = [item('question', 'Q-7', NOW + 30)]
+        self.items = [item('question', 'EX-Q7', NOW + 30)]
         self.down()                                               # no stop.log line: a crash
         self.assertEqual(self.pend_reads, [])
         self.assertNotIn('--prompt', self.calls[0])
@@ -1159,11 +1159,11 @@ class OwnerJob(JobBase):
 
     def test_a_woken_coordinator_that_stops_again_is_not_woken_for_the_same_answer(self):
         self.held_run()
-        self.items = [item('question', 'Q-7', NOW + 30)]
+        self.items = [item('question', 'EX-Q7', NOW + 30)]
         self.down()
         self.assertEqual(len(self.calls), 1)
         self.live = ['kit-coord-a1']
-        self.created = self.now + 10                              # the new session starts after Q-7
+        self.created = self.now + 10                              # the new session starts after EX-Q7
         self.run_job()
         self.live = []
         self.stop()                                               # it found nothing to do, stops
@@ -1191,8 +1191,8 @@ class OwnerJob(JobBase):
             job = C.make(src)
         with self.assertRaises(C.OwnerUnread):
             job.run.pending('kit', ENTRY)                         # the hub has not set it yet
-        src.pending = lambda key: [item('question', 'Q-1', NOW), item('todo', 'T-1', NOW)]
-        self.assertEqual([i['id'] for i in job.run.pending('kit', ENTRY)], ['Q-1'])
+        src.pending = lambda key: [item('question', 'EX-Q1', NOW), item('todo', 'EX-T1', NOW)]
+        self.assertEqual([i['id'] for i in job.run.pending('kit', ENTRY)], ['EX-Q1'])
 
 
 if __name__ == '__main__':
