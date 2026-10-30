@@ -4,6 +4,7 @@ reason a python whose code the guard does not read is refused with (docs/guard.m
 "Parsing" and "Kit paths in advice")."""
 import json
 import os
+import time
 import unittest
 
 from kitlib.guard import commands as cm
@@ -284,10 +285,11 @@ class AdviceKit(unittest.TestCase):
         os.makedirs(os.path.dirname(record))
         with open(record, 'w', encoding='utf-8') as f:
             f.write(old)                         # the session's header named the replaced export A
-        self.assertEqual(headerfollow.line(old, payload, environ=env), headerfollow.text(self.export))
+        later = time.time() + headerfollow.EVERY_S + 1     # an hour on: A is still there
+        self.assertEqual(headerfollow.line(old, payload, environ=env, now=later), headerfollow.text(self.export))
         with open(record, encoding='utf-8') as f:
             self.assertEqual(os.path.normcase(f.read().strip()), os.path.normcase(os.path.normpath(self.export)))
-        self.assertIsNone(headerfollow.line(old, payload, environ=env))   # once per refresh
+        self.assertIsNone(headerfollow.line(old, payload, environ=env, now=later))   # the record is spent
 
 
 class NoSleepWait(unittest.TestCase):
