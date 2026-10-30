@@ -546,7 +546,7 @@ def removed_records(root, rev, rel):
         raise Failure('cannot read the store history: %s' % why)
     found, seen = [], set()
     for head, names in batch.log_records_names(out):
-        full, sha, when, subject, body = (head.split('', 4) + ['', '', '', ''])[:5]
+        full, sha, when, subject, body = (head.split('\x1f', 4) + ['', '', '', ''])[:5]
         for name in names:
             stem, ext = os.path.splitext(name[len(rel) + 1:])
             if not name.startswith(rel + '/') or ext != '.md' or '/' in stem or stem in seen:
@@ -1298,7 +1298,12 @@ class MainBackend(object):
         return r.rc == 0
 
     def removed(self, snap):
-        """`[(stem, Removal, last text)]` of every record a commit on HEAD deleted."""
+        """`[(stem, Removal, last text)]` of every record a commit on HEAD deleted; none while the
+        repository has no commit."""
+        out, _why = cmd.run_text(['rev-parse', '--verify', '-q', 'HEAD^{commit}'], self.root,
+                                 env=_store_env())
+        if not out:
+            return []
         return removed_records(self.root, 'HEAD', self.rel)
 
     def touched(self, snap):

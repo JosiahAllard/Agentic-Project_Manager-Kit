@@ -8,10 +8,13 @@ import tempfile
 import unittest
 from unittest import mock
 
+from kitlib.git import cmd
 from kitlib.backlog import find as findmod
+from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
 from tests.backlog.helpers import ADD_FLAGS, StoreCase, kit_json_ref, rec
-from tests.gitfixture import fixture_env, rmtree
+from tests.gitfixture import TempRepo, fixture_env, rmtree
+from tests.home import temp_home
 
 TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                     'tools', 'backlog.py')
@@ -116,6 +119,44 @@ class Cli(StoreCase):
         rc, out = run('find', '  ')
         self.assertEqual(rc, 2, out)
         self.assertIn('example: backlog.py find', out)
+
+
+
+class FolderStore(unittest.TestCase):
+    """`find` on a folder (main) store: closed records come from the branch's own history
+    (MainBackend.removed), and a repository with no commit yet has none to read."""
+
+    DIR = 'docs/backlog'
+
+    def make(self):
+        temp_home(self)
+        self.repo = TempRepo()
+        self.addCleanup(self.repo.cleanup)
+        return smod.Store(smod.MainBackend(self.repo.root, self.DIR), rmod.Rules())
+
+    def test_a_record_deleted_from_the_folder_is_found_with_its_ending_commit(self):
+        store = self.make()
+        for rid, summary in (('GONE', 'a narwhal thing'), ('KEEP', 'stays open')):
+            self.repo.write('%s/%s.md' % (self.DIR, rid), rec(rid, summary=summary)[rid])
+        self.repo.commit('seed the store', self.DIR)
+        self.repo.git('rm', '-q', '%s/GONE.md' % self.DIR)
+        self.repo.git('commit', '-q', '-m', 'close GONE: all done')
+        short = self.repo.git('rev-parse', '--short', 'HEAD')
+        lines, omitted = findmod.search(store.load(), store, 'NARWHAL')
+        self.assertEqual(omitted, 0)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertRegex(lines[0], r'^GONE\s+ended\s+a narwhal thing\s+\(\w+ by %s ' % short)
+        self.assertEqual([l.split()[0] for l in findmod.search(store.load(), store, 'stays')[0]],
+                         ['KEEP'])
+
+    def test_a_repository_with_no_commit_has_no_match_and_no_error(self):
+        temp_home(self)
+        root = tempfile.mkdtemp(prefix='kit-empty-')
+        self.addCleanup(rmtree, root)
+        self.assertIsNotNone(cmd.run_text(['init', '-q'], root)[0])
+        store = smod.Store(smod.MainBackend(root, self.DIR), rmod.Rules())
+        self.assertEqual(store.removed(store.load()), [])
+        self.assertEqual(findmod.search(store.load(), store, 'anything'), ([], 0))
 
 
 if __name__ == '__main__':
