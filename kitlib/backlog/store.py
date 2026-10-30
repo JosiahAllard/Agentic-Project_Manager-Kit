@@ -475,6 +475,12 @@ class RefBackend(object):
         """Always False: every write to a ref store is a commit."""
         return False
 
+    def removed(self, snap):
+        """`[(stem, Removal, last text)]` of every record a store commit deleted."""
+        if not snap.tip:
+            return []
+        return removed_records(self.root, snap.tip, STORE_DIR)
+
     def touched(self, snap):
         """`{stem: epoch}` of the last store commit that wrote each record."""
         if not snap.tip:
@@ -523,6 +529,40 @@ def last_removal(root, rev, rel, rid):
         return None
     sha, when, subject, body = (out.split('\x1f', 3) + ['', '', ''])[:4]
     return Removal(sha, when, session_of(body), subject)
+
+
+def removed_records(root, rev, rel):
+    """`[(stem, Removal, text)]`, newest removal first, one per record id: every `<rel>/<id>.md` a
+    commit reachable from `rev` deleted, with the text it had in that commit's first parent. One
+    `git log` names every deleted path and one `cat-file --batch` reads them all, however many
+    records there are. A record added back later is listed too; the caller drops the ids the
+    store holds. A path git cannot read at the parent is left out."""
+    rel = rel.replace('\\', '/').strip('/')
+    out, why = cmd.run_text(['-c', 'core.quotePath=false', 'log', '--full-history', '--no-renames',
+                             '--diff-filter=D', '--name-only',
+                             '--format=%x01%H%x1f%h%x1f%cI%x1f%s%x1f%b%x02', rev, '--', rel + '/'],
+                            root, timeout=120, strip=False)
+    if out is None:
+        raise Failure('cannot read the store history: %s' % why)
+    found, seen = [], set()
+    for head, names in batch.log_records_names(out):
+        full, sha, when, subject, body = (head.split('\x1f', 4) + ['', '', '', ''])[:5]
+        for name in names:
+            stem, ext = os.path.splitext(name[len(rel) + 1:])
+            if not name.startswith(rel + '/') or ext != '.md' or '/' in stem or stem in seen:
+                continue
+            seen.add(stem)
+            found.append((stem, Removal(sha, when, session_of(body), subject),
+                          '%s^:%s' % (full, name)))
+    blobs, why = batch.cat_file([spec for _s, _r, spec in found], root, timeout=120)
+    if blobs is None:
+        raise Failure('cannot read the store history: %s' % why)
+    done = []
+    for stem, removal, spec in found:
+        got = blobs.get(spec)
+        if got and got[0] == 'blob':
+            done.append((stem, removal, got[1].decode('utf-8', 'replace')))
+    return done
 
 
 # An id the history lookup may put in a pathspec: no glob or pathspec-magic character, no path
@@ -1257,6 +1297,15 @@ class MainBackend(object):
             raise Failure(r.err)
         return r.rc == 0
 
+    def removed(self, snap):
+        """`[(stem, Removal, last text)]` of every record a commit on HEAD deleted; none while the
+        repository has no commit."""
+        out, _why = cmd.run_text(['rev-parse', '--verify', '-q', 'HEAD^{commit}'], self.root,
+                                 env=_store_env())
+        if not out:
+            return []
+        return removed_records(self.root, 'HEAD', self.rel)
+
     def touched(self, snap):
         return _touch_times(self.root, 'HEAD', self.rel)
 
@@ -1436,6 +1485,9 @@ class Store(object):
 
     def uncommitted_removal(self, rid):
         return self.backend.uncommitted_removal(rid)
+
+    def removed(self, snap):
+        return self.backend.removed(snap)
 
     def touched(self, snap):
         return self.backend.touched(snap)
