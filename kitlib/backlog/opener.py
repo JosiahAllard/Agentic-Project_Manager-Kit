@@ -125,7 +125,7 @@ def planner(args, ctx):
                                        role_checked=True, may_collide=may_collide)
     if v == 'block':
         return lambda s: pmod.plan_block(s, ctx, args.id, args.on, args.owner_ask,
-                                         reason=args.reason)
+                                         reason=args.reason, until=args.until)
     if v == 'retarget':
         return lambda s: retmod.plan_retarget(s, ctx, args.old, args.new)
     if v == 'uncite':

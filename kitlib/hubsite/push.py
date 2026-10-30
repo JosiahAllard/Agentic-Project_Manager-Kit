@@ -121,7 +121,8 @@ snapshot's and GET health's `watcher` (Api.watcher_seen).
 Jobs (the hub's timed jobs, kitlib.hubsite.jobs): job_event(name, event, detail=None), on any
 thread, owes the PM one `job <name> <event>` push, with `detail:<detail>` after the event when
 one is given (one owed push per job name: a newer event of the same job replaces one still owed,
-its detail with it); the
+its detail with it; an event in JOB_EACH, `unblocked`, is owed once per detail instead, beside
+the rest, and its text says what to do: each names one opened record); the
 thread sends each owed one every round (send_jobs), tried on the same schedule until a try is
 written or GIVE_UP_S passes. Owed job pushes live in memory only, never in the outbox: a restart
 drops them, and the job pushes again when it fails again.
@@ -188,6 +189,12 @@ STOP_S = 15                                 # Hub.close's join: longer than a de
 MAX_ITEMS = 20                              # items in one message
 LOG_MAX = 1 << 20                           # push-undelivered.jsonl rotates past this
 OUTBOX = 'push-outbox.json'
+# Job events owed once per detail rather than once per job: each names one thing the PM must
+# hear about (kitlib.hubjobs.unblock_conditions: one opened record each), so a second one in a
+# round must not replace the first.
+JOB_EACH = {'unblocked': 'A hub timed job cleared a hold whose `until` condition was met: the '
+                         'record named in detail (<repo>:<ID>) is unblocked; `backlog.py show '
+                         '<ID>` gives the commit. No reply is needed.'}
 UNDELIVERED = 'push-undelivered.jsonl'
 COLLECTIONS = {'questions': 'question', 'todos': 'todo', 'approvals': 'approval',
                'stories': 'story', 'to_pm': 'to_pm', 'skill_edits': 'skill_edit'}
@@ -430,7 +437,9 @@ class PushWorker(object):
         self._watched = None            # the clock of the latest heartbeat read, None before
         self._armed = False             # seen 'up' since the last `watcher down` fired
         self._down = None               # the `watcher down` owed: {attempt, next_at, first_at}
-        self._jobs = {}                 # job name -> the job push owed: {event, attempt, next_at, first_at}
+        # job name (or a JOB_EACH event's (name, event, detail)) -> the job push owed:
+        # {name, event, detail, attempt, next_at, first_at}
+        self._jobs = {}
         self._jobs_lock = threading.Lock()  # job_event is called on a job's thread
         if api is not None:
             api.push_status = self.status   # the snapshot's `push` (Api.push_seen)
@@ -583,9 +592,11 @@ class PushWorker(object):
         """Owe the PM one job push: a timed job's `event` (kitlib.hubsite.jobs: `failing`,
         `recovered`, or a job's own word) and its optional `detail` (a `detail:` header field),
         sent by the thread (module docstring "Jobs"). A newer event of the same job replaces one
-        still owed, detail and all. Any thread."""
+        still owed, detail and all, except an event in JOB_EACH, owed once per detail beside
+        the job's other pushes. Any thread."""
+        slot = (name, event, detail) if event in JOB_EACH else name
         with self._jobs_lock:
-            self._jobs[name] = {'event': event, 'detail': detail, 'attempt': 0,
+            self._jobs[slot] = {'name': name, 'event': event, 'detail': detail, 'attempt': 0,
                                 'next_at': self.clock(), 'first_at': None}
 
     def send_jobs(self):
@@ -594,23 +605,25 @@ class PushWorker(object):
         now = self.clock()
         with self._jobs_lock:
             due = [(n, o) for n, o in self._jobs.items()]
-        for name, owed in due:
+        for slot, owed in due:
             if self._stop.is_set():
                 return
+            name = owed['name']
             entry = {'kind': 'job', 'id': name, 'status': owed['event']}
             if owed['first_at'] is not None and now - owed['first_at'] >= GIVE_UP_S:
                 self._note(entry, PM_KEY, None, owed['attempt'], GAVE_UP)
-                self._forget_job(name, owed)
+                self._forget_job(slot, owed)
                 continue
             if owed['next_at'] > now:
                 continue
             said = owed.get('detail')
             text = ('[hub push] job %s %s%s route:%s attempt:%d\n'
-                    'A hub timed job reported this: hub health shows its state, note and error '
-                    'under jobs.%s. For your information; no reply is needed.'
                     % (field(name), field(owed['event']),
                        '' if said is None else ' detail:' + field(said), field(PM_KEY),
-                       owed['attempt'] + 1, field(name)))
+                       owed['attempt'] + 1))
+            text += JOB_EACH.get(owed['event']) or (
+                'A hub timed job reported this: hub health shows its state, note and error '
+                'under jobs.%s. For your information; no reply is needed.' % field(name))
             sent = self._deliver(PM_KEY, text)
             self._last = sent.state
             owed['attempt'] += 1
@@ -622,14 +635,15 @@ class PushWorker(object):
             if sent.ambiguous:
                 self._note(entry, PM_KEY, sent.name, owed['attempt'], AMBIGUOUS)
             if sent.state == WRITTEN:
-                self._forget_job(name, owed)
+                self._forget_job(slot, owed)
             self._summarize()
 
-    def _forget_job(self, name, owed):
-        """Drop job `name`'s owed push, unless job_event replaced it meanwhile."""
+    def _forget_job(self, slot, owed):
+        """Drop the owed push in `slot` (a job name, or a JOB_EACH event's (name, event,
+        detail)), unless job_event replaced it meanwhile."""
         with self._jobs_lock:
-            if self._jobs.get(name) is owed:
-                del self._jobs[name]
+            if self._jobs.get(slot) is owed:
+                del self._jobs[slot]
 
     def _deliver(self, recipient, text):
         """Sent of one deliver: one that raises, or answers a state not known, is UNCERTAIN."""

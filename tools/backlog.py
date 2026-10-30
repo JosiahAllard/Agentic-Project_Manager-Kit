@@ -9,6 +9,7 @@
               [--effort s|m|l] [--ref R] [--reopen] [--body-file F]   (S: at most 120 characters)
           set ID [--<field> V]... [--unset K]... [--body-file F]
           block ID --on M... [--reason T] [--owner-ask Q]   (adds; unblock removes)
+              [--until C]   (one --on: the condition that ends it; docs/backlog.md "block --until")
           retarget OLD NEW [--apply]                (a moved path; a dry run without --apply)
           uncite [--apply]       (owner ruling and question ids -> words; a dry run without --apply)
           unblock ID [--on M] [--reason T]      (several blockers: --on and --reason)
@@ -26,7 +27,7 @@ REFUSED before the write plans. A published write of a MEDIUM or HIGH row append
 audit log, <pm_data>/audit/backlog.jsonl (kitlib.backlog.audit; docs/backlog.md "Audit log"); no
 pm_data is a NOTE and a log that cannot be written a WARNING, on standard error, after the write.
 A marked session may not give `--session` a by-design writer's name (gate-land, owner-hub,
-daily-full: audit_check.BY_DESIGN): REFUSED before the store is opened.
+daily-full, hub-condition: audit_check.BY_DESIGN): REFUSED before the store is opened.
 Exit codes: 0 OK, 1 NOT FOUND / ERROR / a red check / a landable that cannot tell, 2 USAGE /
 REFUSED / NOT LANDABLE.
 """
@@ -130,6 +131,7 @@ def build_parser():
     v.add_argument('--on', action='append', default=[])
     v.add_argument('--reason', default=None)
     v.add_argument('--owner-ask', default=None)
+    v.add_argument('--until', default=None)
     v = sub.add_parser('retarget')
     v.add_argument('old')
     v.add_argument('new')

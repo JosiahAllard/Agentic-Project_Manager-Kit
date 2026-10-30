@@ -7,6 +7,12 @@ add, edit, delete and unblock from the record page (docs/action-hub.md "The reco
   unblock(root, rid, on=None, reason=None)                      -> {"lines"}
   answer(root, rid, qid, at, title, label, note=None, via=None, other=False, waiting=())
                                                                 -> {"lines"}
+  condition_met(root, rid, member, cond)                        -> {"lines", "unblocked"}
+
+condition_met is not an owner route: the hub's unblock-conditions job (kitlib.hubjobs
+.unblock_conditions) calls it when a record's `until` condition is met, and it commits under
+Session: hub-condition (CONDITION_SESSION), clearing that one member (plan.plan_condition_met:
+an `owner` member only on a to-do or a question, the owner's own act).
 
 Each opens the store `.kit.json` in `root` names (kitlib.backlog.opener open_store, fetched first)
 and writes through Store.write with the plan functions backlog.py runs (kitlib.backlog.plan
@@ -48,13 +54,16 @@ from kitlib.backlog.errors import Failure, NotFound, Refusal
 from .store import HubError
 
 SESSION = 'owner-hub'               # the commit's Session: line and the review mark's source
+# The Session: line of condition_met's commit: the hub's timed job, not the owner (an audit
+# by-design writer, kitlib.backlog.audit_check.BY_DESIGN).
+CONDITION_SESSION = 'hub-condition'
 NOT_FOLDED = 'added by the owner from the Action Hub'
 STALE = 'the record changed since this page read it: read it again'
 
 
-def _open(root, no_store='store'):
+def _open(root, no_store='store', session=SESSION):
     try:
-        ctx = opener.open_store(root, fetch=True, session=SESSION)
+        ctx = opener.open_store(root, fetch=True, session=session)
     except Failure as e:
         raise HubError('store', str(e), 'repo')
     if getattr(ctx.store.backend, 'implicit', False):
@@ -62,10 +71,10 @@ def _open(root, no_store='store'):
     return ctx
 
 
-def _write(root, plan, no_store='store'):
-    """Store.write(plan(snapshot, ctx)) on the store at root, its errors as HubErrors; the
-    implicit store is refused with the code `no_store`."""
-    ctx = _open(root, no_store)
+def _change(root, plan, no_store='store', session=SESSION):
+    """The Change Store.write(plan(snapshot, ctx)) made on the store at root, its errors as
+    HubErrors; the implicit store is refused with the code `no_store`."""
+    ctx = _open(root, no_store, session)
     try:
         change, _tip = ctx.store.write(lambda s: plan(s, ctx))
     except NotFound as e:
@@ -74,7 +83,11 @@ def _write(root, plan, no_store='store'):
         raise HubError('store', str(e), '')
     except Refusal as e:
         raise HubError('invalid', str(e), '')
-    return {'lines': list(change.lines)}
+    return change
+
+
+def _write(root, plan, no_store='store'):
+    return {'lines': list(_change(root, plan, no_store).lines)}
 
 
 def add(root, rid, summary, scopes, effort=None, ref=None):
@@ -124,3 +137,13 @@ def answer(root, rid, qid, at, title, label, note=None, via=None, other=False, w
     return _write(root, lambda s, ctx: pmod.plan_answer(
         s, ctx, rid, qid, at, title, label, note or None, via or None, other, list(waiting),
         role_checked=True), no_store='no_store')
+
+
+def condition_met(root, rid, member, cond):
+    """Clear blocker `member` of `rid`, whose `until` condition `cond` the caller found met
+    (kitlib.hubjobs.unblock_conditions), in one store commit under Session: hub-condition
+    (plan.plan_condition_met). {"lines", "unblocked"}: unblocked False when the record no longer
+    holds that condition, and nothing was written."""
+    change = _change(root, lambda s, ctx: pmod.plan_condition_met(s, ctx, rid, member, cond),
+                     session=CONDITION_SESSION)
+    return {'lines': list(change.lines), 'unblocked': bool(change.writes)}
