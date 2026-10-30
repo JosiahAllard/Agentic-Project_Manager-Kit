@@ -6,6 +6,7 @@ Modes of `run`:
   dir=<path>    one line per file under that folder (prefix match; the real path)
   find=<Name>   where a type (substring) or member (exact name) is declared
   file=<path>   members of one file, with line numbers
+  symbol=<Name> numbered source of one Python def or class (`Class.method` too); `path` narrows it
 
 Reads tracked AND untracked-but-not-ignored source files (`git ls-files -co --exclude-standard`),
 so it matches this worktree, new files included. Heuristic regexes, not a parser: good for
@@ -14,6 +15,7 @@ C-family sources (Java, Kotlin, C#), Python/PowerShell `def`/`class`/`function` 
 `class_name`/`class`/`func` lines; other extensions are counted by folder only. No configuration:
 the extension and skip lists are the union every repository needs.
 """
+import ast
 import os
 import re
 from collections import OrderedDict
@@ -88,9 +90,68 @@ def scan(root, path):
     return types, members, n
 
 
-def run(root, out, dir=None, find=None, file=None):
+def symbols(root, path):
+    """([(file, first line, last line, dotted name, kind)], None) of every Python def and class
+    under `path` (a file or folder prefix; None = the whole tree); a file that does not parse is
+    skipped. `(None, why)` when git could not list the files."""
+    fs, why = files(root)
+    if fs is None:
+        return None, why
+    p = (path or '').replace('\\', '/').strip('/')
+    found = []
+    for f in fs:
+        if not f.endswith('.py') or (p and f != p and not f.startswith(p + '/')):
+            continue
+        try:
+            with open(os.path.join(root, f), encoding='utf-8', errors='replace') as fh:
+                tree = ast.parse(fh.read())
+        except (OSError, SyntaxError, ValueError):
+            continue
+        stack = [(tree, '')]
+        while stack:
+            node, prefix = stack.pop()
+            for ch in ast.iter_child_nodes(node):
+                if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    q = prefix + ch.name
+                    found.append((f, ch.lineno, ch.end_lineno, q,
+                                  'class' if isinstance(ch, ast.ClassDef) else 'def'))
+                    stack.append((ch, q + '.'))
+                else:
+                    stack.append((ch, prefix))
+    found.sort(key=lambda h: (h[0], h[1]))
+    return found, None
+
+
+def show_symbol(root, out, name, path=None):
+    """Print the numbered source of the one Python def/class `name` (or `Class.method`); 0, 1
+    when it is not found or ambiguous (the matches listed), 2 when git could not list the files."""
+    found, why = symbols(root, path)
+    if found is None:
+        out('codemap: cannot list the files of %s: %s' % (root, why))
+        return 2
+    hits = [h for h in found if h[3] == name or h[3].endswith('.' + name)]
+    if not hits:
+        out('codemap: symbol %s not found' % name)
+        return 1
+    if len(hits) > 1:
+        out('codemap: %s is ambiguous, %d matches (name Class.method or pass a path):' % (name, len(hits)))
+        for f, a, _b, q, kind in hits:
+            out('%s:%d  %s %s' % (f, a, kind, q))
+        return 1
+    f, a, b, q, kind = hits[0]
+    out('%s:%d-%d  %s %s' % (f, a, b, kind, q))
+    with open(os.path.join(root, f), encoding='utf-8', errors='replace') as fh:
+        lines = fh.read().splitlines()
+    for i in range(a, b + 1):
+        out('%5d  %s' % (i, lines[i - 1]))
+    return 0
+
+
+def run(root, out, dir=None, find=None, file=None, symbol=None, path=None):
     """One codemap mode over `root`, every line to `out`; 0, or 2 when git could not list the
-    files."""
+    files (symbol: 1 when not found or ambiguous)."""
+    if symbol:
+        return show_symbol(root, out, symbol, path)
     if file:
         path = file.replace('\\', '/')
         types, members, n = scan(root, path)
