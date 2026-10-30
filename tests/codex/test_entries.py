@@ -1,9 +1,9 @@
-"""The Codex shell's entries run as Codex runs them: in place in the kit, and copied out of it as a
-plugin cache does, where they find the kit through PM_KIT_ROOT. Each runs in a child Python with closed stdin."""
+"""The Codex plugin's entries run as Codex runs them, from the plugin root: the export folder Codex
+installs into its cache, which is laid out as the kit is, so these run them from the kit root
+(boot/hook.py, hosts/codex/shell/mcp/). Each runs in a child Python with closed stdin."""
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -13,8 +13,9 @@ from kitlib import sessionmark
 from kitlib.host import header
 
 ROOT = Path(__file__).resolve().parents[2]
-SHELL = ROOT / 'hosts' / 'codex' / 'shell'
-HOOK = 'boot/hook.py'                   # the plugin's copy of the kit's one hook entry
+PLUGIN = ROOT                           # the plugin root: the export, laid out as the kit
+HOOK = 'boot/hook.py'                   # the kit's one hook entry, hooks.json's ${PLUGIN_ROOT}/boot/hook.py
+MCP = 'hosts/codex/shell/mcp/'          # mcp.json's servers, from the plugin root
 
 
 def _session(line):
@@ -31,8 +32,6 @@ class Entries(unittest.TestCase):
         scratch = tempfile.TemporaryDirectory(prefix='codex-cache-')
         self.addCleanup(scratch.cleanup)
         self.base = Path(scratch.name)
-        self.cached = self.base / 'cache' / 'local'
-        shutil.copytree(SHELL, self.cached, ignore=shutil.ignore_patterns('__pycache__'))
         self.home = self.base / 'home'
         self.home.mkdir()
         # The home fence marker stays in the child's environment: without it the child is unfenced
@@ -56,15 +55,13 @@ class Entries(unittest.TestCase):
         return json.dumps({'hook_event_name': 'PreToolUse', 'tool_name': name, 'tool_input': data,
                            'cwd': str(self.base)})
 
-    def test_a_deny_is_codex_permission_json_in_place_and_cached(self):
-        for plugin in (SHELL, self.cached):
-            with self.subTest(plugin=plugin):
-                r = self.run_entry(plugin, HOOK, self.tool('Bash', {'command': 'find $USERPROFILE -name x',
-                                                                    'shell': 'bash.exe'}), ('codex', 'PreToolUse'))
-                self.assertEqual(r.returncode, 0, r.stderr)
-                out = json.loads(r.stdout)['hookSpecificOutput']
-                self.assertEqual((out['hookEventName'], out['permissionDecision']), ('PreToolUse', 'deny'))
-                self.assertIn('rule=root-search', out['permissionDecisionReason'])
+    def test_a_deny_is_codex_permission_json(self):
+        r = self.run_entry(PLUGIN, HOOK, self.tool('Bash', {'command': 'find $USERPROFILE -name x',
+                                                            'shell': 'bash.exe'}), ('codex', 'PreToolUse'))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)['hookSpecificOutput']
+        self.assertEqual((out['hookEventName'], out['permissionDecision']), ('PreToolUse', 'deny'))
+        self.assertIn('rule=root-search', out['permissionDecisionReason'])
 
     def test_a_deny_never_reaches_the_real_refusal_log(self):
         from kitlib.config import pointer
@@ -85,18 +82,18 @@ class Entries(unittest.TestCase):
         before = mine()
         denied = self.tool('Bash', {'command': 'find $USERPROFILE -name x', 'shell': 'bash.exe'})
         for text in (denied, '{bad'):
-            r = self.run_entry(self.cached, HOOK, text, ('codex', 'PreToolUse'))
+            r = self.run_entry(PLUGIN, HOOK, text, ('codex', 'PreToolUse'))
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn('deny', r.stdout)
         self.assertEqual(mine(), before, 'a test child appended to the real refusal log: ' + real)
 
     def test_an_allow_writes_nothing(self):
-        r = self.run_entry(self.cached, HOOK, self.tool('Read', {'file_path': 'a'}), ('codex', 'PreToolUse'))
+        r = self.run_entry(PLUGIN, HOOK, self.tool('Read', {'file_path': 'a'}), ('codex', 'PreToolUse'))
         self.assertEqual((r.returncode, r.stdout), (0, ''), r.stderr)
 
     def test_a_bad_payload_is_a_deny(self):
         for text in ('{bad', '[]', self.tool('Write', {})):
-            r = self.run_entry(self.cached, HOOK, text, ('codex', 'PreToolUse'))
+            r = self.run_entry(PLUGIN, HOOK, text, ('codex', 'PreToolUse'))
             self.assertEqual(r.returncode, 0, r.stderr)
             out = json.loads(r.stdout)['hookSpecificOutput']
             self.assertEqual(out['permissionDecision'], 'deny')
@@ -104,35 +101,21 @@ class Entries(unittest.TestCase):
 
     def test_a_kit_that_will_not_boot_blocks_by_exit_code(self):
         self.env['PM_KIT_ROOT'] = str(self.base / 'missing')
-        r = self.run_entry(self.cached, HOOK, self.tool('Write', {'file_path': 'a'}), ('codex', 'PreToolUse'))
+        r = self.run_entry(PLUGIN, HOOK, self.tool('Write', {'file_path': 'a'}), ('codex', 'PreToolUse'))
         self.assertEqual((r.returncode, r.stdout), (2, ''))
-        fast = self.run_entry(self.cached, HOOK, self.tool('Read', {}), ('codex', 'PreToolUse'))
+        fast = self.run_entry(PLUGIN, HOOK, self.tool('Read', {}), ('codex', 'PreToolUse'))
         self.assertEqual((fast.returncode, fast.stdout), (0, ''), 'the owner\'s read never boots the kit')
         self.env['PM_KIT_ROLE'] = 'worker'
-        marked = self.run_entry(self.cached, HOOK, self.tool('Read', {}), ('codex', 'PreToolUse'))
+        marked = self.run_entry(PLUGIN, HOOK, self.tool('Read', {}), ('codex', 'PreToolUse'))
         self.assertEqual(marked.returncode, 2, 'a marked session boots the kit for every call')
-        s = self.run_entry(self.cached, HOOK, '{}', ('codex', 'SessionStart'))
+        s = self.run_entry(PLUGIN, HOOK, '{}', ('codex', 'SessionStart'))
         self.assertEqual(s.returncode, 0, s.stderr)
         self.assertIn('the kit did not load', s.stdout)
-
-    def test_a_copied_plugin_boots_with_its_own_check_never_a_stray_one_above_it(self):
-        plugin = self.base / 'x' / 'y' / 'shell'          # four folders below base, as in a kit
-        shutil.copytree(SHELL, plugin, ignore=shutil.ignore_patterns('__pycache__'))
-        (self.base / 'boot').mkdir()
-        (self.base / 'boot' / 'kitboot.py').write_text('def boot(**k):\n    raise SystemExit(0)\n', encoding='utf-8')
-        self.assertEqual((plugin / 'boot' / 'kitboot.py').read_bytes(), (ROOT / 'boot' / 'kitboot.py').read_bytes())
-        self.assertEqual((plugin / 'boot' / 'hook.py').read_bytes(), (ROOT / 'boot' / 'hook.py').read_bytes())
-        payload = self.tool('Write', {'file_path': 'a'})
-        bound = self.run_entry(plugin, HOOK, payload, ('codex', 'PreToolUse'))
-        self.assertEqual(bound.returncode, 0, bound.stderr)          # PM_KIT_ROOT names the kit
-        self.env.pop('PM_KIT_ROOT')
-        unbound = self.run_entry(plugin, HOOK, payload, ('codex', 'PreToolUse'))
-        self.assertEqual((unbound.returncode, unbound.stdout), (2, ''), 'no kit.json beside it: no stray boot/')
 
     def test_a_start_event_adds_the_kit_header(self):
         for event in ('SessionStart', 'PostCompact', 'SubagentStart'):
             with self.subTest(event=event):
-                r = self.run_entry(self.cached, HOOK, json.dumps({'cwd': str(self.base)}), ('codex', event))
+                r = self.run_entry(PLUGIN, HOOK, json.dumps({'cwd': str(self.base)}), ('codex', event))
                 self.assertEqual(r.returncode, 0, r.stderr)
                 out = json.loads(r.stdout)['hookSpecificOutput']
                 self.assertEqual(out['hookEventName'], event)
@@ -143,7 +126,7 @@ class Entries(unittest.TestCase):
                     {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'},
                     {'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call',
                      'params': {'name': 'lock_hold_create', 'arguments': {'spec': {}}}}]
-        r = self.run_entry(self.cached, 'mcp/lock_server.py', '\n'.join(json.dumps(q) for q in requests) + '\n')
+        r = self.run_entry(PLUGIN, MCP + 'lock_server.py', '\n'.join(json.dumps(q) for q in requests) + '\n')
         self.assertEqual(r.returncode, 0, r.stderr)
         first, second, third = [json.loads(line) for line in r.stdout.splitlines()]
         from hosts.codex.adapter.lock import READ_TOOLS
@@ -155,7 +138,7 @@ class Entries(unittest.TestCase):
     def test_the_hub_server_lists_its_tools(self):
         requests = [{'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {}},
                     {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'}]
-        r = self.run_entry(self.cached, 'mcp/hub_server.py', '\n'.join(json.dumps(q) for q in requests) + '\n')
+        r = self.run_entry(PLUGIN, MCP + 'hub_server.py', '\n'.join(json.dumps(q) for q in requests) + '\n')
         self.assertEqual(r.returncode, 0, r.stderr)
         first, second = [json.loads(line) for line in r.stdout.splitlines()]
         names = {t['name'] for t in second['result']['tools']}
