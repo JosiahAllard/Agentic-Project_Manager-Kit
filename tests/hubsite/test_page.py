@@ -1364,7 +1364,7 @@ class DomTest(unittest.TestCase):
             return out;
         """, snapshot(views=views))
         # The sidebar's order is its groups'.
-        self.assertEqual(got["sections"], ["home", "questions", "todo", "approvals", "backlog", "schedule", "docs", "topm", "info", "agents", "skills", "findings", "autotasks"])
+        self.assertEqual(got["sections"], ["home", "questions", "todo", "approvals", "backlog", "schedule", "docs", "landings", "topm", "info", "agents", "skills", "findings", "autotasks"])
         self.assertEqual(got["first"], {"say": "3 parked", "off": False, "hot": True})       # seen from any section
         self.assertEqual(got["badge"], "sec-backlog")
         self.assertEqual(got["tab"], {"chosen": "true", "n": "3", "section": "true", "row": False})
@@ -2605,6 +2605,7 @@ class ShellTest(unittest.TestCase):
                  "#usage": ("info", None, None, "usage", "#usage"),
                  "#agents": ("agents", None, None, None, "#agents"),
                  "#skills": ("skills", None, None, None, "#skills"),
+                 "#landings": ("landings", None, None, None, "#landings"),
                  "#nowhere": ("questions", "questions", None, None, "#questions")}
         for hash_, (sec, qt, sf, nf, shown) in cases.items():
             got = dom(SHELL_NOW + "await start(); return now();", snapshot(collections=LISTS, views={"backlog": BACKLOG}), hash=hash_)
@@ -2663,7 +2664,7 @@ class ShellTest(unittest.TestCase):
             return { first, rows, after: now(), tabs: $$("#tabbar .tb").map(b => b.id) };
         """, snapshot(collections=LISTS), hash="#more")
         self.assertEqual((got["first"]["sec"], got["first"]["tb"], got["first"]["hash"], got["first"]["len"]), ([], ["more"], "#more", 1))
-        self.assertEqual([r[0] for r in got["rows"]], ["more-todo", "more-backlog", "more-docs", "more-topm", "more-info", "more-agents", "more-skills", "more-findings", "more-autotasks"])
+        self.assertEqual([r[0] for r in got["rows"]], ["more-todo", "more-backlog", "more-docs", "more-landings", "more-topm", "more-info", "more-agents", "more-skills", "more-findings", "more-autotasks"])
         self.assertEqual([r[1] for r in got["rows"]][:2], ["To-dos2", "Backlog0"])
         self.assertEqual((got["after"]["sec"], got["after"]["tb"], got["after"]["hash"]), (["backlog"], ["more"], "#backlog"))
         self.assertEqual(got["tabs"], ["tb-home", "tb-questions", "tb-approvals", "tb-schedule", "tb-more"])
@@ -5065,7 +5066,7 @@ class TriageShellTest(unittest.TestCase):
         side = re.search(r'<div class="sections".*?</div>\s*<div class="sidefoot"', self.markup, re.S).group(0)
         order = re.findall(r'class="(sechead|sec)"[^>]*?(?:id="([\w-]+)")', side)
         self.assertEqual([i for _, i in order], ["sec-home", "sh-work", "sec-questions", "sec-todo", "sec-approvals", "sh-projects",
-                                                 "sec-backlog", "sec-schedule", "sec-docs", "sh-more", "sec-topm", "sec-info", "sec-agents", "sec-skills",
+                                                 "sec-backlog", "sec-schedule", "sec-docs", "sec-landings", "sh-more", "sec-topm", "sec-info", "sec-agents", "sec-skills",
                                                  "sh-upkeep", "sec-findings", "sec-autotasks"])
         self.assertNotIn("data-nf=\"agents\"", self.markup)      # Agents is its own entry under More, not a Usage tab
         heads = re.findall(r'<div class="sechead" id="[\w-]+">([^<]+)</div>', side)
@@ -5490,6 +5491,34 @@ class TriageViewsTest(unittest.TestCase):
         self.assertEqual(got["agents"]["rows"], ["row-pm", "row-worker"])                 # opus first
         self.assertEqual(got["agents"]["detail"][0][0], "a-pm")
         self.assertIn("plans", got["agents"]["detail"][0][1])
+
+    def test_landings_are_newest_first_under_a_heading_per_new_main_and_filter_by_repo(self):
+        def ev(i, repo, branch, main, **kw):
+            d = {"repo": repo, "branch": branch, "tip": "t%d" % i * 8, "main": main, "main_branch": "main", "verdict": "pass",
+                 "code": 0, "mode": "full", "records": [], "posted_at": NOW, "version": 1}
+            d.update(kw)
+            return "L-%03d" % i, d
+        # L-002 and L-003 are one batch (one new main); ids sort by number, not as text (L-010 is newest)
+        docs = dict([ev(1, "alpha", "kit/one", "m1" * 10), ev(2, "alpha", "kit/two", "m2" * 10, records=["B-2"]),
+                     ev(3, "alpha", "kit/three", "m2" * 10, deploy="restart the hub"),
+                     ev(10, "beta", "kit/four", "m3" * 10, verdict="landed-ungated", mode=None)])
+        got = dom("""
+            await start();
+            const kids = () => [...$("#list").children].map(n => n.classList.contains("row") ? n.id : "h:" + text(n));
+            const all = { kids: kids(), count: text($("#n-l")), detail: $$("#pane-detail article").map(a => [a.id, text(a)]) };
+            await click($("#row-L-003"));
+            all.deploy = $$("#pane-detail article").map(a => text(a));
+            $("#repo").value = "beta"; await fire($("#repo"), "change");
+            all.beta = kids();
+            return all;
+        """, snapshot(collections={"landings": docs}, views={"repos": [{"name": "alpha", "aliases": []}, {"name": "beta", "aliases": []}]}),
+            hash="#landings")
+        self.assertEqual(got["kids"], ["h:beta main at m3m3m3m3m3", "row-L-010", "h:alpha main at m2m2m2m2m2", "row-L-003", "row-L-002",
+                                       "h:alpha main at m1m1m1m1m1", "row-L-001"])
+        self.assertEqual(got["count"], "4")
+        self.assertEqual(got["detail"][0][0], "l-L-010")
+        self.assertIn("Deploy: restart the hub", got["deploy"][0])
+        self.assertEqual(got["beta"], ["h:beta main at m3m3m3m3m3", "row-L-010"])
 
 
 def css_tokens(css, head):

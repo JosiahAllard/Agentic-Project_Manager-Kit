@@ -9,11 +9,21 @@ import sys
 import tempfile
 import unittest
 
+from kitlib import sessionmark
 from kitlib.host import header
 
 ROOT = Path(__file__).resolve().parents[2]
 SHELL = ROOT / 'hosts' / 'codex' / 'shell'
 HOOK = 'boot/hook.py'                   # the plugin's copy of the kit's one hook entry
+
+
+def _session(line):
+    """A real-log line's session, None for a line that does not parse (readers skip those)."""
+    try:
+        row = json.loads(line)
+    except ValueError:
+        return None
+    return row.get('session') if isinstance(row, dict) else None
 
 
 class Entries(unittest.TestCase):
@@ -25,11 +35,16 @@ class Entries(unittest.TestCase):
         shutil.copytree(SHELL, self.cached, ignore=shutil.ignore_patterns('__pycache__'))
         self.home = self.base / 'home'
         self.home.mkdir()
-        # The child's home is the temp folder below, so the tests' home fence marker is left out: on
-        # a machine whose profile folder cannot be read it would refuse even that home.
+        # The home fence marker stays in the child's environment: without it the child is unfenced
+        # and reads the machine's real PM-repo pointer, so a deny appends to the real refusal log.
+        # The old reason for dropping it still holds (kitlib/config/user.py _refused, the
+        # UNPROVEN_MESSAGE raise): where the system will not name the profile folder the fence
+        # refuses even a temp home. That only makes a child's home lookup raise HomeFenced, which
+        # refusal_log.record swallows (no line); the pointer is also left unnamed below, so both
+        # cases write nothing. No CI workflow in the repo runs this file.
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith('MACHINE_LOCK_')
-                    and k not in ('PM_KIT_ROLE', 'PM_KIT_RELEASE_ID', 'KIT_HOME_FENCE')}
+                    and k not in ('PM_KIT_ROLE', 'PM_KIT_RELEASE_ID', 'KIT_PM_REPO_FENCE')}
         self.env.update(PM_KIT_ROOT=str(ROOT), HOME=str(self.home), USERPROFILE=str(self.home),
                         GIT_CEILING_DIRECTORIES=str(self.base), PYTHONDONTWRITEBYTECODE='1')
 
@@ -50,6 +65,30 @@ class Entries(unittest.TestCase):
                 out = json.loads(r.stdout)['hookSpecificOutput']
                 self.assertEqual((out['hookEventName'], out['permissionDecision']), ('PreToolUse', 'deny'))
                 self.assertIn('rule=root-search', out['permissionDecisionReason'])
+
+    def test_a_deny_never_reaches_the_real_refusal_log(self):
+        from kitlib.config import pointer
+        from kitlib.guard import refusal_log
+        value, _ = pointer.registry()             # the machine's real PM repository, read before any fence
+        if not value:
+            self.skipTest('no PM repository pointer on this machine: no real log to protect')
+        real = refusal_log.log_path(value)
+
+        probe = 'fence-probe-%d' % os.getpid()     # names this test's children in any line they write
+        self.env[sessionmark.SESSION_NAME_ENV] = probe
+
+        def mine():
+            if not os.path.exists(real):
+                return 0
+            with open(real, encoding='utf-8') as fh:
+                return sum(1 for line in fh if _session(line) == probe)
+        before = mine()
+        denied = self.tool('Bash', {'command': 'find $USERPROFILE -name x', 'shell': 'bash.exe'})
+        for text in (denied, '{bad'):
+            r = self.run_entry(self.cached, HOOK, text, ('codex', 'PreToolUse'))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn('deny', r.stdout)
+        self.assertEqual(mine(), before, 'a test child appended to the real refusal log: ' + real)
 
     def test_an_allow_writes_nothing(self):
         r = self.run_entry(self.cached, HOOK, self.tool('Read', {'file_path': 'a'}), ('codex', 'PreToolUse'))

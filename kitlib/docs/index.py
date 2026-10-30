@@ -57,6 +57,7 @@ listing exits 2 before any mode can announce that emptiness as good news.
 import atexit
 import collections
 import fnmatch
+import difflib
 import os
 import re
 import time
@@ -287,6 +288,17 @@ def known_keywords(text):
     return sorted({k for _n, _s, _l, keys in index_entries(text) for k in keys})
 
 
+NEAREST = 10
+
+
+def nearest_keywords(text, query, n=NEAREST):
+    """The `n` index keywords most like `query` (difflib ratio, ties alphabetical)."""
+    q = query.lower()
+    ranked = sorted(known_keywords(text),
+                    key=lambda k: (-difflib.SequenceMatcher(None, q, k.lower()).ratio(), k))
+    return ranked[:n]
+
+
 def read_index(root, index=INDEX):
     """The index from the working tree. Raises OSError: a missing index is reported as one, never
     as "no entry matches"."""
@@ -298,8 +310,8 @@ def print_find(text, query, out, match='keywords', index=INDEX):
     """Send the matches to `out`; 0 on a hit, 1 with the keyword list on none."""
     hits = find_entries(text, query, match)
     if not hits:
-        out('no %s entry matches "%s". Known keywords:' % (index, query))
-        out(', '.join(known_keywords(text)))
+        out('no %s entry matches "%s". Nearest keywords:' % (index, query))
+        out(', '.join(nearest_keywords(text, query)))
         return 1
     if match == 'text':
         out('\n'.join(l for _n, _s, l, _k in hits))
