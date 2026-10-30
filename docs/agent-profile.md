@@ -33,7 +33,7 @@ module lines only.
 Landing is standing owner-approved work and needs no further go: the coordinator queues a verdict for
 every landing, then submits it. Before a landing, per branch, from the main checkout:
 `python tools/verdict.py add -C <repo> --branch <branch> --tip <sha> --verdict LAND ...`
-(docs/gate.md "Strict paths"), then `python tools/land.py <branch> --expect-tip <sha> --submit`, then
+(docs/gate.md "Strict paths"), then `python tools/land.py <branch> --expect-tip <sha> --reviewed-by <reviewer id> --submit` (the verdict's reviewer_id), then
 the `gate.py wait-result ... --kind land` command it prints, kept running in the background. A lander
 role may do the submit, wait and report for the coordinator. No agent merges or pushes, and no
 expected-main hash is given: a detached process books its turn in the machine lock (the landing
