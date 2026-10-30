@@ -83,6 +83,30 @@ class Agents(unittest.TestCase):
                     self.assertNotIn(value.encode(), data, (path, value))
 
 
+class Retired(unittest.TestCase):
+    def test_a_file_left_in_a_retired_folder_is_stale(self):
+        """The skills and boot copies the Codex renderer no longer writes: a file left in either is
+        drift (`stale:`), so render_content --check fails and --write removes it."""
+        import tempfile
+
+        class Agents:                       # the Codex renderer's own folders, without its manifests
+            r = cc.renderer()
+            owned, retired = r.owned, r.retired
+
+            def render(self, content):
+                return self.r.render(content)
+
+        left = ('hosts/codex/shell/skills/old/SKILL.md', 'hosts/codex/shell/boot/kitboot.py')
+        with tempfile.TemporaryDirectory() as root:
+            for rel in left:
+                os.makedirs(os.path.join(root, os.path.dirname(rel)))
+                with open(os.path.join(root, rel), 'wb') as f:
+                    f.write(b'x\n')
+            lines = kcontent.drift(root, [Agents()], content=hc.Content(roles=(), skills=()))
+        self.assertEqual([l for l in lines if l.startswith('stale:')],
+                         ['stale: %s' % rel for rel in sorted(left)])
+
+
 class DefaultRole(unittest.TestCase):
     def test_an_unmarked_session_is_the_read_type(self):
         """A Codex session with no PM_KIT_ROLE runs as the analyst, the read type (a role file the
