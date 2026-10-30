@@ -34,7 +34,8 @@ An entry (every key always present):
   verdict         LAND | LAND WITH FOLLOW-UP
   risk            Low | Medium | High
   reviewer        the reviewer's agent type
-  reviewer_model  the model the reviewer ran on
+  reviewer_model  the model the reviewer ran on; tools/verdict.py add checks it against the
+                  reviewer's transcript where the host has a reader (model_mismatch_why)
   reviewer_id     the reviewer's agent or session id
   author          the change's author: commit author and agent type (`Kit Test / worker`); it
                   picks no reviewer model: a strict branch needs a strong-tier reviewer
@@ -60,7 +61,9 @@ Errors (all VerdictError): BadEntry for a malformed entry or branch name given, 
 written; SelfReview (a BadEntry) when add() is given a High-risk verdict the coordinator queueing
 it reviewed itself (self_review_why), nothing read or written, or, with "landing".
 self_review_max_lines given, a self-read of a branch over that many changed lines or one whose
-size cannot be told (self_review_size_why), nothing written; TipMismatch when the tip is not the branch's head, or there is no such branch;
+size cannot be told (self_review_size_why), nothing written; ModelMismatch (a BadEntry) when
+add() is given the models the reviewer's transcript shows (seen_models, the host's reader) and one
+is not the reviewer_model stated (model_mismatch_why), nothing written; TipMismatch when the tip is not the branch's head, or there is no such branch;
 CarryRefused when carry() finds the head does not carry the verdict, nothing written;
 OtherBranch when the file for the branch named holds another branch's entry (names that differ
 only in case share one file on Windows); VerdictError itself for a queue file that cannot be read
@@ -129,6 +132,11 @@ class BadEntry(VerdictError):
 class SelfReview(BadEntry):
     """A High-risk verdict whose reviewer is the coordinator queueing it (self_review_why): its
     text ends with the Instead: line (SELF_REVIEW_INSTEAD). Nothing was read or written."""
+
+
+class ModelMismatch(BadEntry):
+    """The reviewer's transcript shows a model other than the reviewer_model given
+    (model_mismatch_why): its text ends with an Instead: line. Nothing was read or written."""
 
 
 class TipMismatch(VerdictError):
@@ -295,6 +303,62 @@ def self_review_size_why(entry, max_lines, cwd, main, main_why=None):
                    'from main as fetched)' % (entry['range'], added + removed, added, removed,
                                               files, '' if files == 1 else 's', main[:10],
                                               tip)) + tail
+
+
+def _reviewer_ids(text):
+    """The ids a verdict's `reviewer_id` lists, split as land.is_author splits them. Pure."""
+    return [i for i in re.split(r'[/,;\s]+', text) if i]
+
+
+def seen_models(entry, reader):
+    """`{id: [models]}`: for each id `entry`'s reviewer_id lists that `reader` takes as an agent
+    id, the models its transcript shows. `reader` is a host's transcript reader (on Claude
+    hosts.claude.adapter.agent_models.models): id -> sorted models, [] for an agent id with no
+    transcript, None for an id that is not an agent id (a session name), which is left out. {}
+    when there is no reader (a host with none, Codex) or the reviewer is the coordinator queueing
+    it (self_reader): a self-review is no subagent. `entry` is well formed (check)."""
+    if reader is None or self_reader(entry):
+        return {}
+    out = {}
+    for rid in _reviewer_ids(entry['reviewer_id']):
+        got = reader(rid)
+        if got is not None:
+            out[rid] = list(got)
+    return out
+
+
+def model_mismatch_why(entry, seen):
+    """Why add() refuses `entry` because its reviewer ran on another model than its reviewer_model
+    says, or None. `seen` is seen_models(): a model seen matches when it is reviewer_model (case
+    and outer space aside) or names the same tier model of hosts.json (land.named_model:
+    `claude-haiku-5-5` names haiku). Refused when any model seen for any id does not match; an id
+    with none seen (no transcript) is not checked. `entry` is well formed (check)."""
+    from kitlib.gate import land          # land imports this module: a late import
+    strong, weak, _ = land.tier_models()
+    strong, weak = strong or set(), weak or set()
+    typed = entry['reviewer_model'].strip()
+    want = land.named_model(typed, strong, weak)
+
+    def same(model):
+        return (model.casefold() == typed.casefold()
+                or (want is not None and land.named_model(model, strong, weak) == want))
+    off = [(rid, models) for rid, models in sorted(seen.items())
+           if models and not all(same(m) for m in models)]
+    if not off:
+        return None
+    ran = sorted(set(m for _, models in off for m in models))
+    said = '; '.join('the reviewer %s ran on %s' % (rid, ' and '.join(models))
+                     for rid, models in off)
+    if len(ran) == 1:
+        use = 'queue it with --reviewer-model %s, the model it ran on' % (
+            land.named_model(ran[0], strong, weak) or ran[0])
+    else:
+        use = 'queue it with --reviewer-model naming the model the review ran on (%s)' % ', '.join(ran)
+    tier = ' or '.join(sorted(strong - weak)) or 'a strong-tier model'
+    return ('--reviewer-model %s, but %s (its transcript): an agent dispatched with no model '
+            'override runs on its role\'s default tier; nothing was queued\nInstead: %s; a branch '
+            'land.py --check-strict calls STRICT needs a review on %s: dispatch a fresh analyst '
+            'with model %s (skill branch-review)' % (typed, said, use, tier, tier))
 
 
 def check(entry, stored=True):
@@ -493,20 +557,25 @@ def head_of(common_dir, branch):
     return sha
 
 
-def add(common_dir, entry, now=None, self_review_max_lines=None, main=None, main_why=None):
+def add(common_dir, entry, now=None, self_review_max_lines=None, main=None, main_why=None,
+        seen=None):
     """Queue `entry` (the GIVEN_KEYS; nothing else) for its branch, replacing an entry already
     queued for it: `(path, stored entry)`. The tip must be `refs/heads/<branch>` in the repository
     whose common dir is `common_dir`, else TipMismatch. A High-risk self-review is SelfReview
     (self_review_why); so is a self-read of a branch over `self_review_max_lines` changed lines, or
     one whose size cannot be told, when that cap ("landing".self_review_max_lines) is given
-    (self_review_size_why; `main`: main as fetched, a commit, or None with `main_why`). `now`: a
-    datetime for queued_utc."""
+    (self_review_size_why; `main`: main as fetched, a commit, or None with `main_why`). `seen`:
+    seen_models() for the entry; a model seen that is not its reviewer_model is ModelMismatch
+    (model_mismatch_why). Nothing seen is stored. `now`: a datetime for queued_utc."""
     why = check(entry, stored=False)
     if why:
         raise BadEntry(why)
     why = self_review_why(entry)
     if why:
         raise SelfReview(why)
+    why = model_mismatch_why(entry, seen) if seen else None
+    if why:
+        raise ModelMismatch(why)
     branch, tip = entry['branch'], entry['tip']
     path = entry_path(common_dir, branch)
     head = head_of(common_dir, branch)
