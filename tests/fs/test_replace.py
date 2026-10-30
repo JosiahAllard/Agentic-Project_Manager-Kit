@@ -2,12 +2,38 @@
 import os
 import shutil
 import tempfile
-import threading
-import time
 import unittest
 from unittest import mock
 
 from kitlib.fs import replace as R
+
+WAIT, PAUSE = 0.25, 0.0625      # exact in binary: tries at 0, 1/16, 1/8, 3/16 and 1/4 s, so 5
+
+
+class FakeTime:
+    """Stands in for kitlib.fs.replace's `time`: monotonic() reads `t` and sleep(s) adds s to it,
+    so the retry loop runs on counted pauses, never on the machine's speed. `on_sleep` runs at
+    each pause (a reader letting go)."""
+
+    def __init__(self, on_sleep=None):
+        self.t, self.sleeps, self.on_sleep = 0.0, [], on_sleep
+
+    def monotonic(self):
+        return self.t
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.t += seconds
+        if self.on_sleep is not None:
+            self.on_sleep()
+
+
+def fake_time(test, on_sleep=None):
+    clock = FakeTime(on_sleep)
+    patcher = mock.patch.object(R, 'time', clock)
+    patcher.start()
+    test.addCleanup(patcher.stop)
+    return clock
 
 
 class ReplaceTest(unittest.TestCase):
@@ -29,28 +55,24 @@ class ReplaceTest(unittest.TestCase):
         self.addCleanup(reader.close)
         with self.assertRaises(PermissionError):
             os.replace(self.src, self.dst)              # the condition the retry is for
-        closer = threading.Timer(0.3, reader.close)
-        self.addCleanup(closer.cancel)
-        closer.start()
-        start = time.monotonic()
+        clock = fake_time(self, on_sleep=reader.close)  # the reader lets go at the first pause
         R.replace(self.src, self.dst)
-        self.assertGreaterEqual(time.monotonic() - start, 0.2)
+        self.assertEqual(clock.sleeps, [R.PAUSE])       # refused once for real, then through
         self.assertEqual(self.read(), 'new')
         self.assertFalse(os.path.exists(self.src))
 
     def test_a_refusal_that_outlasts_the_wait_is_raised(self):
+        clock = fake_time(self)
         calls = []
 
         def refuse(src, dst):
-            calls.append(time.monotonic())
+            calls.append(clock.t)
             raise PermissionError(13, 'Access is denied')
         with mock.patch.object(R.os, 'replace', side_effect=refuse):
-            start = time.monotonic()
             with self.assertRaises(PermissionError):
-                R.replace(self.src, self.dst, wait=0.2, pause=0.02)
-        self.assertGreaterEqual(calls[-1] - start, 0.2)
-        self.assertLess(time.monotonic() - start, 5.0)
-        self.assertGreater(len(calls), 2)
+                R.replace(self.src, self.dst, wait=WAIT, pause=PAUSE)
+        self.assertEqual(calls, [0.0, 0.0625, 0.125, 0.1875, 0.25])
+        self.assertEqual(clock.sleeps, [PAUSE] * 4)
         self.assertEqual(self.read(), 'old')
 
     def test_any_other_error_is_raised_at_once(self):
@@ -64,13 +86,14 @@ class ReplaceTest(unittest.TestCase):
                 R.replace(self.src, self.dst, wait=5.0)
         self.assertEqual(len(calls), 1)
 
-    def test_the_default_bound_is_wait(self):
-        with mock.patch.object(R.os, 'replace', side_effect=PermissionError(13, 'denied')), \
-                mock.patch.object(R, 'WAIT', 0.1):
-            start = time.monotonic()
+    def test_the_default_bound_is_wait_and_the_default_pause_is_pause(self):
+        clock = fake_time(self)
+        with mock.patch.object(R.os, 'replace', side_effect=PermissionError(13, 'denied')) as m, \
+                mock.patch.object(R, 'WAIT', WAIT), mock.patch.object(R, 'PAUSE', PAUSE):
             with self.assertRaises(PermissionError):
                 R.replace(self.src, self.dst)
-        self.assertLess(time.monotonic() - start, 5.0)
+        self.assertEqual(m.call_count, 5)
+        self.assertEqual(clock.sleeps, [PAUSE] * 4)
 
 
 class RemoveTest(unittest.TestCase):
@@ -84,20 +107,25 @@ class RemoveTest(unittest.TestCase):
     def test_a_reader_holding_the_file_open_is_waited_out(self):
         reader = open(self.dst, 'rb')
         self.addCleanup(reader.close)
-        closer = threading.Timer(0.3, reader.close)
-        self.addCleanup(closer.cancel)
-        closer.start()
+        with self.assertRaises(PermissionError):
+            os.remove(self.dst)                         # the condition the retry is for
+        clock = fake_time(self, on_sleep=reader.close)  # the reader lets go at the first pause
         R.remove(self.dst)
+        self.assertEqual(clock.sleeps, [R.PAUSE])
         self.assertFalse(os.path.exists(self.dst))
 
     def test_a_file_already_gone_is_success(self):
-        R.remove(os.path.join(self.dir, 'nothing'), wait=0.1)
+        clock = fake_time(self)
+        R.remove(os.path.join(self.dir, 'nothing'), wait=WAIT)
+        self.assertEqual(clock.sleeps, [])
 
     def test_a_refusal_that_outlasts_the_wait_is_raised(self):
+        clock = fake_time(self)
         with mock.patch.object(R.os, 'remove', side_effect=PermissionError(13, 'denied')) as m:
             with self.assertRaises(PermissionError):
-                R.remove(self.dst, wait=0.1, pause=0.02)
-        self.assertGreater(m.call_count, 2)
+                R.remove(self.dst, wait=WAIT, pause=PAUSE)
+        self.assertEqual(m.call_count, 5)
+        self.assertEqual(clock.sleeps, [PAUSE] * 4)
 
     def test_any_other_error_is_raised_at_once(self):
         with mock.patch.object(R.os, 'remove', side_effect=OSError(5, 'io')) as m:

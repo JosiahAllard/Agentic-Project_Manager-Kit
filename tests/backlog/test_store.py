@@ -4,13 +4,13 @@ import hashlib
 import os
 import shutil
 import tempfile
-import time
 import unittest
 from unittest import mock
 
 from kitlib.backlog import plan as pmod
 from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
+from kitlib.fs import replace as fsreplace
 from kitlib.backlog.errors import Failure, Usage
 from kitlib.git import cmd
 
@@ -946,12 +946,35 @@ def refused(real, times):
     return fake, calls
 
 
+class FakeTime:
+    """Stands in for kitlib.fs.replace's `time`: monotonic() reads `t` and sleep(s) adds s to it,
+    so the retry loop runs on counted pauses, never on the machine's speed."""
+
+    def __init__(self):
+        self.t, self.sleeps = 0.0, []
+
+    def monotonic(self):
+        return self.t
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.t += seconds
+
+
 class ReplaceRetry(unittest.TestCase):
     """_replace_file, _IndexLock.install and _IndexLock.release keep their retry on the shared
-    kitlib.fs.replace loop: a sharing refusal (PermissionError) is retried every 0.05 s for
-    REPLACE_WAIT seconds, any other OSError is not, and what is given at the end is unchanged."""
+    kitlib.fs.replace loop: a sharing refusal (PermissionError) is retried every PAUSE for
+    REPLACE_WAIT seconds, any other OSError is not, and what is given at the end is unchanged.
+    The loop runs on a fake clock: REPLACE_WAIT 0.25 and a 0.0625 pause (exact in binary) give
+    tries at 0, 1/16, 1/8, 3/16 and 1/4 s, so a refusal that never ends is tried exactly 5 times."""
 
     def setUp(self):
+        self.clock = FakeTime()
+        for patcher in (mock.patch.object(fsreplace, 'time', self.clock),
+                        mock.patch.object(fsreplace, 'PAUSE', 0.0625),
+                        mock.patch.object(smod, 'REPLACE_WAIT', 0.25)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.dir = tempfile.mkdtemp(prefix='kit-backlog-')
         self.addCleanup(shutil.rmtree, self.dir, True)
         self.full = os.path.join(self.dir, 'FOO.md')
@@ -977,17 +1000,16 @@ class ReplaceRetry(unittest.TestCase):
         with mock.patch('os.replace', side_effect=fake):
             smod._replace_file(self.full, b'new\n')
         self.assertEqual(len(calls), 4)
+        self.assertEqual(self.clock.sleeps, [0.0625] * 3)
         self.assertEqual(self.content(self.full), b'new\n')
         self.assertEqual(sorted(os.listdir(self.dir)), ['FOO.md', 'index'])
 
     def test_replace_file_raises_the_refusal_after_REPLACE_WAIT_and_leaves_the_record(self):
-        with mock.patch.object(smod, 'REPLACE_WAIT', 0.2), \
-                mock.patch('os.replace', side_effect=PermissionError(13, 'sharing')) as m:
-            start = time.monotonic()
+        with mock.patch('os.replace', side_effect=PermissionError(13, 'sharing')) as m:
             with self.assertRaises(PermissionError) as got:
                 smod._replace_file(self.full, b'new\n')
-        self.assertGreaterEqual(time.monotonic() - start, 0.2)
-        self.assertGreater(m.call_count, 2)
+        self.assertEqual(m.call_count, 5)
+        self.assertEqual(self.clock.sleeps, [0.0625] * 4)
         self.assertEqual(got.exception.errno, 13)
         self.assertEqual(self.content(self.full), b'old\n')
         self.assertEqual(sorted(os.listdir(self.dir)), ['FOO.md', 'index'])
@@ -1006,18 +1028,17 @@ class ReplaceRetry(unittest.TestCase):
         with mock.patch('os.replace', side_effect=fake):
             self.assertEqual(lock.install(), '')
         self.assertEqual(len(calls), 4)
+        self.assertEqual(self.clock.sleeps, [0.0625] * 3)
         self.assertFalse(lock.held)
         self.assertEqual(self.content(self.index), b'new index')
         self.assertFalse(os.path.exists(lock.path))
 
     def test_install_names_the_refusal_after_REPLACE_WAIT_and_keeps_the_lock(self):
         lock = self.held_lock()
-        with mock.patch.object(smod, 'REPLACE_WAIT', 0.2), \
-                mock.patch('os.replace', side_effect=PermissionError(13, 'sharing')) as m:
-            start = time.monotonic()
+        with mock.patch('os.replace', side_effect=PermissionError(13, 'sharing')) as m:
             why = lock.install()
-        self.assertGreaterEqual(time.monotonic() - start, 0.2)
-        self.assertGreater(m.call_count, 2)
+        self.assertEqual(m.call_count, 5)
+        self.assertEqual(self.clock.sleeps, [0.0625] * 4)
         self.assertTrue(why.startswith('cannot move %s over the index: ' % lock.path), why)
         self.assertIn('sharing', why)
         self.assertTrue(lock.held)
@@ -1037,17 +1058,16 @@ class ReplaceRetry(unittest.TestCase):
         with mock.patch('os.remove', side_effect=fake):
             self.assertEqual(lock.release(), '')
         self.assertEqual(len(calls), 4)
+        self.assertEqual(self.clock.sleeps, [0.0625] * 3)
         self.assertFalse(lock.held)
         self.assertFalse(os.path.exists(lock.path))
 
     def test_release_names_the_refusal_after_REPLACE_WAIT_and_keeps_the_lock(self):
         lock = self.held_lock()
-        with mock.patch.object(smod, 'REPLACE_WAIT', 0.2), \
-                mock.patch('os.remove', side_effect=PermissionError(13, 'sharing')) as m:
-            start = time.monotonic()
+        with mock.patch('os.remove', side_effect=PermissionError(13, 'sharing')) as m:
             why = lock.release()
-        self.assertGreaterEqual(time.monotonic() - start, 0.2)
-        self.assertGreater(m.call_count, 2)
+        self.assertEqual(m.call_count, 5)
+        self.assertEqual(self.clock.sleeps, [0.0625] * 4)
         self.assertTrue(why.startswith("git's index lock %s could not be removed (" % lock.path),
                         why)
         self.assertTrue(lock.held)
