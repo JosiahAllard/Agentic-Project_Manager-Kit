@@ -177,14 +177,14 @@ class Filing(GateTimeCase):
         self.assertIn('gate time NOT CHECKED: no full gate record in the last 14 days',
                       res['notes'])
 
-    def test_git_copies_are_samples_and_a_commit_in_both_folders_counts_once_as_the_new_one(self):
+    def test_git_copies_are_samples_only_with_no_dev_drive(self):
         kit_json_ref(self.repo, FILING)
         old = gate_ok.legacy_dir(self.root)
-        self.gates(6, 1000, folder=old)                 # only in .git: an older kit's records
-        res = self.lint()
-        self.assertEqual(self.checks(res), [('gate-time', 'kit-suite')], res['notes'])
+        self.gates(6, 1000, folder=old)                 # only in .git
         self.gates(6, 100, first=1)                     # the same six commits, in the new folder
         self.assertEqual(gatetime.samples(self.root, NOW), ({'kit-suite': [100.0] * 6}, None))
+        with mock.patch('kitlib.config.user.dev_drive', return_value=None):
+            self.assertEqual(gatetime.samples(self.root, NOW), ({'kit-suite': [1000.0] * 6}, None))
 
     def test_no_gate_records_is_a_note_and_no_finding(self):
         kit_json_ref(self.repo, FILING)

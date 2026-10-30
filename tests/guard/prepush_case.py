@@ -45,7 +45,8 @@ class PrePushCase(unittest.TestCase):
     def passed(self, rev, gate_config=None, config_rev='same', git_copy_only=False):
         """A gate-OK record for `rev` as gate.py writes it: the gate config `rev` holds and
         config_rev `rev`. `gate_config` / `config_rev` given: a record made otherwise.
-        `git_copy_only`: only its .git copy (gate_ok.legacy_path), as an older kit writes it."""
+        `git_copy_only`: only its .git copy (gate_ok.legacy_path), as a gate with no dev_drive
+        writes it."""
         if gate_config is None:
             gate_config = runner.gate_config_at(self.repo.root, rev)
         rec = gate_ok.build(self.repo.root, rev, gate_config, KIT, 'kit-test',

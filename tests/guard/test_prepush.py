@@ -94,17 +94,16 @@ class HookTest(pc.PrePushCase):
         rec, why = ctx.gate_ok(self.repo.root, self.with_kit)
         self.assertEqual((rec['commit'], rec['config_rev'], why), (self.with_kit, self.with_kit, None))
 
-    def test_a_record_only_in_git_is_pushed(self):
-        # Until the legacy read is retired: a landing by an older kit writes only the .git copy,
-        # and every reader takes it.
+    def test_with_a_dev_drive_a_record_only_in_git_is_refused(self):
         self.assertEqual(self.push('origin', 'main')[0], 0)
+        before = self.remote_main()
         self.repo.write('a.txt', 'a\n')
         head = self.repo.commit('a', 'a.txt')
         self.passed(head, git_copy_only=True)
-        self.assertEqual(runner.verify_record(self.repo.root, head)[0]['commit'], head)
+        self.assertIsNone(runner.verify_record(self.repo.root, head)[0])
         code, err = self.push('origin', 'main')
-        self.assertEqual(code, 0, err)
-        self.assertEqual(self.remote_main(), head)
+        self.assertNotEqual(code, 0, err)
+        self.assertEqual(self.remote_main(), before)
 
     def test_refspec_to_main_is_checked_and_a_branch_is_not(self):
         self.assertEqual(self.push('origin', 'main')[0], 0)
@@ -351,21 +350,23 @@ class CheckTest(pc.PrePushCase):
         self.base({'repo': {'push_block': False}}, push=False)
         self.assertEqual(self.check(), (True, None))
 
-    def test_pre_push_and_the_guard_rules_reader_both_take_a_git_copy(self):
+    def test_pre_push_and_the_guard_rules_reader_take_a_git_copy_only_with_no_dev_drive(self):
         # ctx.gate_ok is what the guard's git-push-main rule reads (kitlib.guard.rules).
         self.repo.git('push', '-q', 'origin', 'main')
         old = self.with_kit
-        self.passed(old, git_copy_only=True)            # an older kit's record
+        self.passed(old, git_copy_only=True)
         ctx = context.Ctx(environ={}, home=self.repo.root)
-        rec, why = ctx.gate_ok(self.repo.root, old)
-        self.assertEqual((rec and rec['commit'], why), (old, None))
         self.repo.write('a.txt', 'a' + chr(10))
         new = self.repo.commit('a', 'a.txt')
-        self.passed(new, git_copy_only=True)            # written now, by an older kit's landing
-        rec, why = ctx.gate_ok(self.repo.root, new)
-        self.assertEqual((rec and rec['commit'], why), (new, None))
+        self.passed(new, git_copy_only=True)
         line = 'refs/heads/main %s refs/heads/main %s' % (new, old)
-        self.assertEqual(prepush.check(self.repo.root, [line]), (True, None))
+        self.assertIsNone(ctx.gate_ok(self.repo.root, new)[0])          # a dev_drive: not read
+        self.assertFalse(prepush.check(self.repo.root, [line])[0])
+        with mock.patch('kitlib.config.user.dev_drive', return_value=None):   # a load node's case
+            for rev in (old, new):
+                rec, why = ctx.gate_ok(self.repo.root, rev)
+                self.assertEqual((rec and rec['commit'], why), (rev, None))
+            self.assertEqual(prepush.check(self.repo.root, [line]), (True, None))
 
     def test_a_record_reader_that_fails_refuses_a_push_to_main_only(self):
         self.base({'repo': {'push_block': True}})
