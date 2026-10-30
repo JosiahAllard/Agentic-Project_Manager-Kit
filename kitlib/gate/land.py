@@ -47,7 +47,10 @@
                  config file changes, or the change is docs-only under the base's
                  "gate".docs_only and its steps all passed, or the base sets
                  "landing".shared_paths and the change touches none of them, no strict path and
-                 no gate config file; docs/gate.md "Shared paths"), or by none when the tip's
+                 no gate config file; docs/gate.md "Shared paths", or the base sets
+                 "landing".gate_once and the change touches no strict path and no gate config
+                 file, and the merged gate then runs --full unless the merge is docs-only;
+                 docs/gate.md "Gate once at landing"), or by none when the tip's
                  latest red --full run has a FLAKE targeted rerun (kitlib.gate.rerun.verify_flake);
                  a tip a test failed on, that failed twice on its branch, never lands
                  (rerun.twice_refusal);
@@ -89,7 +92,9 @@
                  --fresh or --full; a batch reuses per step like one branch; one branch also
                  from its tip's --full record of this tree, reuse.same_tree). A merge that is docs-only under the base's config
                  (not --full) runs only the "gate".docs_only steps (docs/gate.md "Docs-only
-                 changes"). Red, or a gate where nothing ran: NOT LANDED, the
+                 changes"). A base that sets "landing".gate_once makes any other merge --full
+                 (Lander.once_escalate: each step's full_cmd, no reuse; docs/gate.md "Gate once
+                 at landing"). Red, or a gate where nothing ran: NOT LANDED, the
                  merge dropped (it is only in the landing tree; the landing never moves main),
                  the lock released: FAILED / REFUSED.
                  Routed to a node (2b): main gates it instead when the tip's --full record has
@@ -975,11 +980,16 @@ class Lander(object):
                   default-mode record lands without "gate".smoke_steps, and any record that is
                   not --full (docs or select, smoke steps or not) is refused when the landing diff
                   changes a shared path or a strict path (shared_refusal, checked before the
-                  docs route), beside the config check above."""
+                  docs route), beside the config check above;
+          once    when the base sets "landing".gate_once (docs/gate.md "Gate once at landing"),
+                  a default-mode record lands whatever "gate".smoke_steps and "landing".shared_paths
+                  say: only a strict path (strict_refusal, before the docs route) or a gate config
+                  file refuses it, as the merged gate runs --full (once_escalate)."""
         gate = self.cfg.section('gate')
         smoke = list(gate.get('smoke_steps') or [])
         shared = self.cfg.section('landing').get('shared_paths')
-        if not smoke and not S.docs_steps(gate) and shared is None:
+        once = self.gate_once()
+        if not once and not smoke and not S.docs_steps(gate) and shared is None:
             return ('the base %s sets no "gate".smoke_steps or "gate".docs_only, so only a --full '
                     'record lands' % self.expect_main[:10])
         mb, why = refs.merge_base(tip, self.expect_main, self.root)
@@ -1002,7 +1012,11 @@ class Lander(object):
                                           self.expect_main[:10]))
         passed = {s.get('name') for s in rec.get('steps') or []
                   if isinstance(s, dict) and s.get('result') in ('pass', 'warn', 'reused')}
-        if shared is not None:          # before the docs-only route: a docs record too
+        if once:                        # before the docs-only route: a docs record too
+            why = self.strict_refusal(changed, '"landing".gate_once')
+            if why:
+                return why
+        elif shared is not None:
             why = self.shared_refusal(shared, changed)
             if why:
                 return why
@@ -1014,17 +1028,23 @@ class Lander(object):
                 ', '.join(missing))
         if mode != 'select':
             return 'its gate ran only the docs-only steps, and the change is not docs-only under the base'
-        if not smoke and shared is None:
+        if not once and not smoke and shared is None:
             return ('the change is not docs-only, and the base %s sets no "gate".smoke_steps'
                     % self.expect_main[:10])
         hit = reuse.config_hits(self.cfg, changed)
         if hit:
             return 'the tip changes the gate\'s config (%s), which only a --full record lands' % (
                 ', '.join(hit[:5]))
-        missing = [n for n in smoke if n not in passed]
+        missing = [] if once else [n for n in smoke if n not in passed]
         if missing:
             return 'the base\'s smoke step %s did not pass in it' % ', '.join(missing)
         return None
+
+    def gate_once(self):
+        """True when the base's config sets "landing".gate_once true (docs/gate.md "Gate once at
+        landing"): select_refusal takes a default-mode record of any tip that changes no strict
+        path and no gate config file, and once_escalate makes the merged gate --full."""
+        return self.cfg.section('landing').get('gate_once') is True
 
     def shared_refusal(self, shared, changed):
         """Why a record that is not --full does not land a landing diff `changed` under the base's
@@ -1036,6 +1056,14 @@ class Lander(object):
         if hits:
             return ('the tip changes shared path %s ("landing".shared_paths), which only a --full '
                     'record lands' % ', '.join(hits[:5]))
+        return self.strict_refusal(changed, '"landing".shared_paths')
+
+    def strict_refusal(self, changed, setting):
+        """Why a record that is not --full does not land a landing diff `changed` under the base
+        setting `setting` that took it ("landing".shared_paths or "landing".gate_once), or None: a
+        changed strict path (strict_globs; a strict branch always ends on --full) refuses, and so
+        does a strict list that cannot be read."""
+        paths = reuse.changed_list(changed)
         globs, why = self.strict_globs()
         if globs is None:
             return 'cannot read the strict paths from %s at %s: %s' % (
@@ -1043,7 +1071,7 @@ class Lander(object):
         hits = [p for p in paths if S._match(p, globs)]
         if hits:
             return ('the tip changes strict path %s, which only a --full record lands under '
-                    '"landing".shared_paths' % ', '.join(hits[:5]))
+                    '%s' % (', '.join(hits[:5]), setting))
         return None
 
     def no_full_step(self):
@@ -1232,6 +1260,22 @@ class Lander(object):
         if strict:
             self.strict_review, self.strict_carry = entry, facts
         return None
+
+    def once_escalate(self):
+        """After the merge, before the merged gate: when the base sets "landing".gate_once
+        (docs/gate.md "Gate once at landing") and the merged gate is not --full already, it runs
+        --full (each step's full_cmd) on the merged or batched tree, said once; a merge whose diff
+        to the base is docs-only (reuse.docs_only_change) stays on the docs-only route. A diff git
+        cannot list escalates too."""
+        if self.full or not self.gate_once():
+            return
+        changed, _ = runner.changed_between(self.root, self.expect_main, self.merge)
+        if changed is not None and reuse.docs_only_change(self.cfg, self.cfg.section('gate'),
+                                                           changed):
+            return
+        self.full = True
+        self.say('GATE ONCE: the base %s sets "landing".gate_once: the merged gate runs --full on '
+                 'the merged tree' % self.expect_main[:10])
 
     def strict_escalate(self):
         """A strict branch passed strict_check: its merged gate runs --full --fresh, whatever the
@@ -2321,6 +2365,7 @@ class Lander(object):
             return failed
         self.say('merged %s at %s in the landing tree %s; gating the merged tree' % (
             self.branch, self.merge[:10], self.tree))
+        self.once_escalate()
         out = self.gate_out = self.gate()
         main_b, base = self.cfg.main_branch, self.expect_main
         if out.code == G.OK:
