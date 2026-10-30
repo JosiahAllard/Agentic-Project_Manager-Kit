@@ -257,14 +257,33 @@ class BootHook(unittest.TestCase):
         self.assertNotIn('rc-update', out)
         self.assertEqual(sorted(os.listdir(self.at('/etc'))), ['cron.d', 'pm-kit'])  # no crontab
 
+    def up(self, events='populated 1\nfrozen 0\n', procs=('400', '401', '402'), exes=None,
+           hold=True):
+        """The anchor as the box shows it to root: cgroup.events, cgroup.procs, and per pid its
+        binary and command line (400 the tmux server, 401 the HOLD window, 402 a shell)."""
+        a = delegation.ANCHOR_CG
+        files = {a + '/cgroup.events': events, a + '/cgroup.procs': '\n'.join(procs) + '\n'}
+        if events is None:
+            files = {}
+        hold_cmd = '\0'.join(['/usr/bin/python3'] + list(delegation.HOLD_ARGS)) + '\0'
+        files.update({'/proc/400/cmdline': 'tmux: server\0', '/proc/402/cmdline': '-bash\0',
+                      '/proc/401/cmdline': hold_cmd if hold else '/bin/sh\0'})
+        exes = {'400': '/usr/bin/tmux', '401': '/usr/bin/python3', '402': '/bin/bash'} \
+            if exes is None else exes
+        return dict(files=files, exes=exes)
+
     def test_a_second_run_has_nothing_to_do(self):
         self.run_mode(self.ctx())
         runs = len(self.host.runs)
         code, out = self.run_mode(self.ctx(OPENRC | {'/etc/runlevels/default/local',
-                                                     delegation.CGROUP}))
+                                                     delegation.CGROUP}, **self.up()))
         self.assertEqual(code, machinesetup.EXIT_OK, out)
         self.assertIn('delegation: nothing to do', out)
         self.assertEqual(len(self.host.runs), runs)
+        # a tmux upgraded under the running server still counts as it
+        code, out = self.run_mode(self.ctx(OPENRC | {'/etc/runlevels/default/local'}, **self.up(
+            exes={'400': '/usr/bin/tmux (deleted)', '401': '/usr/bin/python3'})))
+        self.assertIn('delegation: nothing to do', out)
 
     def test_the_hook_there_but_no_group_runs_the_script_again(self):
         self.run_mode(self.ctx())
@@ -272,6 +291,41 @@ class BootHook(unittest.TestCase):
         code, out = self.run_mode(self.ctx(OPENRC | {'/etc/runlevels/default/local'}))
         self.assertEqual(code, machinesetup.EXIT_OK, out)
         self.assertEqual(self.host.runs, [[self.at(delegation.SCRIPT)]])
+        self.assertIn('run %s again: the kit\'s cgroup /sys/fs/cgroup/pm-kit/anchor is not there'
+                      % delegation.SCRIPT, out)
+
+    def test_the_kit_s_server_or_its_anchor_session_gone_runs_the_script_again(self):
+        self.run_mode(self.ctx())
+        cases = ((dict(events='populated 0\nfrozen 0\n', procs=()), 'populated 0'),
+                 (dict(exes={'401': '/usr/bin/python3', '402': '/bin/bash'}),
+                  'no tmux server runs in /sys/fs/cgroup/pm-kit/anchor'),
+                 (dict(exes={'401': '/usr/bin/python3', '402': '/usr/bin/tmux-other'}),
+                  'no tmux server runs in'),
+                 (dict(hold=False), 'no pm-kit-anchor session holding it'),
+                 (dict(procs=('400', '402')), 'no pm-kit-anchor session holding it'))
+        for kw, want in cases:
+            with self.subTest(want=want, kw=kw):
+                self.host.runs = []
+                code, out = self.run_mode(self.ctx(OPENRC | {'/etc/runlevels/default/local',
+                                                             delegation.CGROUP}, **self.up(**kw)))
+                self.assertEqual(code, machinesetup.EXIT_OK, out)
+                self.assertEqual(self.host.runs, [[self.at(delegation.SCRIPT)]])
+                self.assertIn('run %s again: ' % delegation.SCRIPT, out)
+                self.assertIn(want, out)
+                self.assertNotIn('delegation: nothing to do', out)
+
+    def test_a_tmux_older_than_3_2_is_refused(self):
+        for said in ('tmux 3.1c', 'tmux 3.0a', 'tmux 2.9', 'tmux master', None):
+            with self.subTest(said=said):
+                out = self.refused(self.ctx(tmux_said=said))
+                self.assertIn('/usr/bin/tmux is ', out)
+                self.assertIn('the boot hook needs tmux 3.2 or later', out)
+                self.assertIn('new-session -e', out)
+        for said in ('tmux 3.2', 'tmux 3.3a', 'tmux next-3.5', 'tmux 10.0'):
+            with self.subTest(said=said):
+                self.host.runs = []
+                code, out = self.run_mode(self.ctx(tmux_said=said))
+                self.assertEqual(code, machinesetup.EXIT_OK, out)
 
     def test_a_dry_run_changes_nothing_and_as_the_kit_user_names_the_sudo_command(self):
         code, out = self.run_mode(self.ctx(), apply=False)
@@ -298,8 +352,8 @@ class BootHook(unittest.TestCase):
         self.assertIn('/bin/mkdir -p "$g/anchor"', text)
         self.assertIn('/sys/kernel/cgroup/delegate', text)
         self.assertIn('echo 0 >"$g/anchor/cgroup.procs"', text)
-        self.assertIn("exec /usr/bin/python3 -I -S -c '%s' 1000 1001 '/srv/kit' /usr/bin/tmux"
-                      % delegation.DROP, text)
+        self.assertIn("exec /usr/bin/python3 -I -S -c '%s' 1000 1001 '/srv/kit' /usr/bin/tmux "
+                      "/usr/bin/python3 </dev/null" % delegation.DROP, text)
         for c in ('cpuset', 'cpu', 'memory', 'pids'):
             self.assertIn('+$c', text)
             self.assertIn(c, text)
@@ -314,6 +368,34 @@ class BootHook(unittest.TestCase):
         self.assertLess(delegation.DROP.index('os.setuid(0)'), delegation.DROP.index('os.execve'))
         self.assertIn('"PATH":"/usr/bin:/bin"', delegation.DROP)
         self.assertIn('"new-session","-d","-s","pm-kit-anchor"', delegation.DROP)
+
+    def test_the_server_outlives_its_sessions_and_one_from_a_shell_is_never_used(self):
+        drop = delegation.DROP
+        compile(drop, 'DROP', 'exec')
+        self.assertNotIn('$', drop)
+        # the anchor session holds HOLD, not a shell, and the server outlives its last session
+        self.assertIn('"pm-kit-anchor",p,"-I","-S","-c","import signal\\n', drop)
+        self.assertIn('";","set-option","-s","exit-empty","off"', drop)
+        hold = delegation.HOLD
+        compile(hold, 'HOLD', 'exec')
+        self.assertNotIn('"', hold)
+        self.assertIn('signal.signal(signal.SIGINT,signal.SIG_IGN)', hold)
+        self.assertEqual(delegation.HOLD_ARGS, ('-I', '-S', '-c', hold))
+        # a server already on the kit's socket but outside the anchor is refused, not reused
+        self.assertIn('k.connect("/tmp/tmux-%d/pm-kit"%u)', drop)
+        self.assertIn('"/sys/fs/cgroup/pm-kit/anchor/cgroup.procs"', drop)
+        self.assertIn('if up and not inside():\n    sys.exit(', drop)
+        self.assertIn('tmux -L pm-kit kill-server', drop)
+        self.assertLess(drop.index('if up and not inside()'), drop.index('"has-session"'))
+        self.assertLess(drop.index('"has-session"'), drop.index('os.execve'))
+        # the way in never starts a server (attach) and never works in HOLD's window
+        self.assertEqual(delegation.ATTACH, 'tmux -L pm-kit attach -t pm-kit-anchor \\; new-window')
+
+    def test_the_notes_name_the_way_back_when_the_server_has_ended(self):
+        code, out = self.run_mode(self.ctx())
+        self.assertIn(delegation.ATTACH, out)
+        self.assertIn('if it is ended (kill-server), run this step again with sudo, or reboot', out)
+        self.assertIn('a `tmux -L pm-kit` started from a shell is not contained', out)
 
     def test_a_bad_id_or_home_is_refused(self):
         for acct, want in (((1000, "/srv/o'neil"), 'home'), ((1000, 'srv/kit'), 'home'),

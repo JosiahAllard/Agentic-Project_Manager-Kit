@@ -30,6 +30,7 @@ class Box(object):
         self.tools = {'git': '/usr/bin/git', 'tmux': '/usr/bin/tmux'}
         self.tier_name, self.all_users, self.tier_error = 'S2', [], None
         self.init_name, self.paths, self.cg2, self.accounts = 'init', set(), True, {}
+        self.files, self.exes, self.tmux_said = {}, {}, 'tmux 3.4'
         for k, v in kw.items():
             setattr(self, k, v)
         self.probed = 0
@@ -78,6 +79,15 @@ class Box(object):
 
     def account(self, uid):
         return self.accounts.get(uid, (uid, '/srv/%s' % self.name(uid)))
+
+    def read(self, path):
+        return self.files.get(path)
+
+    def exe(self, pid):
+        return self.exes.get(pid)
+
+    def tmux_version(self, path):
+        return self.tmux_said
 
 
 def survey(box):

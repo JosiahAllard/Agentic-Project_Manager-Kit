@@ -14,12 +14,16 @@ and s6 are refused), the boot hook:
 - SCRIPT (0755), a fixed sh script with the kit user's uid, gid and home written in
   (boot_script): it makes the cgroup /pm-kit with the leaf /pm-kit/anchor, turns the controllers
   on, gives the two folders and their delegatable files to the kit user, moves itself into the
-  anchor and, dropped to the kit user, starts the kit's tmux server (`tmux -L pm-kit`) there. Work
-  started from that server is contained (kitlib.platform.linux.contain.delegated_group).
+  anchor and, dropped to the kit user, starts the kit's tmux server (`tmux -L pm-kit`) there, its
+  pm-kit-anchor session holding HOLD (no shell to `exit`) and the server outliving its last
+  session. Work started from that server is contained (kitlib.platform.linux.contain.
+  delegated_group); ATTACH is the way in.
 - LOCALD (OpenRC, 0755; `rc-update add local default` when local is in no runlevel) or CROND
   (0644), which runs SCRIPT at boot; root's own crontab is never touched.
-- one run of SCRIPT now, so no reboot is needed.
-Every binary it runs and every path it writes must be root's alone, through no link.
+- one run of SCRIPT now, so no reboot is needed; and again on a later run when the server or its
+  anchor session has gone (anchor_down), the only way back short of a reboot.
+Every binary it runs and every path it writes must be root's alone, through no link; tmux must be
+3.2 or later (the launcher's new-session -e).
 
 Both routes write linuxbox.MARKER, the box's one kit user (`<uid> <name>`): the user who ran sudo.
 With it, the default mode refuses any other user (plan question 10).
@@ -58,7 +62,11 @@ CROND_DIR = '/etc/cron.d'
 RUNLEVELS = ('sysinit', 'boot', 'default')
 REFUSED_INITS = ('runit', 'runsvdir', 's6-svscan')
 ROUTES = {'openrc': 'OpenRC local.d', 'cron': 'cron @reboot'}
-ATTACH = 'tmux -L pm-kit attach'
+# the way into the kit's tmux server that never starts one (attach needs a running server) and
+# never works in the pm-kit-anchor session's own window (a new window beside HOLD)
+ATTACH = 'tmux -L pm-kit attach -t pm-kit-anchor \\; new-window'
+ANCHOR_CG = CGROUP + '/anchor'
+TMUX_E = (3, 2)            # the launcher's windows there pass their variables with new-session -e
 UNDO_HOOK = 'sudo rm -f %s %s %s' % (LOCALD, CROND, SCRIPT)
 UNDO_LOCAL = 'sudo rc-update del local default'
 LOCALD_TEXT = ('#!/bin/sh\n'
@@ -74,11 +82,23 @@ SCRIPT_VARS = ('cg', 'g', 'c', 'f', 'd', 'files')
 RUN_PATH = '/usr/sbin:/usr/bin:/sbin:/bin'
 _PLAIN = re.compile(r'/[A-Za-z0-9_.+@/-]*\Z')
 
+# The pm-kit-anchor session's one window: a python3 that waits for ever, deaf to Ctrl-C, so the
+# session holds the server and holds no shell for an `exit` to end; root sees it in /proc
+# (anchor_down). The user works in windows and sessions of their own beside it (ATTACH).
+HOLD = ('import signal\n'
+        'signal.signal(signal.SIGINT,signal.SIG_IGN)\n'
+        'while True:\n'
+        '    signal.pause()\n')
+HOLD_ARGS = ('-I', '-S', '-c', HOLD)
+
 # The drop to the kit user and the tmux server's start (python -I -S -c, inside the script's
-# single quotes, so it holds no quote of that kind and no $): argv uid, gid, home, tmux. Each id
-# is read back and root seen gone before tmux runs, with HOME and PATH alone.
-DROP = ('import os,subprocess,sys\n'
-        'u,g,h,t=int(sys.argv[1]),int(sys.argv[2]),sys.argv[3],sys.argv[4]\n'
+# single quotes, so it holds no quote of that kind and no $): argv uid, gid, home, tmux, python3.
+# Each id is read back and root seen gone before tmux runs, with HOME and PATH alone. A server
+# already answering on the kit's socket is used only when it runs in the anchor (else refused:
+# one started from another shell is not contained); its pm-kit-anchor session is made when
+# missing, holding HOLD, and the server is told to outlive its last session (exit-empty off).
+DROP = ('import os,socket,subprocess,sys\n'
+        'u,g,h,t,p=int(sys.argv[1]),int(sys.argv[2]),sys.argv[3],sys.argv[4],sys.argv[5]\n'
         'os.setgroups([])\n'
         'os.setresgid(g,g,g)\n'
         'os.setresuid(u,u,u)\n'
@@ -96,10 +116,36 @@ DROP = ('import os,subprocess,sys\n'
         '    os.chdir("/")\n'
         'e={"HOME":h,"PATH":"/usr/bin:/bin"}\n'
         'a=[t,"-L","pm-kit"]\n'
-        'if subprocess.run(a+["has-session","-t","pm-kit-anchor"],env=e,stdin=subprocess.DEVNULL,'
-        'stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0:\n'
+        'k=socket.socket(socket.AF_UNIX)\n'
+        'try:\n'
+        '    k.connect("/tmp/tmux-%d/pm-kit"%u)\n'
+        '    up=True\n'
+        'except OSError:\n'
+        '    up=False\n'
+        'k.close()\n'
+        'def inside():\n'
+        '    try:\n'
+        '        ps=open("/sys/fs/cgroup/pm-kit/anchor/cgroup.procs").read().split()\n'
+        '    except OSError:\n'
+        '        return False\n'
+        '    for q in ps:\n'
+        '        try:\n'
+        '            x=os.readlink("/proc/"+q+"/exe")\n'
+        '        except OSError:\n'
+        '            continue\n'
+        '        if x.split(" (deleted)")[0]==os.path.realpath(t):\n'
+        '            return True\n'
+        '    return False\n'
+        'if up and not inside():\n'
+        '    sys.exit("pm-kit: a tmux -L pm-kit server runs outside the kit cgroup, so it is not"\n'
+        '             " contained: end it (tmux -L pm-kit kill-server), then run this again")\n'
+        'if up and subprocess.run(a+["has-session","-t","pm-kit-anchor"],env=e,'
+        'stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL'
+        ').returncode==0:\n'
         '    sys.exit(0)\n'
-        'os.execve(t,a+["new-session","-d","-s","pm-kit-anchor"],e)\n')
+        'os.execve(t,a+["new-session","-d","-s","pm-kit-anchor",p,'
+        + ','.join('"%s"' % x.replace('\n', '\\n') for x in HOLD_ARGS) +
+        ',";","set-option","-s","exit-empty","off"],e)\n')
 
 # SCRIPT's text (boot_script fills it). The header holds no $: every $ below is the script's own.
 BOOT = r'''#!/bin/sh
@@ -130,7 +176,7 @@ for d in "$g" "$g/anchor"; do
   done
 done
 ( echo 0 >"$g/anchor/cgroup.procs" || exit 1
-  exec {python} -I -S -c '{drop}' {uid} {gid} '{home}' {tmux} </dev/null )
+  exec {python} -I -S -c '{drop}' {uid} {gid} '{home}' {tmux} {python} </dev/null )
 '''
 
 
@@ -403,6 +449,10 @@ def _hook_checks(plan, ctx, route, user):
         if why:
             plan.refuse(why)
             return None
+    why = _old_tmux(box.tmux_version(bins['tmux']), bins['tmux'])
+    if why:
+        plan.refuse(why)
+        return None
     try:
         text = boot_script(user[0], acct[0], acct[1], bins)
     except ValueError as e:
@@ -419,7 +469,49 @@ def _hook_checks(plan, ctx, route, user):
             plan.refuse('%s %s: the boot hook writes only where root alone can, and through no link'
                         % (p, why))
             return None
-    return {'text': text, 'entry': entry, 'rc': rc}
+    return {'text': text, 'entry': entry, 'rc': rc, 'bins': bins}
+
+
+def _old_tmux(said, path):
+    """Why the tmux at `path` (`said`: its `tmux -V`, None when it gave none) is too old for the
+    boot hook, or None: the launcher's windows in the kit's server pass their variables with
+    new-session -e, which tmux 3.2 added."""
+    from kitlib.launcher import linuxwin
+    have = linuxwin.tmux_version(said)
+    if have is not None and have >= TMUX_E:
+        return None
+    return ('%s is %s: the boot hook needs tmux %d.%d or later (the launcher opens its windows in '
+            'the kit\'s tmux server with new-session -e, which 3.2 added); install a newer tmux, or '
+            'decline this step and stay at the lower tier'
+            % (path, (said or '').strip() or 'of a version `tmux -V` does not name',
+               TMUX_E[0], TMUX_E[1]))
+
+
+def anchor_down(box, host, bins):
+    """Why the boot script must run again for the kit's tmux server, or None when it runs in the
+    anchor with its pm-kit-anchor session: the anchor gone or empty (cgroup.events populated 0),
+    no tmux server in it, or no HOLD process (that session's window) in it. Read by root from
+    /sys and /proc; the script starts only what is missing."""
+    events = box.read(ANCHOR_CG + '/cgroup.events')
+    if events is None:
+        return 'the kit\'s cgroup %s is not there' % ANCHOR_CG
+    if 'populated 1' not in events.splitlines():
+        return '%s is empty (cgroup.events: populated 0): the kit\'s tmux server has ended' % ANCHOR_CG
+    tmux = {bins['tmux'], host.realpath(bins['tmux'])}
+    hold = [bins['python3']] + list(HOLD_ARGS)
+    server = held = False
+    for pid in (box.read(ANCHOR_CG + '/cgroup.procs') or '').split():
+        exe = box.exe(pid)
+        if exe is not None and exe.split(' (deleted)')[0] in tmux:
+            server = True
+        cmd = box.read('/proc/%s/cmdline' % pid)
+        if cmd is not None and cmd.split('\0')[:-1] == hold:
+            held = True
+    if not server:
+        return 'no tmux server runs in %s: the kit\'s tmux server has ended' % ANCHOR_CG
+    if not held:
+        return 'the kit\'s tmux server has no pm-kit-anchor session holding it'
+    return None
 
 
 def _hook_changes(plan, ctx, route, hook):
@@ -453,12 +545,20 @@ def _hook_changes(plan, ctx, route, hook):
         argv = [hook['rc'], 'add', 'local', 'default']
         plan.add(SECTION, 'rc-update add local default: OpenRC runs /etc/local.d at boot',
                  lambda: host.run(argv), undo=UNDO_LOCAL)
-    if wrote or hook['rc'] or not ctx.box.exists(CGROUP):
+    if wrote or hook['rc']:
         plan.add(SECTION, 'run %s once now: the cgroup and the kit\'s tmux server, so no reboot is '
                           'needed' % SCRIPT, lambda: host.run([script]))
+    else:
+        down = anchor_down(ctx.box, host, hook['bins'])
+        if down:
+            plan.add(SECTION, 'run %s again: %s; it starts only what is missing, so no reboot is '
+                              'needed' % (SCRIPT, down), lambda: host.run([script]))
     plan.note(SECTION, 'containment is strong for work started from the kit\'s tmux server (%s; the '
                        'launcher opens its windows there); work started from any other shell stays at '
                        'the lower tier, and says why' % ATTACH)
+    plan.note(SECTION, 'the kit\'s tmux server outlives its sessions; if it is ended (kill-server), '
+                       'run this step again with sudo, or reboot: a `tmux -L pm-kit` started from a '
+                       'shell is not contained, and this step refuses to use one')
     if route == 'cron':
         plan.note(SECTION, 'the cron daemon must start at boot for the @reboot line to run')
     plan.note(SECTION, 'undo: %s%s; the cgroup goes at the next reboot'

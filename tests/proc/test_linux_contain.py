@@ -269,13 +269,42 @@ class Delegated(unittest.TestCase):
         self.assertIn('/etc/local.d/pm-kit-cgroup.start', why)
         self.assertIn('/etc/cron.d/pm-kit', why)
 
+    def events(self, text):
+        with open(os.path.join(self.group, 'anchor', 'cgroup.events'), 'w') as f:
+            f.write(text)
+
     def test_a_process_outside_the_group_is_told_to_start_from_the_kit_s_tmux_server(self):
+        self.events('populated 1\nfrozen 0\n')
         for own in ('/', '/user.slice', '/pm-kit', '/pm-kitx/anchor'):
             with self.subTest(own=own):
                 base, why = self.group_of(own)
                 self.assertIsNone(base)
-                self.assertIn('start work from the kit\'s tmux server (tmux -L pm-kit)', why)
+                self.assertIn('start work from the kit\'s tmux server: tmux -L pm-kit attach -t '
+                              'pm-kit-anchor \\; new-window', why)
                 self.assertIn(own, why)
+
+    def test_outside_the_group_with_the_anchor_empty_names_the_root_step_or_a_reboot(self):
+        for state in ('populated 0\nfrozen 0\n', None):
+            with self.subTest(state=state):
+                if state is None:
+                    os.remove(os.path.join(self.group, 'anchor', 'cgroup.events'))
+                else:
+                    self.events(state)
+                base, why = self.group_of('/user.slice')
+                self.assertIsNone(base)
+                self.assertIn('the kit\'s tmux server has ended (/pm-kit/anchor is empty)', why)
+                self.assertIn('run sudo python3 ', why)
+                self.assertIn('machine_setup.py --delegation --apply again, or reboot', why)
+                # never the advice to start the server by hand: that one would not be contained
+                self.assertNotIn('tmux -L pm-kit', why)
+                self.assertNotIn('start work from', why)
+
+    def test_the_way_in_never_starts_a_server_nor_works_in_the_anchor_s_own_window(self):
+        from kitlib.machinesetup import delegation
+        self.assertEqual(self.c.ATTACH, delegation.ATTACH)
+        self.assertTrue(self.c.ATTACH.startswith('tmux -L pm-kit attach -t pm-kit-anchor '))
+        self.assertTrue(self.c.ATTACH.endswith(' \\; new-window'))
+        self.assertNotIn('new-session', self.c.ATTACH)
 
     def test_a_group_that_is_not_this_user_s_is_refused(self):
         with mock.patch.object(self.c.os, 'getuid', create=True,
@@ -512,15 +541,18 @@ class Delegated(unittest.TestCase):
 
 class KitTmux(unittest.TestCase):
     """kitlib.launcher.linuxwin: a window opens in the kit's tmux server (tmux -L pm-kit) when
-    that server runs in the boot hook's group, else as before."""
+    that server runs in the boot hook's group and is tmux 3.2 or later (new-session -e), else in
+    the default server, the reason said; and when the kit's server refuses the window, in the
+    default server too."""
 
     def setUp(self):
         self.w = importlib.import_module('kitlib.launcher.linuxwin')
         folder = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, folder, True)
         self.sock = os.path.join(folder, 'pm-kit')
+        self.addCleanup(self.w._opened.clear)
 
-    def anchored(self, cg='/pm-kit/anchor', out='4242\n', code=0, sock=True):
+    def anchored(self, cg='/pm-kit/anchor', out='4242 3.4\n', code=0, sock=True, said='tmux 3.4\n'):
         if sock:
             open(self.sock, 'w').close()
         elif os.path.exists(self.sock):
@@ -529,24 +561,47 @@ class KitTmux(unittest.TestCase):
 
         def run(argv, **kw):
             calls.append(argv)
+            if argv[1:] == ['-V']:
+                return types.SimpleNamespace(returncode=0, stdout=said, stderr='')
             return types.SimpleNamespace(returncode=code, stdout=out, stderr='')
 
         with mock.patch.object(self.w, 'anchor_socket', return_value=self.sock), \
                 mock.patch.object(contain(), 'cgroup_of', return_value=cg) as of:
-            got = self.w.anchored(run)
+            got = self.w.anchor_check(run)
         return got, calls, of
 
     def test_the_kit_s_server_counts_only_when_it_runs_in_the_group(self):
         got, calls, of = self.anchored()
-        self.assertTrue(got)
-        self.assertEqual(calls, [['tmux', '-L', 'pm-kit', 'display-message', '-p', '#{pid}']])
+        self.assertEqual(got, (True, None))
+        self.assertEqual(calls, [['tmux', '-L', 'pm-kit', 'display-message', '-p',
+                                  '#{pid} #{version}']])
         of.assert_called_once_with(4242)
         for kw in (dict(cg='/user.slice/x.scope'), dict(cg='/pm-kit'), dict(cg=None),
                    dict(code=1), dict(out='no server\n')):
             with self.subTest(**kw):
-                self.assertFalse(self.anchored(**kw)[0])
+                self.assertEqual(self.anchored(**kw)[0], (False, None))
         got, calls, _ = self.anchored(sock=False)
-        self.assertEqual((got, calls), (False, []))
+        self.assertEqual((got, calls), ((False, None), []))
+
+    def test_a_kit_s_server_older_than_3_2_is_not_used_and_says_why(self):
+        for out in ('4242 3.1c\n', '4242 3.0a\n', '4242 2.9\n'):
+            with self.subTest(out=out):
+                (ok, why), _, _ = self.anchored(out=out)
+                self.assertFalse(ok)
+                self.assertIn('needs tmux 3.2 or later (new-session -e)', why)
+                self.assertIn('tmux %s' % out.split()[1][:3], why)
+        for out in ('4242 3.2\n', '4242 next-3.5\n', '4242 3.3a\n'):
+            with self.subTest(out=out):
+                self.assertEqual(self.anchored(out=out)[0], (True, None))
+        # a server that names no version: the binary is asked
+        got, calls, _ = self.anchored(out='4242\n', said='tmux 3.1c\n')
+        self.assertFalse(got[0])
+        self.assertEqual(calls[-1], ['tmux', '-V'])
+        self.assertEqual(self.anchored(out='4242 \n', said='tmux 3.4\n')[0], (True, None))
+        self.assertFalse(self.anchored(out='4242\n', said='')[0][0])
+        self.assertEqual([self.w.tmux_version(t) for t in ('tmux 3.1c', 'tmux next-3.4', 'master',
+                                                            None)],
+                         [(3, 1), (3, 4), None, None])
 
     def test_an_anchored_window_opens_in_the_kit_s_server_with_the_caller_s_path(self):
         w = self.w
@@ -556,20 +611,71 @@ class KitTmux(unittest.TestCase):
             calls.append(argv)
             return types.SimpleNamespace(returncode=0, stdout='', stderr='')
 
-        with mock.patch.object(w, 'anchored', return_value=True), \
+        with mock.patch.object(w, 'anchor_check', return_value=(True, None)), \
                 mock.patch.dict(os.environ, {'PATH': '/srv/kit/.local/bin:/usr/bin',
                                              'LANG': 'C.UTF-8'}):
             w.open_window('echo hi', 'pm-a1', run=run)
             said = w.opened_in('pm-a1')
         argv = calls[0]
+        self.assertEqual(len(calls), 1)
         self.assertEqual(argv[:5], ['tmux', '-L', 'pm-kit', 'new-session', '-d'])
         self.assertIn('PATH=/srv/kit/.local/bin:/usr/bin', argv)
         self.assertEqual(argv[argv.index('PATH=/srv/kit/.local/bin:/usr/bin') - 1], '-e')
         self.assertEqual(argv[argv.index('-s') + 1:], ['pm-a1', '/bin/bash', '-c', 'echo hi'])
         self.assertIn('tmux -L pm-kit attach -t', said)
-        with mock.patch.object(w, 'anchored', return_value=False):
+        with mock.patch.object(w, 'anchor_check', return_value=(False, None)):
             self.assertEqual(w.tmux_argv('pm-a1', 'x')[:2], ['tmux', 'new-session'])
             self.assertNotIn('-L', w.opened_in('pm-a1'))
+
+    def test_an_old_kit_s_server_opens_the_window_in_the_default_server_and_says_why(self):
+        w = self.w
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv)
+            return types.SimpleNamespace(returncode=0, stdout='', stderr='')
+
+        why = "the kit's tmux server is tmux 3.1, and a window there needs tmux 3.2 or later"
+        with mock.patch.object(w, 'anchor_check', return_value=(False, why)):
+            w.open_window('echo hi', 'pm-a1', run=run)
+        self.assertEqual(calls, [['tmux', 'new-session', '-d', '-s', 'pm-a1', '/bin/bash', '-c',
+                                  'echo hi']])
+        with mock.patch.object(w, 'anchor_check', side_effect=AssertionError('asked again')):
+            said = w.opened_in('pm-a1')
+        self.assertIn("tmux session 'pm-a1' (tmux attach -t 'pm-a1')", said)
+        self.assertIn('not contained there: ' + why, said)
+
+    def test_a_window_the_kit_s_server_refuses_opens_in_the_default_server(self):
+        w = self.w
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv)
+            if '-L' in argv:
+                return types.SimpleNamespace(returncode=1, stdout='', stderr='unknown flag -e\n')
+            return types.SimpleNamespace(returncode=0, stdout='', stderr='')
+
+        with mock.patch.object(w, 'anchor_check', return_value=(True, None)):
+            w.open_window('echo hi', 'pm-a1', run=run)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][:3], ['tmux', '-L', 'pm-kit'])
+        self.assertEqual(calls[1], ['tmux', 'new-session', '-d', '-s', 'pm-a1', '/bin/bash', '-c',
+                                    'echo hi'])
+        said = w.opened_in('pm-a1')
+        self.assertNotIn('-L', said)
+        self.assertIn("the kit's tmux server refused the window (tmux exit 1: unknown flag -e)",
+                      said)
+        # a name the kit's server already has is refused, never opened elsewhere
+        calls[:] = []
+
+        def dup(argv, **kw):
+            calls.append(argv)
+            return types.SimpleNamespace(returncode=1, stdout='', stderr='duplicate session: pm-a1')
+
+        with mock.patch.object(w, 'anchor_check', return_value=(True, None)), \
+                self.assertRaises(importlib.import_module('kitlib.launcher.settings').LaunchError):
+            w.open_window('echo hi', 'pm-a1', run=dup)
+        self.assertEqual(len(calls), 1)
 
 
 class Expand(unittest.TestCase):

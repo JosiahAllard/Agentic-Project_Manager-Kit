@@ -34,8 +34,9 @@ top-level J as a folder BASE/<prefix>-job-<pid>-<n>-<hex>.scope, the way a neste
 stub's move is allowed because BASE, their common ancestor, is the user's. The probe tries BASE
 (a trial job there) before a systemd scope; close removes J once it is empty, leftovers() moves to
 a BASE/<prefix>-leftovers-... folder, and each probe first sweeps BASE of the folders whose maker
-has gone and which hold nothing (no systemd collects them). A process outside BASE is told to
-start from the kit's tmux server, and gets the lower tier.
+has gone and which hold nothing (no systemd collects them). A process outside BASE gets the
+lower tier and is told to start from the kit's tmux server (ATTACH), or, when that server has
+ended (ANCHOR empty), to run the root step again (SETUP) or reboot: only root starts it there.
 
 Short jobs (Job(short=True): a git call, where a scope of its own, about 85 ms, would cost more
 than the command): outside any kit job, each is a nested job in this process's carrier, one
@@ -149,6 +150,11 @@ BASE = '/pm-kit'                  # the boot hook's cgroup (kitlib.machinesetup.
 SYSTEMD_DIR = '/run/systemd/system'
 HOOKS = ('/etc/local.d/pm-kit-cgroup.start', '/etc/cron.d/pm-kit')
 GROUP_CONTROLLERS = ('cpuset', 'memory', 'pids')
+ANCHOR = BASE + '/anchor'          # the leaf the kit's tmux server runs in
+ATTACH = 'tmux -L pm-kit attach -t pm-kit-anchor \\; new-window'     # delegation.ATTACH
+SETUP = 'sudo python3 %s --delegation --apply' % os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
+    'tools', 'machine_setup.py')
 _PREFIX_OK = re.compile(r'[A-Za-z0-9_.-]{1,40}\Z')
 _count = itertools.count(1)
 
@@ -576,8 +582,12 @@ def delegated_group(own=None):
     except OSError as e:
         return None, 'this process\'s cgroup cannot be read (%s)' % e
     if not cg or not cg.startswith(BASE + '/'):
+        if not populated(ANCHOR):
+            return None, ('this process runs outside %s (in %s), and the kit\'s tmux server has '
+                          'ended (%s is empty): run %s again, or reboot, to start it; a tmux '
+                          'server started from a shell is not contained' % (BASE, cg, ANCHOR, SETUP))
         return None, ('this process runs outside %s (in %s): start work from the kit\'s tmux '
-                      'server (tmux -L pm-kit)' % (BASE, cg))
+                      'server: %s' % (BASE, cg, ATTACH))
     if not os.access(d + '/cgroup.procs', os.W_OK):
         return None, 'the kit\'s cgroup %s: its cgroup.procs is not writable by this user' % BASE
     try:

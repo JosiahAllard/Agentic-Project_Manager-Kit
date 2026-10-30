@@ -153,6 +153,32 @@ class Box(object):
         from kitlib.platform.linux import contain
         return contain.probe(fresh=True)
 
+    def read(self, path):
+        """The text of `path` (a /sys or /proc file), None when it cannot be read."""
+        try:
+            with open(path, errors='replace') as f:
+                return f.read()
+        except OSError:
+            return None
+
+    def exe(self, pid):
+        """The binary process `pid` runs (/proc/<pid>/exe), None when it cannot be read."""
+        try:
+            return os.readlink('/proc/%s/exe' % pid)
+        except OSError:
+            return None
+
+    def tmux_version(self, path):
+        """`<path> -V`'s line ('tmux 3.4'), None when it cannot run or fails."""
+        import subprocess
+        from kitlib.proc import spawn
+        try:
+            r = spawn.run([path, '-V'], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                          timeout=30, env={'PATH': '/usr/bin:/bin'})
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return r.stdout.strip() if r.returncode == 0 and r.stdout else None
+
     def sudo_user(self):
         """(uid, name) of the user who ran sudo (SUDO_UID, SUDO_USER), or None."""
         uid, name = os.environ.get('SUDO_UID'), os.environ.get('SUDO_USER')
