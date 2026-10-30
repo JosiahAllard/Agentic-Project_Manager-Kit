@@ -107,8 +107,14 @@ listening" pill. A second line gives the push status from the snapshot's `push` 
 is up" or "is down" (with the state of the latest try to the PM), how many items are undelivered, or
 "Push notifications are off on this hub server." when no worker runs. The page reads everything at once
 (`GET /api/v1/snapshot`), then waits for the next change (`GET /api/v1/wait`, about 55 seconds on the
-server), so what the PM writes shows without a reload. A view the server cannot give says so at the
-top.
+server), so what the PM writes shows without a reload. After a failed wait it reads again after a
+back-off (2 s doubling to 60 s, or the server's `Retry-After`), and when it was the long request
+that failed while the snapshot before it answered (a tunnel or proxy cutting it, a 502 or 524), it
+reads the snapshot again within 15 s, so it still follows the hub by polling (`hubNextMs`). The tab
+shown again, the browser back online or the page restored from the back-forward cache ends the
+wait or back-off and reads at once. A redirect is the tunnel's sign-in (Cloudflare Access) running
+out: the page says to reload it to sign in again, and tries every 45 s until then. A view the
+server cannot give says so at the top.
 
 Links ending `#home`, `#questions`, `#inbox`, `#approvals`, `#more`, `#todo`, `#topm`, `#backlog` (or
 `#stories`), `#parked`, `#docs`, `#schedule`, `#autotasks`, `#findings` or `#info` open that section;

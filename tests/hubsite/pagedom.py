@@ -8,7 +8,7 @@ so it shows what the script does with what the server sends, and nothing about l
 
 The server is scripted: `server.snap` is what GET /snapshot answers, a GET /wait hangs until the test
 answers it (`wake`, `answerWait`) or the page ends it through the call's signal, and `server.route` may
-answer any call itself (`cut: true` in its answer is a body that never arrives). Timers do not run by
+answer any call itself (`cut: true` in its answer is a body that never arrives; `type` sets the response's type). Timers do not run by
 themselves: `timers` lists the pending ones and `fireTimers()` runs them, so a test sees a retry wait
 without waiting for it.
 """
@@ -158,7 +158,8 @@ const server = { snap: null, route: null, lock: { ok: true, lock_revision: 1, wr
   view: { now: "2026-10-05T12:00:00+00:00", zone: "UTC", holds: [], agent_holds: [], runs: [], colour: {}, strip: [], warnings: [], queue_items: [],
     cores: { head: "", cpu: [], gpu: [] }, memory: null, details: [], queue: [], bookings: [] } } };
 // `cut` is an answer whose status came and whose body did not: reading it fails, as on a dropped connection.
-const answer = (status, bodyOf, headers, cut) => ({ ok: status >= 200 && status < 300, status,
+// `type` is the response's type when a test gives one: "opaqueredirect" is a redirect the page fetched with redirect "manual".
+const answer = (status, bodyOf, headers, cut, type) => ({ ok: status >= 200 && status < 300, status, type: type || "basic",
   headers: { get: k => (headers && k in headers ? String(headers[k]) : null) },
   json: async () => { if (cut) throw new Error("the body was cut off"); return JSON.parse(JSON.stringify(bodyOf)); } });
 globalThis.fetch = (url, init) => {
@@ -166,7 +167,7 @@ globalThis.fetch = (url, init) => {
   calls.push(call);
   const own = server.route ? server.route(call) : undefined;
   if (own instanceof Error) return Promise.reject(own);
-  if (own) return Promise.resolve(answer(own.status, own.body, own.headers, own.cut));
+  if (own) return Promise.resolve(answer(own.status, own.body, own.headers, own.cut, own.type));
   // A long-poll (the hub's, or the machine lock's) hangs until the test answers it, or until the page gives up on it
   // through its signal.
   // On the action hub page (a snapshot is given) the machine lock's own long-poll is kept apart (lockWaits): the
