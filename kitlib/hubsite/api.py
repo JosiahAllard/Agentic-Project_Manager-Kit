@@ -125,6 +125,16 @@ record ids), and the hub sets posted_at. GET landings (ANY) lists them newest fi
 `repo`, at most `limit` (default FEED_MAX); GET snapshot carries the newest FEED_MAX. Every event
 is kept; none is ever pending or pushed, and no route changes or deletes one.
 
+Hand-offs (docs/action-hub.md "handoffs/C-NNN"). POST handoffs (AGENT) records that a session
+checkpointed and stands down, beside its ready reply to the PM (skill session-handoff): {from,
+kind, state_path}, all required. from is a session key checked as a question's is (a launcher
+session key, read now, or `pm`); kind is one of HANDOFF_KINDS (handoff, restart, stop: the word
+of the reply); state_path is the absolute path of the state note, on one line. The hub sets `at`.
+GET handoffs (ANY) gives the newest record of each session (newest_handoffs: the highest id per
+`from`), sorted by key, or with `from=<key>` that key's alone; over the tunnel the state path is
+cut as a finding's is. Every record is kept; none is pending or pushed, no route changes or
+deletes one, and GET snapshot leaves them out.
+
 Skill edits (docs/action-hub.md "skill_edits/E-NNN"). The owner writes a new text for one kit
 skill's source, content/skills/<name>/SKILL.md, and an agent commits it; the hub writes no
 repository. GET skills/{name}/source (ANY) gives {name, text, blob}: the whole SKILL.md of a
@@ -1149,6 +1159,21 @@ def _class(b, bound):
                                                       ascii(given)), 'class')
 
 
+def _session_from(api, who, what):
+    """who, a `from` that names a session: AGENT_FROM or a launcher session key, read now
+    (Api.read_session_keys); else `invalid`, field from, naming the known keys, never the file.
+    `what` names the document in the refusal (`a question`)."""
+    if who != AGENT_FROM:
+        keys, why = api.read_session_keys()
+        if who not in keys:
+            unread = ('; the launcher\'s session keys could not be read (%s), so only %s is '
+                      'known' % (why, AGENT_FROM)) if why else ''
+            raise _invalid('from %s is not a session the hub knows: %s comes from a '
+                           'launcher session key (known: %s)%s'
+                           % (ascii(who), what, ', '.join(sorted(keys)), unread), 'from')
+    return who
+
+
 def questions_add(api, req):
     """A new open question: `record` (the backlog record its answer is filed into) or `class`
     (_class) is required."""
@@ -1157,16 +1182,7 @@ def questions_add(api, req):
     for name in ('repo', 'from', 'title', 'context', 'story'):
         _text(b, name)
     # the session the answer goes back to: a launcher session key, read now, or the PM's
-    who = (b.get('from') or '').strip() or AGENT_FROM
-    if who != AGENT_FROM:
-        keys, why = api.read_session_keys()
-        if who not in keys:
-            unread = ('; the launcher\'s session keys could not be read (%s), so only %s is '
-                      'known' % (why, AGENT_FROM)) if why else ''
-            raise _invalid('from %s is not a session the hub knows: a question comes from a '
-                           'launcher session key (known: %s)%s'
-                           % (ascii(who), ', '.join(sorted(keys)), unread), 'from')
-    b['from'] = who
+    b['from'] = _session_from(api, (b.get('from') or '').strip() or AGENT_FROM, 'a question')
     _typed(b, 'options', (list,), 'a list of {label, description}')
     _class(b, 'record' in b)
     if 'record' in b:               # checked last: the one part that reads a backlog
@@ -2080,6 +2096,51 @@ def landings_add(api, req):
         raise _invalid('records is a list of record ids', 'records')
     b['posted_at'] = api.clock()
     return api.add('landings', b, req)
+
+
+# hand-offs ("Hand-offs"): the record a session writes beside its ready reply to the PM
+HANDOFF_KINDS = schema.KINDS['handoffs']
+_CONTROL = re.compile('[\x00-\x1f\x7f]')
+
+
+def newest_handoffs(docs):
+    """{session key: its newest hand-off record} of docs ({id: document} of `handoffs`), each
+    with its `id`: the record with the highest id of each `from` (ids only grow). A document
+    with no string `from` is left out."""
+    out = {}
+    for doc_id in sorted(docs, key=_natural):
+        d = docs[doc_id]
+        if isinstance(d, dict) and isinstance(d.get('from'), str):
+            out[d['from']] = dict(d, id=doc_id)
+    return out
+
+
+def handoffs_list(api, req):
+    """The newest record of each session, sorted by session key; with `from=<key>` that key's
+    alone (none: an empty list). Over the tunnel the state path is cut as _unpathed cuts it."""
+    newest = newest_handoffs(api.store.docs('handoffs'))
+    who = _q(req, 'from')
+    items = [newest[k] for k in sorted(newest) if not who or k == who]
+    if _remote(req):
+        for d in items:
+            if isinstance(d.get('state_path'), str):
+                d['state_path'] = _unpathed(d['state_path'])
+    return {'items': items}
+
+
+def handoffs_add(api, req):
+    """A new record: `from` (a session key, checked as a question's: _session_from), `kind`
+    (HANDOFF_KINDS) and `state_path` (an absolute path, on one line), all required; the hub
+    sets `at`."""
+    b = _fields(req, ('from', 'kind', 'state_path'), required=('from', 'kind', 'state_path'))
+    _one_of(b, 'kind', HANDOFF_KINDS)
+    path = _text(b, 'state_path').strip()
+    if _CONTROL.search(path) or _SURROGATE.search(path) or not os.path.isabs(path):
+        raise _invalid('state_path is the absolute path of your state note, on one line, not %s'
+                       % ascii(path[:200]), 'state_path')
+    b['from'] = _session_from(api, _text(b, 'from').strip(), 'a hand-off record')
+    b.update(state_path=path, at=api.clock())
+    return api.add('handoffs', b, req)
 
 
 # approvals: imported here, not at the top, as kitlib.hubsite.approvals imports this module
@@ -3034,6 +3095,7 @@ def skill_edits_fail(api, req):
 def snapshot(api, req):
     revision, docs = api.store.snapshot()
     docs.pop('page_html', None)     # a body is read on its own (GET pages/{id}, "Pages")
+    docs.pop('handoffs', None)      # read with GET handoffs, newest per session ("Hand-offs")
     if docs.get('landings'):        # the newest FEED_MAX: every event is kept ("Landings")
         feed = docs['landings']
         docs['landings'] = {k: feed[k] for k in sorted(feed, key=_natural)[-FEED_MAX:]}
@@ -3265,6 +3327,8 @@ ROUTES = (
     _r('POST', '/inbox/{id}/read', OWNER, inbox_read),
     _r('GET', '/landings', ANY, landings_list),
     _r('POST', '/landings', AGENT, landings_add),
+    _r('GET', '/handoffs', ANY, handoffs_list),
+    _r('POST', '/handoffs', AGENT, handoffs_add),
     _r('GET', '/pages', ANY, pages_list),
     _r('POST', '/pages', AGENT, pages_publish),
     _r('GET', '/pages/{id}', ANY, pages_get),

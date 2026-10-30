@@ -251,6 +251,9 @@ ROWS = {
     ('GET', '/landings'): (None, None, None),
     ('POST', '/landings'): (None, {'repo': 'r', 'branch': 'kit/x', 'tip': 'a' * 40,
                                    'main': 'b' * 40}, None),
+    ('GET', '/handoffs'): (None, None, None),
+    ('POST', '/handoffs'): (None, {'from': 'pm', 'kind': 'stop', 'state_path': r'C:\t\s.md'},
+                            None),
     ('GET', '/pages'): (None, None, None),
     ('POST', '/pages'): (None, {'id': 'plan-1', 'title': 't', 'html': '<p>x</p>'}, None),
     ('GET', '/pages/{id}'): (seed_page, None, None),
@@ -403,6 +406,8 @@ class RolesCase(unittest.TestCase):
                 ('POST', '/inbox'): AGENT, ('POST', '/inbox/{id}/read'): OWNER,
                 # a landing's event is posted by tools/land.py, an agent; the owner only reads it
                 ('POST', '/landings'): AGENT,
+                # a session records its own hand-off; the owner and the PM read them
+                ('GET', '/handoffs'): ANY, ('POST', '/handoffs'): AGENT,
                 ('POST', '/pages'): AGENT, ('POST', '/pages/{id}/delete'): OWNER,
                 # the owner sets the kit's automatic tasks; an agent only reads them
                 ('GET', '/schedules'): ANY, ('POST', '/schedules'): OWNER,

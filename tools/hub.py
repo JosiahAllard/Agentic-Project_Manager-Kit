@@ -197,6 +197,12 @@ the server alone decides what a role may do.
                                                      the requester takes back a request still
                                                      pending (KEY is pm: approvals store no from);
                                                      a decided or expired one is refused
+  hub.py handoffs [--from KEY]                      `C-1 restart from=KEY at=TIME PATH`: each
+                                                     session's newest hand-off record, or KEY's
+                                                     (docs/action-hub.md "handoffs/C-NNN")
+  hub.py handoffs add --kind K --state PATH --from KEY       `RECORDED C-1`: beside the ready
+                                                     reply (skill session-handoff), K handoff,
+                                                     restart or stop, PATH the state note
   hub.py skill-edit [--status S]                    `E-1 v2 submitted skill NAME` for each of the
                                                      owner's edits of a kit skill (the owner
                                                      writes them on the hub page only;
@@ -277,7 +283,7 @@ HEALTH = api.BASE + '/health'
 # every verb, in the order the usage error names them
 VERB_NAMES = ('serve', 'status', 'setup', 'open', 'unpair', 'stop', 'restart',
               'questions', 'answer', 'todos', 'stories', 'to-pm', 'inbox', 'pages', 'approvals',
-              'skill-edit', 'pending', 'wait', 'validate')
+              'handoffs', 'skill-edit', 'pending', 'wait', 'validate')
 NO_VERB = 'give a verb: %s or %s' % (', '.join(VERB_NAMES[:-1]), VERB_NAMES[-1])
 
 
@@ -588,6 +594,18 @@ def _client_verbs(sub):
     x.add_argument('id')
     x.add_argument('--undo', action='store_true')
     _pins(x)
+
+    x = _asks(sub.add_parser('handoffs', help="each session's newest hand-off record; add: "
+                                               "record yours"))
+    x.add_argument('--from', dest='who', default=argparse.SUPPRESS, metavar='KEY',
+                   help="only this session key's")
+    h = x.add_subparsers(dest='sub')
+    x = _leaf(h, 'add', 'record your hand-off, beside the ready reply to the PM')
+    x.add_argument('--kind', required=True, choices=api.HANDOFF_KINDS)
+    x.add_argument('--state', required=True, metavar='PATH',
+                   help='the absolute path of your state note')
+    x.add_argument('--from', dest='who', required=True, metavar='KEY',
+                   help='your launcher session key')
 
     g = _listed(sub, 'pages', 'list the published pages; publish, show')
     x = _leaf(g, 'publish', 'publish an HTML page to the hub')
@@ -1305,6 +1323,20 @@ def _inbox(a, stop):
                  [_item(d, 'read' if d.get('read') else 'unread') for d in items])
 
 
+def _handoffs(a, stop):
+    hub = _hub(a)
+    if a.sub == 'add':
+        got = hub.post('/handoffs', client.AGENT, _body(
+            kind=a.kind, state_path=a.state, **{'from': a.who}))
+        return _wrote(a, got, 'RECORDED %s' % got.get('id'))
+    who = getattr(a, 'who', None)
+    got = hub.get('/handoffs', query={'from': who} if who else None)
+    items = got.get('items') or []
+    return _show(a, {'items': items},
+                 ['%s %s from=%s at=%s %s' % (d.get('id'), d.get('kind'), d.get('from'),
+                                              d.get('at'), d.get('state_path')) for d in items])
+
+
 def _pages(a, stop):
     """No delete: deleting a page is the owner's, on the hub page only."""
     hub = _hub(a)
@@ -1475,7 +1507,7 @@ VERBS = {'serve': _serve, 'status': _status, 'setup': _setup, 'open': _open,
          'unpair': _unpair, 'stop': _stop, 'restart': _restart,
          'questions': _questions, 'answer': _answer, 'todos': _todos,
          'stories': _stories, 'to-pm': _to_pm, 'inbox': _inbox, 'pages': _pages,
-         'approvals': _approvals, 'skill-edit': _skill_edit,
+         'approvals': _approvals, 'handoffs': _handoffs, 'skill-edit': _skill_edit,
          'pending': _pending,
          'wait': _wait, 'validate': _validate}
 
