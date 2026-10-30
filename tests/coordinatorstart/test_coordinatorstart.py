@@ -404,7 +404,7 @@ class ContextTest(unittest.TestCase):
                 f.write(b"\xef\xbb\xbf" + json.dumps({"alpha": ENTRY}).encode("utf-8"))
             text = coordinatorstart.context(
                 {"repos_root": ROOT, "cap": {"alpha": [{"cap": 4}]}},
-                env={}, cwd=ROOT + "/alpha", now=NOW, procs=[], run=lambda a, timeout=10: "G",
+                env={"AGENT_TEMP": d}, cwd=ROOT + "/alpha", now=NOW, procs=[], run=lambda a, timeout=10: "G",
                 kit="H", pid=1, pm_cfg={"sessions_file": p}, machine_cfg={})
         self.assertIn("- agent cap 4", text)
 

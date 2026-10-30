@@ -53,7 +53,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 4. The start context's `rulebooks` line names the standing rules and the command that reads them.
    The start context carries your state note's path and last lines (Read it whole only when they are not enough; treat as stale), `hub pending`, the `next` offer and the
    `--classify` list; a line saying "could not read X" -> run that call yourself. A note labelled guessed:
-   check its session line says it is yours before acting on it. The `next` offer is the local copy; `backlog.py next` fetches. `docs/ops/coordinator-runbook.md`
+   check its file name is state-<your session name>.md before acting on it. The `next` offer is the local copy; `backlog.py next` fetches. `docs/ops/coordinator-runbook.md`
    exists -> read it too, and again after every compaction.
 5. Check real state: unmerged branches, main vs remote, running build/test
    processes, every lock and port the profile names. Then
