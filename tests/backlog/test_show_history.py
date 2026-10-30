@@ -11,7 +11,7 @@ from unittest import mock
 from kitlib.backlog import plan as pmod
 from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
-from kitlib.backlog.errors import Failure, NotFound, Usage
+from kitlib.backlog.errors import Ended, Failure, NotFound, Usage
 from kitlib.git import cmd
 from tests.backlog.helpers import ADD_FLAGS, BRANCH, StoreCase, kit_json_ref, rec, record_text
 from tests.gitfixture import NAME, TempRepo, fixture_env, rmtree
@@ -35,10 +35,29 @@ class RefStore(StoreCase):
         short = self.repo.git('rev-parse', '--short', tip)
         when = self.repo.git('log', '-1', '--format=%cI', tip)
         said = self.missing('FOO')
-        self.assertIn('no record with `id: FOO`', said)
-        self.assertIn('removed by %s on %s (session kit-c4-test): closes FOO: the work is '
+        self.assertIn('FOO is no longer in', said)
+        self.assertIn('closed by %s on %s (session kit-c4-test): closes FOO: the work is '
                       'finished' % (short, when), said)
         self.assertNotIn(NAME, said)
+
+    def test_a_closed_record_is_ended_with_its_reason_and_an_unknown_one_is_not(self):
+        self.seed(rec('FOO'), rec('BAR'), rec('BAZ'))
+        self.verb('close', 'FOO', 'the work is finished')
+        self.verb('retire', 'BAR', 'no longer wanted at all')
+        self.verb('delete', 'BAZ', 'the owner says delete it')
+        for rid, how, why in (('FOO', 'closed', 'the work is finished'),
+                              ('BAR', 'retired', 'no longer wanted at all'),
+                              ('BAZ', 'deleted', 'the owner says delete it')):
+            with self.assertRaises(Ended) as cm:
+                pmod.require_shown(self.store.load(), self.ctx, rid)
+            self.assertEqual(cm.exception.code, 0)
+            self.assertIn('%s is no longer in' % rid, str(cm.exception))
+            self.assertIn('%s by ' % how, str(cm.exception))
+            self.assertTrue(str(cm.exception).endswith('\n  reason: %s' % why), str(cm.exception))
+        with self.assertRaises(NotFound) as cm:
+            pmod.require_shown(self.store.load(), self.ctx, 'NOPE')
+        self.assertNotIsInstance(cm.exception, Ended)
+        self.assertEqual(cm.exception.code, 1)
 
     def test_a_record_that_never_existed_is_unknown(self):
         self.seed(rec('FOO'))
@@ -118,7 +137,7 @@ class MainStoreSideBranch(StoreCase):
         with self.assertRaises(NotFound) as cm:
             pmod.require_shown(store.load(), ctx, 'FOO')
         said = str(cm.exception)
-        self.assertIn('removed by %s ' % r.git('rev-parse', '--short', deleted), said)
+        self.assertIn('closed by %s ' % r.git('rev-parse', '--short', deleted), said)
         self.assertIn('(session side-session): closes FOO: done on the side', said)
         self.assertNotIn(r.git('rev-parse', '--short', merge), said)
 
@@ -147,7 +166,7 @@ class MainStoreUncommittedClose(StoreCase):
         store.write(lambda s: pmod.plan_close(s, ctx, 'FOO', 'the work is finished'))
         self.assertFalse(os.path.exists(os.path.join(root, 'docs', 'backlog', 'FOO.md')))
         said = self.shown(store, ctx, 'FOO')
-        self.assertIn('no record with `id: FOO`', said)
+        self.assertIn('FOO is no longer in', said)
         self.assertIn('tracked at HEAD but missing from this worktree (closed or retired here, '
                       'or removed by hand); no commit names it yet', said)
         self.assertNotIn('the id is unknown', said)
@@ -178,7 +197,7 @@ class MainStoreUncommittedClose(StoreCase):
         r.git('commit', '-q', '-m', 'closes FOO: the work is finished\n\nSession: wt-session',
               cwd=root)
         said = self.shown(store, ctx, 'FOO')
-        self.assertIn('removed by %s ' % r.git('rev-parse', '--short', 'HEAD', cwd=root), said)
+        self.assertIn('closed by %s ' % r.git('rev-parse', '--short', 'HEAD', cwd=root), said)
         self.assertNotIn('no commit names it yet', said)
 
     def test_an_id_never_tracked_is_still_unknown(self):
@@ -202,14 +221,27 @@ class BackslashFolder(StoreCase):
         with self.assertRaises(NotFound) as cm:
             pmod.require_shown(store.load(), ctx, 'FOO')
         said = str(cm.exception)
-        self.assertIn('removed by %s ' % r.git('rev-parse', '--short', deleted), said)
+        self.assertIn('closed by %s ' % r.git('rev-parse', '--short', deleted), said)
         self.assertIn('(session bs-session): closes FOO: gone', said)
 
 
 class Cli(StoreCase):
-    """tools/backlog.py `show` prints the removal and still exits 1."""
+    """tools/backlog.py `show` of a closed record prints the removal and exits 0; an unknown id
+    is NOT FOUND, exit 1; an empty store's `next` and `list` exit 0."""
 
-    def test_show_of_a_closed_record_prints_the_removal_and_exits_1(self):
+    def test_an_empty_store_next_and_list_exit_0(self):
+        kit_json_ref(self.repo)
+        home = tempfile.mkdtemp(prefix='kit-home-')
+        self.addCleanup(rmtree, home)
+        env = fixture_env({'USERPROFILE': home, 'HOME': home})
+        for args in (('next',), ('list',), ('list', '--needs-priority')):
+            p = subprocess.run([sys.executable, TOOL, '-C', self.repo.root] + list(args),
+                               capture_output=True, text=True, encoding='utf-8', env=env,
+                               timeout=120)
+            self.assertEqual(p.returncode, 0, (args, p.stdout + p.stderr))
+            self.assertTrue(p.stdout.startswith('BACKLOG empty'), p.stdout)
+
+    def test_show_of_a_closed_record_prints_the_removal_and_exits_0(self):
         kit_json_ref(self.repo)              # the tool writes the store it is told to
         home = tempfile.mkdtemp(prefix='kit-home-')
         self.addCleanup(rmtree, home)
@@ -225,7 +257,11 @@ class Cli(StoreCase):
         rc, out = run('--session', 'cli-session', 'close', 'FOO', '--reason', 'it is all done')
         self.assertEqual(rc, 0, out)
         rc, out = run('show', 'FOO')
-        self.assertEqual(rc, 1, out)
-        self.assertRegex(out, r'^NOT FOUND: no record with `id: FOO`')
+        self.assertEqual(rc, 0, out)
+        self.assertRegex(out, r'^ENDED: FOO is no longer in ')
         self.assertIn('(session cli-session): closes FOO: it is all done', out)
+        self.assertIn('\n  reason: it is all done', out)
         self.assertNotIn(NAME, out)
+        rc, out = run('show', 'NOPE')
+        self.assertEqual(rc, 1, out)
+        self.assertRegex(out, r'^NOT FOUND: no record with `id: NOPE`')
