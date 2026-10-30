@@ -22,6 +22,7 @@
   plugin_job the timed job that refreshes the pm-kit plugin export when kit main moves
   serve    the server: the store, the api, the views and the listeners, started and closed
   client   the client of the hub server on this machine: one call, its refusal, the exit codes
+  landings the landing feed's events, built after a landing and posted best-effort to the hub
   storecheck the store folder's findings as on disk, read only, no lock (hub.py validate)
   autostart the opt-in scheduled task that starts the server at sign-in (hub.py setup --autostart)
   control  hub.py stop and restart: ask the server to close, wait for it, start the task again
