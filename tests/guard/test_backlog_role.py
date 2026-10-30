@@ -504,7 +504,7 @@ class OwnPullInstead(HeldStore):
 
 class AsFromOutsideItsWorktree(HeldStore):
     """A builder's `-C <store> --as <its branch> set <ID> --scope ...` run from the main checkout,
-    where a subagent's shell starts each call (KIT-SCOPE-NARROW-AS: 143 builder refusals, 113
+    where a subagent's shell starts each call (a usage audit: 143 builder refusals, 113
     retried in the same shape). The run shows no linked worktree on the branch, so it stays
     refused: --as alone never grants the own pull. Its Instead named only `show`; it now names the
     form that passes, the same run with a cd into the session's worktree in the same call, the
