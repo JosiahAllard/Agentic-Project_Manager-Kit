@@ -758,7 +758,7 @@ hub marks the question done itself once its asker has it, and nobody has to (`ki
 - How: status `done`, `done_by` `hub`, `done_why` `filed into <repo>:<id>`, `done_at`, via `hub-push`,
   pinned to the version the question had when its push fired: a new answer, a promote, the asker's own
   log or done, or any other write since wins, the question stays as it is and the server logs `push: Q-n
-  not marked done: conflict`. The entry survives a server restart (push-state.json).
+  not marked done: conflict`. The entry survives a server restart (`push-outbox.json`).
 - Afterwards: it is no longer pending. Its card says `filed in <record id> · done by the hub once <asker>
   had it` and keeps Change answer (a re-answer reopens it: `answered`, `done_by`, `done_why` and
   `done_at` cleared, filed again, and pushed to its asker afresh) and Make it a standing rule (a promote
