@@ -5,7 +5,7 @@ comes from the "coordinator_start" key of the machine config and is emitted only
 environment variable PM_KIT_ROLE is "coordinator". After the standing lines come the optional ENG
 filing and pricing-pass lines (each switched on in the config), then the live checks (cap,
 machine state, other coordinators, the ledger line, the hub key: the session's sessions.json
-key, which it posts hub questions --from and reads pending --for once at start (answers come by
+key, which it posts hub questions --from (its pending list is printed in the start context; answers come by
 push), or "unknown" when no entry is found), run as in kitlib.pmstart: each is a pure function over fakeable inputs
 (process list, file reads, a subprocess runner, now, the machine config), and a failed one is one
 "could not check X: reason" line. No check reads the rulings ledger: with the split ledger
@@ -26,6 +26,7 @@ from kitlib import kitroot, pmstart, sessionmark
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
 from kitlib.pmstart import configcheck
+from kitlib.coordinatorstart import parts
 from kitlib.records import landing
 
 KEY = "coordinator_start"
@@ -154,13 +155,13 @@ def find_entry(sessions, cwd, name=None, root=None):
 
 def hub_key(sessions, entry):
     """[the `hub key: <key>` line]: the sessions.json key of `entry` (find_entry's pick, the same
-    object), the key this coordinator posts hub questions --from and reads pending --for once at
+    object), the key this coordinator posts hub questions --from; its pending list is printed at
     start; it runs no background wait, as the hub pushes its answers and done to-dos
     (docs/action-hub.md "For the PM"). LookupError when no key holds it."""
     for k, v in sessions.items():
         if v is entry and not str(k).startswith("_"):
-            return ["hub key: %s (hub.py questions add --from %s --record REPO:ID|--class C; read "
-                    "hub.py pending --for %s once at start; answers come by push)" % (k, k, k)]
+            return ["hub key: %s (hub.py questions add --from %s --record REPO:ID|--class C; its "
+                    "pending list is in this start context; answers come by push)" % (k, k)]
     raise LookupError("no sessions.json key holds this session's entry")
 
 
@@ -283,8 +284,8 @@ def others(entry, procs, env, pid):
 
 def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read, kit=None,
             pid=None, pm_cfg=None, live=True, machine_cfg=None,
-            config_lines=None):
-    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the live checks (the ledger check prints only with `ledger_dir` set, and nothing when the machine config cannot be read). `machine_cfg`: the machine config (default kitlib.config.user.user_config(), read by the ledger check). `config_lines`: the machine config check, first of the live checks (default kitlib.pmstart.configcheck.lines)."""
+            config_lines=None, run_loose=None, deadline=parts.DEADLINE):
+    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the live checks (the ledger check prints only with `ledger_dir` set, and nothing when the machine config cannot be read). `machine_cfg`: the machine config (default kitlib.config.user.user_config(), read by the ledger check). `config_lines`: the machine config check, first of the live checks (default kitlib.pmstart.configcheck.lines). Last come the read-only start parts (kitlib.coordinatorstart.parts: state note tail, hub pending, backlog next, stale worktrees), run in parallel under one `deadline`; `run_loose` runs the worktree classify (default: `run` when it was passed, else stdout whatever the exit code)."""
     env = os.environ if env is None else env
     lines = [str(t) for t in cfg.get("standing") or []]
     if cfg.get("eng_filing") is True:
@@ -311,6 +312,7 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
                     name = own_name(procs_once(), env, pid)
                 except Exception:
                     name = None
+                box["name"] = name
                 box["s"] = json.loads(read(sf))
                 box["e"] = find_entry(box["s"], cwd, name, cfg.get("repos_root"))
                 if box["e"][1]:
@@ -358,7 +360,41 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
                 lines.append("could not check %s: %s" % (name, str(e).strip("'\"")))
             except Exception as e:
                 lines.append("could not check %s: %s: %s" % (name, type(e).__name__, e))
+        lines.extend(_start_parts(cfg, box, entry_once, env, run, run_loose, kit, deadline))
     return "Coordinator session start:\n" + "\n".join("- " + l for l in lines)
+
+
+def _start_parts(cfg, box, entry_once, env, run, run_loose, kit, deadline):
+    """The lines of the read-only start parts. The sessions entry is read once here (the checks
+    above cached it or its failure), then the parts run in threads."""
+    try:
+        entry = entry_once()
+    except Exception:
+        entry = None
+    key = None
+    if entry is not None and "s" in box and not box["e"][1]:
+        key = next((k for k, v in box["s"].items() if v is entry and not str(k).startswith("_")), None)
+    if run_loose is None:
+        run_loose = parts.run_loose if run is _run else run
+    if run is _run:
+        run = parts.run_strict          # the parts' runner ends a timed-out command's whole process tree
+
+    def need():
+        if entry is None:
+            raise KeyError("no sessions entry for this repo")
+        return "%s/%s" % ((cfg.get("repos_root") or "").replace("\\", "/").rstrip("/"), entry.get("repo"))
+
+    slugs = [s for s in (ledger_name(entry.get("repo")) if entry else None, key,
+                         str(entry.get("stem") or "")[:-len(parts.FOLDER_SUFFIX)]
+                         if entry and str(entry.get("stem") or "").endswith(parts.FOLDER_SUFFIX) else None) if s]
+    jobs = [("state note", lambda: parts.state_note(env, env.get(NAME_VAR) or box.get("name"), slugs)),
+            ("hub pending", lambda: parts.hub_pending(key, run, kit)),
+            ("backlog next", lambda: parts.backlog_next(need(), key, run, kit)),
+            ("worktrees", lambda: parts.worktrees(need(), run_loose, kit))]
+    out = []
+    for _, lines in parts.run_all(jobs, deadline):
+        out.extend(lines)
+    return out
 
 
 def render(env=None, path=None, **kw):
