@@ -295,7 +295,9 @@ class ContextTest(unittest.TestCase):
 
         def run(args, timeout=10):
             return json.dumps(status) if "machine_lock.py" in args[1] else "G"
-        base = dict(env={"CLAUDE_CONFIG_DIR": "C:/u/.claude-ex2"}, cwd=ROOT + "/alpha", now=NOW,
+        empty = os.path.join(tempfile.gettempdir(), "coordinatorstart-test-no-notes")   # never holds a note
+        base = dict(env={"CLAUDE_CONFIG_DIR": "C:/u/.claude-ex2", "AGENT_TEMP": empty, "TEMP": empty},
+                    cwd=ROOT + "/alpha", now=NOW,
                     procs=[], run=run, read=reader(files), kit="H", pid=1, pm_cfg=self.PM, machine_cfg={})
         base.update(kw)
         return coordinatorstart.context(dict(dict(repos_root=ROOT), **cfg), **base)
@@ -371,7 +373,7 @@ class ContextTest(unittest.TestCase):
         lines = self.build({}, read=reader(files)).splitlines()
         self.assertEqual([l for l in lines if "hub key" in l],
                          ["- hub key: kitc (hub.py questions add --from kitc --record REPO:ID|"
-                          "--class C; read hub.py pending --for kitc once at start; answers come "
+                          "--class C; its pending list is in this start context; answers come "
                           "by push)"])
         self.assertNotIn("wait", "\n".join(lines))   # no session keeps a background hub wait
 
@@ -402,7 +404,7 @@ class ContextTest(unittest.TestCase):
                 f.write(b"\xef\xbb\xbf" + json.dumps({"alpha": ENTRY}).encode("utf-8"))
             text = coordinatorstart.context(
                 {"repos_root": ROOT, "cap": {"alpha": [{"cap": 4}]}},
-                env={}, cwd=ROOT + "/alpha", now=NOW, procs=[], run=lambda a, timeout=10: "G",
+                env={"AGENT_TEMP": d}, cwd=ROOT + "/alpha", now=NOW, procs=[], run=lambda a, timeout=10: "G",
                 kit="H", pid=1, pm_cfg={"sessions_file": p}, machine_cfg={})
         self.assertIn("- agent cap 4", text)
 
@@ -586,8 +588,8 @@ class HookTest(unittest.TestCase):
     def run_hook(self, role, config):
         with tempfile.TemporaryDirectory() as d:
             machine_config(d, config, case=self)        # the fenced pointer's PM repo, which the child inherits
-            env = {k: v for k, v in os.environ.items() if k != "PM_KIT_ROLE"}
-            env.update(USERPROFILE=d, HOME=d)
+            env = {k: v for k, v in os.environ.items() if k not in ("PM_KIT_ROLE", "PM_KIT_SESSION_NAME")}
+            env.update(USERPROFILE=d, HOME=d, AGENT_TEMP=d, TEMP=d, TMP=d)
             if role:
                 env["PM_KIT_ROLE"] = role
             return subprocess.run([sys.executable] + HOOK, capture_output=True, text=True, env=env, timeout=30,
