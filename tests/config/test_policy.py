@@ -315,15 +315,15 @@ class KindsTableTest(unittest.TestCase):
 
 class RepoKindsTest(TreeCase):
     """`.kit.json` "kinds": a repository's own run kinds (policy.repo_kinds), shape-checked whole."""
-    RETRIBUTION = {'graph-build': {'cpu': 'heavy', 'gpu': 0, 'warn_min': 120, 'why': 'world graph'},
+    GAME_KINDS = {'graph-build': {'cpu': 'heavy', 'gpu': 0, 'warn_min': 120, 'why': 'world graph'},
                    'cpu-eval': {'cpu': 'heavy', 'gpu': 0, 'warn_min': 120, 'why': 'evaluation'}}
 
     def test_the_section_loads_and_repo_kinds_returns_it_with_notes_dropped(self):
         """Red before: "kinds" was an unknown section, so the whole .kit.json refused."""
-        kinds = dict(self.RETRIBUTION, _about='notes',
+        kinds = dict(self.GAME_KINDS, _about='notes',
                      render2={'cpu': 4, 'gpu': 'pool', 'share': True, 'why': 'w', 'comment': 'c'})
         got = policy.repo_kinds(self.load({'kinds': kinds}))
-        self.assertEqual(got, dict(self.RETRIBUTION, render2={'cpu': 4, 'gpu': 'pool',
+        self.assertEqual(got, dict(self.GAME_KINDS, render2={'cpu': 4, 'gpu': 'pool',
                                                               'share': True, 'why': 'w'}))
         self.assertEqual(policy.repo_kinds(self.load({})), {})
         self.assertEqual(policy.repo_kinds(None), {})
@@ -346,7 +346,7 @@ class RepoKindsTest(TreeCase):
     def test_the_section_is_never_a_file(self):
         """A file beside .kit.json would size runs without an owner-approved .kit.json change."""
         with self.assertRaisesRegex(config.ConfigError, 'section "kinds" must be an object$'):
-            self.load({'kinds': 'kinds.json'}, {'kinds.json': json.dumps(self.RETRIBUTION)})
+            self.load({'kinds': 'kinds.json'}, {'kinds.json': json.dumps(self.GAME_KINDS)})
 
 
 class HookModuleTest(TreeCase):
