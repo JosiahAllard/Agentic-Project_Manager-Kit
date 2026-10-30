@@ -47,6 +47,9 @@ kitlib.host.hookmain.dispatch.
   push(settings)       the hub's push-notification delivery (hosts.claude.adapter.peer.HubPush:
                        a session's peer pipe; docs/action-hub.md "Push notifications"). Optional:
                        tools/hub.py asks for it with getattr, so a host without it has none
+  agent_models()       the subagent model reader (hosts.claude.adapter.agent_models.models) that
+                       tools/verdict.py add checks --reviewer-model with. Optional: verdict.py
+                       asks for it with getattr, so a host without it checks nothing
   managed_settings_path()   Claude Code's machine-wide managed settings file,
                        %ProgramW6432% (else %ProgramFiles%)\\ClaudeCode\\managed-settings.json, which every
                        account on the machine loads (docs/machine-setup.md "Managed settings");
@@ -209,6 +212,13 @@ class ClaudeAdapter(object):
             from kitlib.launcher import settings as launcher_settings
             settings = launcher_settings.load()
         return peer.HubPush(settings)
+
+    def agent_models(self):
+        """The subagent model reader tools/verdict.py add checks --reviewer-model with:
+        hosts.claude.adapter.agent_models.models (agent id -> sorted models its transcripts show,
+        [] for an agent id with no transcript, None for an id that is not one)."""
+        from hosts.claude.adapter import agent_models
+        return agent_models.models
 
 
 def _agent_start(kit, payload, environ):

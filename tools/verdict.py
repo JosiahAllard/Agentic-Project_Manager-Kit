@@ -12,6 +12,12 @@
       refused the same way when it changes more lines than that (the larger of --range and the
       tip's diff from main as last fetched), or its size cannot be told
       (verdicts.self_review_size_why); a .kit.json that cannot be read is NOT DONE (exit 1).
+      Each --reviewer-id that is a subagent id of the host (its ADAPTER's optional
+      agent_models(); Claude: hosts.claude.adapter.agent_models) has its transcript read for the
+      models it ran on: one that is not --reviewer-model (`claude-haiku-5-5` for `opus`) prints
+      `REFUSED: ...` and an `Instead:` line (exit 2, nothing written; verdicts.model_mismatch_why); an
+      id with no transcript prints `NOTE: --reviewer-model <m> is not checked: ...` before QUEUED.
+      A session name, a self-review and a host with no reader (Codex) are not looked up.
   verdict.py carry --branch B [-C DIR]
       after a main sync of a queued branch: move B's verdict to B's head when every commit after
       the review is a conflict-free merge of main and B's own diff against main is the one
@@ -43,10 +49,13 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import _host                                                        # noqa: E402
 from kitlib import config as kconfig                              # noqa: E402
 from kitlib.gate import verdicts                                    # noqa: E402
 from kitlib.git import refs, repo                                  # noqa: E402
+from kitlib.host import registry                                    # noqa: E402
 
 DONE, NOT_DONE, USAGE, TIP_MISMATCH = 0, 1, 2, 3
 
@@ -106,6 +115,17 @@ def line(e):
                     + (['last=%s' % last[0]] if last else []))
 
 
+def transcript_reader(environ=None):
+    """The selected host's subagent model reader, from its ADAPTER's optional `agent_models()`
+    (docs/new-host.md; id -> sorted models, [] for an agent id with no transcript, None for an id
+    that is not one), or None when that host has none (Codex) or hosts.json cannot be read."""
+    try:
+        make = getattr(_host.adapter_module(environ=environ).ADAPTER, 'agent_models', None)
+    except (ImportError, AttributeError, registry.RegistryError):
+        return None
+    return make() if make is not None else None
+
+
 def main_as_fetched(root):
     """`(<remote>/<main_branch> as last fetched, None)`, or `(None, why)`; no network."""
     root = os.path.abspath(root)
@@ -159,8 +179,13 @@ def run(a, common_dir):
             return fail('NOT DONE', 'the kit configuration cannot be read: %s; nothing was queued'
                         % e, NOT_DONE)
         main, main_why = main_as_fetched(a.root) if cap is not None else (None, None)
+        seen = (verdicts.seen_models(entry, transcript_reader())
+                if not verdicts.check(entry, stored=False) else {})
         _, stored = verdicts.add(common_dir, entry, self_review_max_lines=cap, main=main,
-                                 main_why=main_why)
+                                 main_why=main_why, seen=seen)
+        for rid in sorted(r for r, models in seen.items() if not models):
+            print('NOTE: --reviewer-model %s is not checked: no transcript found for the reviewer '
+                  'id %s' % (stored['reviewer_model'], rid), flush=True)
         print('QUEUED %s %s' % (stored['branch'], stored['tip']), flush=True)
         return DONE
     if a.cmd == 'list':
@@ -198,7 +223,7 @@ def main(argv=None):
         return fail('NOT DONE', 'no git repository at %s: %s' % (root, why), NOT_DONE)
     try:
         return run(a, common_dir)
-    except verdicts.SelfReview as e:
+    except (verdicts.SelfReview, verdicts.ModelMismatch) as e:
         return fail('REFUSED', str(e), USAGE)
     except verdicts.BadEntry as e:
         p.print_usage(sys.stderr)
