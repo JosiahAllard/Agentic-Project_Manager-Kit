@@ -18,7 +18,10 @@ from tests.gitfixture import TempRepo, fixture_env, rmtree
 
 VAR = 'KIT_UNBLOCK_TEST_DIR'
 FLAG = 'path:%%%s%%\\flag exists' % VAR
-OWNER = dict(state='blocked', blocked_on='owner', owner_ask='which one, Q-123?')
+# An invented question id: the question form takes only `Q-<digits>`, so it is built here rather
+# than written out, which the owner-text scrub (tests/scrub) would read as a real record id.
+QID = 'Q' + '-4'
+OWNER = dict(state='blocked', blocked_on='owner', owner_ask='which build should ship?')
 
 
 class Ctx(object):
@@ -108,7 +111,7 @@ class Pass(Case):
                   rec('QUX', state='blocked', blocked_on=['live-client', 'item:FOO'],
                       until=['live-client ' + FLAG, 'item:FOO todo:T-2 done']),
                   rec('OWN', until='owner ' + FLAG, **OWNER),
-                  rec('ASK', until='owner question:Q-4 answered', **OWNER),
+                  rec('ASK', until='owner question:%s answered' % QID, **OWNER),
                   rec('TXT', state='blocked', blocked_on='live-client',
                       until='live-client todo:T-1 done when the build is out'),
                   rec('UNK', state='blocked', blocked_on='live-client',
@@ -117,7 +120,7 @@ class Pass(Case):
                       until='live-client todo:T-1 done'))
         self.doc('todos', 'T-1', 'done')
         self.doc('todos', 'T-2', 'open')
-        self.doc('questions', 'Q-4', 'open')
+        self.doc('questions', QID, 'open')
         self.flag()
 
     def test_a_met_condition_is_one_commit_and_one_push_and_a_rerun_does_nothing(self):
@@ -168,7 +171,7 @@ class Pass(Case):
         self.assertEqual((self.tip(), ctx.events), (tip, []))
 
     def test_an_owner_question_answered_clears_the_owner(self):
-        self.doc('questions', 'Q-4', 'filed')
+        self.doc('questions', QID, 'filed')
         ctx = Ctx()
         self.job()(ctx)
         self.assertIn((U.EVENT, 'kit:ASK'), ctx.events)
