@@ -26,6 +26,7 @@ from kitlib import kitroot, pmstart, sessionmark
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
 from kitlib.pmstart import configcheck
+from kitlib.coordinatorstart import parts
 from kitlib.records import landing
 
 KEY = "coordinator_start"
@@ -283,8 +284,8 @@ def others(entry, procs, env, pid):
 
 def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read, kit=None,
             pid=None, pm_cfg=None, live=True, machine_cfg=None,
-            config_lines=None):
-    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the live checks (the ledger check prints only with `ledger_dir` set, and nothing when the machine config cannot be read). `machine_cfg`: the machine config (default kitlib.config.user.user_config(), read by the ledger check). `config_lines`: the machine config check, first of the live checks (default kitlib.pmstart.configcheck.lines)."""
+            config_lines=None, run_loose=None, deadline=parts.DEADLINE):
+    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the live checks (the ledger check prints only with `ledger_dir` set, and nothing when the machine config cannot be read). `machine_cfg`: the machine config (default kitlib.config.user.user_config(), read by the ledger check). `config_lines`: the machine config check, first of the live checks (default kitlib.pmstart.configcheck.lines). Last come the read-only start parts (kitlib.coordinatorstart.parts: state note tail, hub pending, backlog next, stale worktrees), run in parallel under one `deadline`; `run_loose` runs the worktree classify (default: `run` when it was passed, else stdout whatever the exit code)."""
     env = os.environ if env is None else env
     lines = [str(t) for t in cfg.get("standing") or []]
     if cfg.get("eng_filing") is True:
@@ -358,7 +359,39 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
                 lines.append("could not check %s: %s" % (name, str(e).strip("'\"")))
             except Exception as e:
                 lines.append("could not check %s: %s: %s" % (name, type(e).__name__, e))
+        lines.extend(_start_parts(cfg, box, entry_once, env, run, run_loose, kit, deadline))
     return "Coordinator session start:\n" + "\n".join("- " + l for l in lines)
+
+
+def _start_parts(cfg, box, entry_once, env, run, run_loose, kit, deadline):
+    """The lines of the read-only start parts. The sessions entry is read once here (the checks
+    above cached it or its failure), then the parts run in threads."""
+    try:
+        entry = entry_once()
+    except Exception:
+        entry = None
+    key = None
+    if entry is not None and "s" in box and not box["e"][1]:
+        key = next((k for k, v in box["s"].items() if v is entry and not str(k).startswith("_")), None)
+    if run_loose is None:
+        run_loose = parts.run_loose if run is _run else run
+
+    def need():
+        if entry is None:
+            raise KeyError("no sessions entry for this repo")
+        return "%s/%s" % ((cfg.get("repos_root") or "").replace("\\", "/").rstrip("/"), entry.get("repo"))
+
+    slugs = [s for s in (ledger_name(entry.get("repo")) if entry else None, key,
+                         str(entry.get("stem") or "")[:-len(parts.FOLDER_SUFFIX)]
+                         if entry and str(entry.get("stem") or "").endswith(parts.FOLDER_SUFFIX) else None) if s]
+    jobs = [("state note", lambda: parts.state_note(env, env.get(NAME_VAR), slugs)),
+            ("hub pending", lambda: parts.hub_pending(key, run, kit)),
+            ("backlog next", lambda: parts.backlog_next(need(), key, run, kit)),
+            ("worktrees", lambda: parts.worktrees(need(), run_loose, kit))]
+    out = []
+    for _, lines in parts.run_all(jobs, deadline):
+        out.extend(lines)
+    return out
 
 
 def render(env=None, path=None, **kw):
