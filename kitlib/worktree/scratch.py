@@ -255,17 +255,39 @@ def reachable(ctx, path, head, logged):
     return ref
 
 
+# One git command line per batch of paths: Windows refuses a command line over 32767 characters
+# (WinError 206), so a batch stays well under it.
+BATCH_CHARS = 24000
+BATCH_PATHS = 500
+
+
+def _batches(rels):
+    batch, size = [], 0
+    for rel in rels:
+        cost = len(rel) + 3  # the path, its quotes and a space
+        if batch and (size + cost > BATCH_CHARS or len(batch) >= BATCH_PATHS):
+            yield batch
+            batch, size = [], 0
+        batch.append(rel)
+        size += cost
+    if batch:
+        yield batch
+
+
 def hashes(tree, rels):
     """`({rel: blob id of the file as git would store it}, None)` or `(None, why)`."""
     if not rels:
         return {}, None
-    # Paths after `--` are files, never options; hash-object applies the path's filters (autocrlf).
-    args = ('hash-object', '--') + tuple(rels)
-    rc, out, err = remove.git(tree, *args)
-    got = out.splitlines()
-    if rc != 0 or len(got) != len(rels):
-        return None, remove.failure(args[:1], rc, err)
-    return dict(zip(rels, (g.strip() for g in got))), None
+    result = {}
+    for batch in _batches(rels):
+        # Paths after `--` are files, never options; hash-object applies the path's filters (autocrlf).
+        args = ('hash-object', '--') + tuple(batch)
+        rc, out, err = remove.git(tree, *args)
+        got = out.splitlines()
+        if rc != 0 or len(got) != len(batch):
+            return None, remove.failure(args[:1], rc, err)
+        result.update(zip(batch, (g.strip() for g in got)))
+    return result, None
 
 
 def staged(tree, rels):
