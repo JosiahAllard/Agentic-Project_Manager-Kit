@@ -334,7 +334,7 @@ class StepTest(InstallCase):
         self.assertIn('also names the hand-made pm-kit-local copy: Codex loads both', self.text())
         self.assertIn('codex plugin remove pm-kit@pm-kit-local', self.text())
 
-    def test_only_the_old_copy_gets_the_switch_steps_then_the_mirror(self):
+    def test_only_the_old_copy_gets_the_switch_steps_and_nothing_else(self):
         write(os.path.join(self.home, 'config.toml'), "[marketplaces.pm-kit-local]\nsource = 'C:\\\\nowhere'\n")
         self.step()
         lines = self.lines
@@ -343,7 +343,7 @@ class StepTest(InstallCase):
                                       'codex:   2. codex plugin marketplace remove pm-kit-local',
                                       'codex:   3. codex plugin marketplace add "%s"' % self.root,
                                       'codex:   4. codex plugin add pm-kit@pm-kit'])
-        self.assertIn('codex: refused, nothing written', self.text())       # the mirror's own line
+        self.assertEqual(len(lines), 6, lines)              # the old copy is no longer mirrored
 
     def test_no_pm_kit_marketplace_names_the_install_steps(self):
         write(os.path.join(self.home, 'config.toml'), "model = 'x'\n")

@@ -1420,5 +1420,39 @@ class AutoDoneTest(FiledPushCase):
         self.assert_not_done(qid)       # a standing rule is the PM's to log
 
 
+class UnblockedPushTest(PushCase):
+    """The unblock-conditions job's `unblocked` event (kitlib.hubjobs.unblock_conditions): owed
+    once per record, so two in one round both reach the PM, each saying what it is."""
+
+    def jobs_sent(self):
+        return [t for t in self.push.to(push.PM_KEY) if t.startswith('[hub push] job ')]
+
+    def test_two_unblocks_are_two_pushes_and_a_failing_one_beside_them(self):
+        self.push.states[push.PM_KEY] = push.NO_SESSION
+        self.worker.job_event('unblock-conditions', 'unblocked', 'kit:FOO')
+        self.worker.job_event('unblock-conditions', 'unblocked', 'kit:BAR')
+        self.worker.job_event('unblock-conditions', 'failing')
+        self.push.states[push.PM_KEY] = push.WRITTEN
+        self.worker.send_jobs()
+        heads = sorted(t.splitlines()[0] for t in self.jobs_sent())
+        self.assertEqual(heads, [
+            '[hub push] job unblock-conditions failing route:pm attempt:1',
+            '[hub push] job unblock-conditions unblocked detail:kit:BAR route:pm attempt:1',
+            '[hub push] job unblock-conditions unblocked detail:kit:FOO route:pm attempt:1'])
+        said = [t for t in self.jobs_sent() if ' unblocked ' in t.splitlines()[0]]
+        for text in said:
+            self.assertIn('is unblocked', text)
+            self.assertNotIn('jobs.unblock-conditions', text)
+        self.t += push.SCHEDULE_S[-1]
+        self.worker.send_jobs()
+        self.assertEqual(len(self.jobs_sent()), 3, 'all written: nothing owed')
+
+    def test_the_same_record_again_is_one_push(self):
+        self.worker.job_event('unblock-conditions', 'unblocked', 'kit:FOO')
+        self.worker.job_event('unblock-conditions', 'unblocked', 'kit:FOO')
+        self.worker.send_jobs()
+        self.assertEqual(len(self.jobs_sent()), 1)
+
+
 if __name__ == '__main__':
     unittest.main()

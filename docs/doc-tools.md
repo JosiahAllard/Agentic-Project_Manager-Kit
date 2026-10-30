@@ -63,7 +63,7 @@ python tools/doc_index.py [-C DIR] [--find WORD... | --section HEADING [--doc PA
 `kitlib.docs.index.run` behaves as follows:
 
 - **No mode.** It checks the index at `--head`: every tracked `.md` but a `doc_budget.retired_paths` one is named on an entry line of the index (`listing_misses`; a glob entry covers what it matches, a path in prose or a table header names nothing), shard indexes (`doc_budget.shard_indexes`), index blocks, and a `kw:` field on every entry. The index is hand-written, so a branch that adds a `.md` adds its entry line in the same commit. The doc index is opt-in (docs/multi-host-plan.md decision 26), and the index file is the opt-in, with or without a `.kit.json`; `doc_index.enabled` false is the explicit opt-out, skipping the listing check silently. With no index file at `--head` the listing check is skipped, and the run says so in one line before its verdict (`doc_index: no docs/INDEX.md in this repository, so the listing check is skipped ...`); with `--config-ref`, an index the ref has still counts, so a branch that deletes its base's index fails ("the index is missing") rather than skipping. The other checks run as before.
-- **`--find`.** Prints the index entries for a topic. The match mode is set by `doc_index.find_match`.
+- **`--find`.** Prints the index entries for a topic. The match mode is set by `doc_index.find_match`. With no match it prints `Nearest keywords:` and the 10 index keywords most like the query (`difflib` ratio, `index.nearest_keywords`), exit 1.
 - **`--section`.** Prints one section of any tracked `.md`, found by its heading.
 - **`--tools`.** Prints the index's `## Tools` section.
 - **`--stale`.** A report of state docs (`doc_budget.state_docs`) not touched for `--days`, or `stale_days`, default 14. It never fails.
@@ -82,15 +82,16 @@ Exit codes:
 ## codemap
 
 ```
-python tools/codemap.py [-C DIR] [--dir DIR | --find NAME | --file PATH]
+python tools/codemap.py [-C DIR] [--dir DIR | --find NAME | --file PATH | --symbol NAME [PATH]]
 ```
 
-`kitlib.docs.codemap.run` has four modes:
+`kitlib.docs.codemap.run` has five modes:
 
 - **No option.** One row per source folder.
 - **`--dir`.** That folder's files and their types.
 - **`--find`.** Types (by substring) and members (by exact name).
 - **`--file`.** One file's types and members, with line numbers.
+- **`--symbol`.** One Python function or class (`Class.method` too) as numbered source; PATH narrows it. Not found or ambiguous: exit 1.
 
 It reads tracked and untracked-but-not-ignored files (`git ls-files -co --exclude-standard`). Exit 0, or 2 when git cannot list the files. There are no `.kit.json` keys.
 

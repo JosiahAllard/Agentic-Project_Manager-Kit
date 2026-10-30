@@ -84,6 +84,13 @@ class Sort(unittest.TestCase):
         self.assertEqual(policy.sort('block', {'on': ['BAR']}, free), ['block'])
         self.assertEqual(policy.sort('block', {'on': ['owner']}, free), ['block-owner'])
         self.assertEqual(policy.sort('block', {'owner_ask': True}, free), ['block-owner'])
+        # `--until` on the owner schedules the owner's hold to end: the unblock-owner row too
+        self.assertEqual(policy.sort('block', {'on': ['owner'], 'until': True}, held),
+                         ['block-owner', 'unblock-owner'])
+        self.assertEqual(policy.sort('block', {'on': [policy.UNREAD], 'until': True}, free),
+                         ['unblock-owner'])
+        self.assertEqual(policy.sort('block', {'on': ['BAR'], 'until': True}, free), ['block'])
+        self.assertIn('unblock-owner', policy.sort('block', {'unknown': True, 'until': True}))
         self.assertEqual(policy.sort('unblock', {}, None), ['unblock-owner'])
         self.assertEqual(policy.sort('unblock', {'on': ['owner']}, free), ['unblock-owner'])
         self.assertEqual(policy.sort('unblock', {'on': ['BAR']}, None), ['block'])
@@ -322,6 +329,24 @@ class CliRole(unittest.TestCase):
         self.assertIn('unlisted (only risk none)', out)
         self.assertIn('FOO', self.ok('plain', 'show', 'FOO'))
         self.assertIn('scope:', self.ok(None, 'show', 'FOO'))
+
+    def test_a_coordinator_may_not_set_the_end_of_an_owner_hold(self):
+        # KIT-UNBLOCK-CONDITIONS review: a lead may block on the owner, never schedule that hold
+        # to end (the hub job would clear it under Session: hub-condition)
+        self.seed()
+        self.ok('coordinator', 'block', 'FOO', '--on', 'owner', '--owner-ask', 'which one, Q-101?')
+        before = self.ok(None, 'show', 'FOO')
+        # the record already holds the owner's ask, so no new one is needed: the role decides
+        out = self.refused('coordinator', 'block', 'FOO', '--on', 'owner', '--reason',
+                           'until T-101 is done', '--until', 'todo:T-101 done')
+        self.assertIn('`unblock-owner`', out)
+        out = self.refused('coordinator', 'block', 'FOO', '--on', 'owner', '--owner-ask',
+                           'which one now, Q-102?', '--until', 'question:Q-102 answered')
+        self.assertIn('`unblock-owner`', out)
+        self.assertEqual(self.ok(None, 'show', 'FOO'), before)
+        self.ok('pm', 'block', 'FOO', '--on', 'owner', '--reason', 'until T-101 is done',
+                '--until', 'todo:T-101 done')
+        self.assertIn('until: owner todo:T-101 done', self.ok(None, 'show', 'FOO'))
 
     def test_catch_up_apply_is_for_the_leads_and_the_plain_listing_for_everyone(self):
         self.seed()

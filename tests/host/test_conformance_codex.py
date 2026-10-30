@@ -11,7 +11,7 @@ from tests.host.test_leaks import ALLOWED
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_ROOT = '${PLUGIN_ROOT}/'
-SHELL = 'hosts/codex/shell/'
+SHELL = ''                      # the plugin root is the export root, so ${PLUGIN_ROOT}/ maps to the kit root
 
 
 def recorded_request(path=os.path.join(HERE, 'codex', 'sessions.json')):
@@ -58,7 +58,7 @@ class CodexConformance(conformance.HostConformance, bridge_conformance.mixin('co
 
     def hook_scripts(self, manifests):
         """hooks.json's hooks: every command runs ${PLUGIN_ROOT}/boot/hook.py codex <event>, the
-        plugin's copy of the kit's one entry."""
+        kit's one entry, in the export Codex installs."""
         from hosts.codex.adapter import content
         out = []
         for event, groups in json.loads(manifests[content.HOOKS_REL])['hooks'].items():

@@ -60,6 +60,7 @@ import subprocess
 import sys
 
 from kitlib import kitroot
+from kitlib.preflight import paths
 from kitlib.config import ConfigError, load as load_config, load_at
 from kitlib.config import owner as ownermod
 from kitlib.git import cmd as gitcmd
@@ -533,6 +534,9 @@ def index_line(root, base, branch, base_cfg):
 def pack(path, branch, base=None, diff=None):
     """The whole command for the checkout `path` is in. Returns an Outcome; never prints."""
     lines = []
+    fixed = paths.mangled_dir(path)
+    if fixed:
+        return Outcome(USAGE, ['%s: refused: %s' % (TOOL, paths.mangled_message(path, fixed))])
     try:
         return _pack(lines, path, branch, base, diff)
     except Stop as stop:

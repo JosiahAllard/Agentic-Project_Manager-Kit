@@ -155,8 +155,8 @@ format:
 Roles and skills are written **once** in `content/`. A script (`tools/render_content.py`, logic
 in `kitlib/content`) asks every host adapter to write its own files from it. The written-out
 files are the "generated files":
-- `hosts/<name>/shell/agents/*`
-- `hosts/codex/shell/skills/**` (Claude loads `content/skills/` itself; decision 29)
+- `hosts/<name>/shell/agents/*` (skills are not rendered: every host loads `content/skills/`
+  itself; decision 29)
 - the host's plugin manifest, which carries the one version (decision 6)
 
 `AGENTS.md` and `CLAUDE.md` are hand-written, not rendered.

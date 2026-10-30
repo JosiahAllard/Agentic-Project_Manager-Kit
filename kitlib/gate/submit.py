@@ -24,6 +24,12 @@
   abandon   the detached tool that cannot read its payload (at the path submit names it)
             finishes the submission's records `refused`, found by the run_id in the payload's name
   redirect_output  the detached tool's stdout and stderr, appended to the output file
+  follow    `land.py --wait-result --submit`, once submit gave OK: wait for the batch's last
+            land record to be final (result.wait), then up to EXIT_WAIT_S for the landing's
+            process to exit, and give the outcome's own lines from the output file (those after
+            its last `result record:` line, at most BLOCK_MAX), then each branch's RESULT line
+            and record (result.result_lines, as gate.py wait-result gives them), the code the
+            last record's
 
 The detached tool is started the way `machine_lock.py run --detach` starts its wrapper
 (kitlib.lock.detach, "Why WMI" and "Why the carrier"): `create` asks Win32_Process.Create, through
@@ -111,6 +117,13 @@ LANDED = ('pass', 'landed-ungated')    # landed-ungated: an old record's (exit 9
 # kitlib/config/schema.py), so the age alone never reaches a landing still queued; prune also
 # keeps every run a land record has running whatever its age.
 KEEP_S = 14 * 86400
+# follow: how long, once the last record is final, it waits for the landing's process to exit
+# (after its records it appends the land ledger and posts the hub feed, 3 s an event, then prints
+# its outcome lines), and the most outcome lines it gives from the output file.
+EXIT_WAIT_S = 60.0
+EXIT_POLL_S = 0.25
+BLOCK_MAX = 60
+RECORD_LINE = 'result record: '     # result.Run's progress line: the outcome's lines follow the last
 
 
 class SubmitError(Exception):
@@ -486,6 +499,80 @@ def review_lines(root, branches, tips):
         lines.append('REVIEW %s %s: %s by %s/%s (%s)%s' % (
             b, e['tip'], e['verdict'], e['reviewer'], e['reviewer_model'], e['reviewer_id'], more))
     return lines
+
+
+def follow(root, branches, tips, output, exit_wait_s=EXIT_WAIT_S, poll_s=result.POLL_S,
+           clock=time.monotonic, sleep=time.sleep, alive=None):
+    """The landing `submit` started for `branches` at `tips`, followed to its end, for
+    `land.py --wait-result --submit`: an Outcome whose lines are a WARNING when its process had
+    not exited `exit_wait_s` after the last record went final (the lines are then what the
+    output held), the outcome's lines from `output` (outcome_block), then result.result_lines
+    for each branch in batch order; its code the last record's code, FAILED when that is null
+    (error). The wait has no timeout of its own: the landing bounds it ("landing".wait_s, then
+    its run), and a record whose process died is finished `error` (result.wait). Each branch
+    before the last is read once, its record final before the last's (Lander.run's order); one
+    that is not is a WARNING with its wait-result command. Ctrl+C is raised to the caller: the
+    landing goes on."""
+    branches, tips = list(branches), list(tips)
+    alive = alive or process.alive
+    try:
+        last, _ = result.wait(root, branches[-1], tips[-1], 'land', poll_s=poll_s, clock=clock,
+                              sleep=sleep)
+    except result.ResultError as e:
+        return G.Outcome(G.FAILED, ['WARNING: the land record of %s cannot be waited for: %s; '
+                                    'the landing goes on' % (branches[-1], e)])
+    lines = []
+    pid, ctime = last.get('pid'), last.get('ctime')
+    if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
+        end = clock() + max(0.0, exit_wait_s)
+        while True:
+            try:
+                up = alive(pid, ctime if isinstance(ctime, int) else None)
+            except Exception:   # noqa: BLE001 - not surely running: read what the output holds
+                up = False
+            if not up:
+                break
+            if clock() >= end:
+                lines.append('WARNING: the landing process (pid %d) had not exited %d s after its '
+                             'result record; the lines below are what its output %s held then'
+                             % (pid, exit_wait_s, output))
+                break
+            sleep(max(0.0, min(EXIT_POLL_S, end - clock())))
+    lines += outcome_block(output)
+    for b, t in zip(branches[:-1], tips[:-1]):
+        try:
+            rec, _ = result.wait(root, b, t, 'land', timeout_s=0, clock=clock, sleep=sleep)
+        except result.ResultError:
+            rec = None
+        if rec is None:
+            lines.append('WARNING: no final land record of %s at %s yet; wait for it with '
+                         'gate.py wait-result %s --tip %s --kind land' % (b, t[:10], b, t))
+            continue
+        lines += result.result_lines(rec, 'land', b)
+    lines += result.result_lines(last, 'land', branches[-1])
+    code = last.get('code')
+    if not isinstance(code, int) or isinstance(code, bool):
+        code = G.FAILED
+    return G.Outcome(code, lines)
+
+
+def outcome_block(output, most=BLOCK_MAX):
+    """The landing's own outcome lines in its output file `output`: those after the last
+    `result record:` line (Lander.run says each record it finishes, then ends with its outcome's
+    lines: cleanup, LANDED or NOT LANDED, closed, WARNING, STUCK's steps), at most `most` (the
+    last, after a line saying how many were left out); every line when it has none. A file that
+    cannot be read is one WARNING line. Read only."""
+    try:
+        with open(output, encoding='utf-8', errors='replace') as f:
+            got = f.read().splitlines()
+    except (OSError, TypeError, ValueError) as e:
+        return ['WARNING: the landing\'s output %s cannot be read: %s' % (output, e)]
+    at = max([i for i, line in enumerate(got) if line.startswith(RECORD_LINE)] or [-1])
+    got = got[at + 1:]
+    if len(got) > most:
+        return ['... %d earlier line(s) of the landing\'s output: %s' % (len(got) - most, output)] \
+            + got[-most:]
+    return got
 
 
 def _landing(carrier, landing_of=None):

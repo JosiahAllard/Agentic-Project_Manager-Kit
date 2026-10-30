@@ -2,10 +2,11 @@
 base, what is dirty, the docs budget, strays in the main checkout, the machine and the lock, and
 the kit commands to run next (docs/preflight.md).
 
-  preflight.py [-C DIR] [--fetch] [--base REV] [--board [--write-state]]
+  preflight.py [-C DIR] [--fetch] [--base REV] [--full] [--board [--write-state]]
 
--C names the checkout to report on (default: here). --fetch fetches the remote first. --base
-names the base (any revision; default `.kit.json` "repo".main_branch when set, else main when it
+By default it prints the repo, branch and base lines, the kit folder and any failing or warning
+check; --full prints every line. -C names the checkout to report on (default: here). --fetch
+fetches the remote first. --base names the base (any revision; default `.kit.json` "repo".main_branch when set, else main when it
 exists, else master). --board adds the coordinator's board after the report: a row per worktree
 against the base and the stale-doc line. --write-state (only with --board) rewrites the board
 block of the coordinator's state file (docs/preflight.md "--board"). Exit 0 with the report; 2 on
@@ -24,7 +25,7 @@ sys.path.insert(0, KIT)
 
 from kitlib.config import ConfigError, load as load_config        # noqa: E402
 from kitlib.git import refs, repo                                   # noqa: E402
-from kitlib.preflight import board, report, state                  # noqa: E402
+from kitlib.preflight import board, paths, report, state           # noqa: E402
 
 USAGE = 2
 
@@ -46,6 +47,9 @@ def build_parser():
                    help='the base revision (default: "repo".main_branch if set, else main if it '
                         'exists, else master; rows measured against <remote>/<base> when '
                         'the two differ)')
+    p.add_argument('--full', action='store_true',
+                   help='print every check (default: the repo, branch and base lines, the kit folder '
+                        'and any failing or warning check)')
     p.add_argument('--board', action='store_true',
                    help='also print the coordinator\'s board: a row per worktree, the stale-doc line')
     p.add_argument('--write-state', action='store_true',
@@ -73,6 +77,9 @@ def main(argv=None, lock_reader=None, home=None):
         why = refs.bad_rev(a.base)
         if why:
             p.error('--base: %s' % why)
+    fixed = paths.mangled_dir(a.dir)
+    if fixed:
+        p.error(paths.mangled_message(a.dir, fixed))
     top, why = repo.toplevel(os.path.abspath(a.dir))
     if top is None:
         p.error('-C: %s' % why)
@@ -85,17 +92,18 @@ def main(argv=None, lock_reader=None, home=None):
             board_lines = board.lines(top, cfg, KIT, base=a.base)
             rel = board.state_file(cfg)
     except ConfigError as e:
-        print_safe('preflight: refused: kit configuration: %s' % e)
+        print_safe(paths.forward('preflight: refused: kit configuration: %s' % e))
         return USAGE
-    for line in lines + (board_lines or []):
-        print_safe(line)
+    shown = lines if a.full else report.brief(lines, KIT)
+    for line in shown + (board_lines or []):
+        print_safe(paths.forward(line, top))
     if a.write_state:
         where, why = state.path(repo.main_checkout_toplevel(top) or top, rel)
         if where is None:
             print_safe('preflight: refused: %s' % why)
             return USAGE
         size = state.write(where, time.strftime('%Y-%m-%d %H:%M'), '\n'.join(board.state_lines(lines, board_lines)))
-        print_safe('state written: %s (%d bytes)' % (where, size))
+        print_safe(paths.forward('state written: %s (%d bytes)' % (where, size), where))
     return 0
 
 

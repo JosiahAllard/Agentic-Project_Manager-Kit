@@ -13,11 +13,12 @@ from kitlib import kitroot
 from kitlib.git import cmd, refs
 from kitlib import machinepaths
 
+from . import conditions as condmod
 from . import offer as omod
 from . import policy
 from . import record as rmod
 from . import scope as smod
-from .errors import Failure, NotFound, Refusal, Usage
+from .errors import Ended, Failure, NotFound, Refusal, Usage
 from .store import PLAIN_ID, Change, add_plan_note, id_refusal
 
 MIN_REASON = 12
@@ -39,6 +40,7 @@ WRITTEN_BY = {
               '`clear-review ID --reason T`',
     'answer': 'the Action Hub, filing the owner\'s answer to a question bound to the record '
               '(the library\'s `plan_answer`)',
+    'until': '`block ID --on M --until "<condition>"`; `unblock --on M` drops it',
 }
 # Keys no verb writes any more: an owner gate is a role (kitlib/backlog/roles.py), not a cited
 # id. A record that carries one keeps it until `set ID --unset K` clears it (a price move drops
@@ -119,9 +121,13 @@ def require(snap, rid):
     return rec
 
 
+_ENDS = {'closes': 'closed', 'retires': 'retired', 'deletes': 'deleted'}
+
+
 def require_shown(snap, ctx, rid):
-    """require() for `show`: a missing id's NotFound also says which store commit removed it
-    (sha, date, session, subject; never an author name), or that none ever did. A main store's
+    """require() for `show`: a missing id says which store commit removed it (closed, retired or
+    deleted; sha, date, session, subject, the reason; never an author name) as Ended, exit 0;
+    NotFound (exit 1) stays for an id no commit removed, or none that can be read. A main store's
     record whose file HEAD tracks and the worktree no longer holds says so (closed or retired
     here - MainBackend writes commit nothing - or removed by hand). An id that is
     not plain (a glob or path character) is not looked up, and a history git cannot read (an
@@ -130,6 +136,7 @@ def require_shown(snap, ctx, rid):
     if rec is not None:
         return rec
     plain = 'no record with `id: %s` in %s' % (rid, snap.where)
+    gone_in = '%s is no longer in %s' % (rid, snap.where)
     if not PLAIN_ID.match(rid):
         raise NotFound('%s\n  history not searched: `%s` is not a plain id' % (plain, rid))
     try:
@@ -138,18 +145,22 @@ def require_shown(snap, ctx, rid):
     except Failure as exc:
         raise NotFound('%s\n  the store\'s history could not be read: %s' % (plain, exc))
     if pending:
-        then = ('its file is tracked at HEAD but missing from this worktree (closed or retired '
-                'here, or removed by hand); no commit names it yet')
-    elif gone is None:
-        then = 'no commit in the store\'s history removed it: the id is unknown'
-    else:
-        then = 'removed by %s on %s (session %s): %s' % (gone.sha, gone.when, gone.session or '-',
-                                                       gone.subject)
-    raise NotFound('%s\n  %s' % (plain, then))
+        raise Ended('%s\n  its file is tracked at HEAD but missing from this worktree (closed or '
+                    'retired here, or removed by hand); no commit names it yet' % gone_in)
+    if gone is None:
+        raise NotFound('%s\n  no commit in the store\'s history removed it: the id is unknown'
+                       % plain)
+    how = _ENDS.get(gone.subject.split(' ', 1)[0], 'removed')
+    said = '%s\n  %s by %s on %s (session %s): %s' % (gone_in, how, gone.sha, gone.when,
+                                                   gone.session or '-', gone.subject)
+    why = re.match(r'(?:closes|retires|deletes) %s: (.+)$' % re.escape(rid), gone.subject)
+    raise Ended(said + ('\n  reason: %s' % why.group(1) if why else ''))
 
 
 def _text(pairs, body):
-    return rmod.render(pairs, body)
+    """The record text of `pairs` and `body`. An `until` line whose member left `blocked_on` is
+    dropped here (record.prune_until), so every write that clears a blocker drops its condition."""
+    return rmod.render(rmod.prune_until(pairs), body)
 
 
 def clears_owner_blocker(rec, after):
@@ -857,10 +868,17 @@ def plan_set(snap, ctx, rid, changes, unset=(), *, body=None, role_checked=False
 
 # --- block / unblock ------------------------------------------------------------------------------
 
-def plan_block(snap, ctx, rid, members, owner_ask=None, reason=None):
+def plan_block(snap, ctx, rid, members, owner_ask=None, reason=None, until=None,
+               role_checked=False):
     """`block` ADDS `members` to `blocked_on`, in order, after the blockers already there (one
     already present is not repeated); it never removes one, so it never releases the owner's hold:
     removing a blocker is `unblock --on`'s job.
+    `until`, when given, is the end condition of the one member (exactly one `--on`, a member with
+    no space in it), written as `until: <member> <condition>` and replacing that member's line;
+    kitlib/backlog/conditions.py names the conditions the Action Hub checks, and an `owner` member
+    takes only an owner event (a to-do or a question). An `until` on `owner` schedules the owner's
+    hold to end, so it is the `unblock-owner` row (policy.sort): without `role_checked` it refuses
+    (refuse_top).
     `reason`, when given, goes into the commit subject and onto one line appended to the body
     (`Blocked on M (date): T`), so `show` says why the record is held; no header key is written
     for it. A PULLED record is blocked only by whoever may stop its pull (stop_pull), and only
@@ -887,6 +905,21 @@ def plan_block(snap, ctx, rid, members, owner_ask=None, reason=None):
         raise Usage('`%s` cannot be blocked on itself' % rid)
     if 'owner' in members and not owner_ask and not rec.has('owner_ask'):
         raise Usage('blocking on the owner needs `--owner-ask "<the question>"`')
+    if until is not None:
+        until = ' '.join(until.split())
+        refuse_machine_paths('--until', until)
+        if not until:
+            raise Usage('`--until` needs the condition that ends the hold')
+        if len(members) != 1:
+            raise Usage('`--until` is the end condition of one blocker: give exactly one `--on`')
+        if len(members[0].split()) != 1:
+            raise Usage('`--until` needs a one-word member, and `--on %s` has a space in it'
+                        % members[0])
+        why = condmod.owner_error(members[0], until)
+        if why:
+            raise Usage('refused `--until %s`: %s' % (until, why))
+        if members[0] == 'owner' and not role_checked:
+            refuse_top(rid, 'block', ['unblock-owner'])
     stop = None
     if rec.get('state') == 'pulled':
         if reason is None:
@@ -910,12 +943,25 @@ def plan_block(snap, ctx, rid, members, owner_ask=None, reason=None):
     changes = [('state', ['blocked']), ('blocked_on', after)]
     if owner_ask:
         changes.append(('owner_ask', [owner_ask]))
+    # A member this block adds gets no `until` line it did not give: a line an older plugin left
+    # behind on a member it cleared would otherwise come live again.
+    fresh = [m for m in members if m not in old]
+    kept = [v for v in rec.all('until') if condmod.split(v)[0] not in fresh
+            and (until is None or condmod.split(v)[0] != members[0])]
+    if until is not None:
+        kept.append('%s %s' % (members[0], until))
+    if kept != rec.all('until'):
+        changes.append(('until', kept))
     if stop is not None:
         changes += [(k, []) for k in rmod.PULL_KEYS + rmod.PREEMPT_KEYS]
     pairs = rmod.apply_changes(rec.pairs(), changes)
     lines = ['BLOCKED %s on %s' % (rid, ', '.join(members))]
     if old:
         lines.append('  blocked_on: %s -> %s' % (', '.join(old), ', '.join(after)))
+    if until is not None:
+        lines.append('  until: %s %s%s' % (members[0], until, '' if condmod.parse(until) else
+                                           ' (free text: no program checks it; clear it with '
+                                           '`unblock --on %s`)' % members[0]))
     if stop is not None:
         lines += stop[1]
     subject = 'backlog: block %s on %s' % (rid, ', '.join(members))
@@ -979,6 +1025,35 @@ def plan_unblock(snap, ctx, rid, on=None, reason=None, role_checked=False):
         subject += '%s: %s' % (' from %s' % named if named else '', ' '.join(reason.split()))
     body = _append_line(rec.body, note) if note else rec.body
     return Change({rid: _text(pairs, body)}, subject, lines)
+
+
+CONDITION_MET = 'condition met: '      # the unblock reason plan_condition_met writes
+
+
+def plan_condition_met(snap, ctx, rid, member, cond):
+    """Clear blocker `member` of `rid` because its end condition `cond` is met: plan_unblock with
+    the reason `condition met: <cond>` (the commit subject). The caller checked the condition
+    (kitlib.hubjobs.unblock_conditions); this checks the record still holds it: `rid` blocked on
+    `member`, with the line `until: <member> <cond>`. When it does not (an unblock or a re-block
+    got there first), nothing is written, so a second run changes nothing. A condition that is
+    not one of conditions.py's forms is refused, and so is any but an owner event on `owner`:
+    only those clear the owner's hold (role_checked, the unblock-owner row: the owner's own act
+    ended it)."""
+    if condmod.parse(cond) is None:
+        raise Refusal('`%s`: `until: %s %s` is free text, which no program acts on; it is cleared '
+                      'by hand with `unblock --on %s`' % (rid, member, cond, member))
+    why = condmod.owner_error(member, cond)
+    if why:
+        raise Refusal('`%s`: %s' % (rid, why))
+    rec = require(snap, rid)
+    line = '%s %s' % (member, cond)
+    subject = 'backlog: unblock %s from %s: %s%s' % (rid, member, CONDITION_MET, cond)
+    if (rec.get('state') != 'blocked' or member not in rec.all('blocked_on')
+            or line not in rec.all('until')):
+        return Change({}, subject, ['%s no longer waits on `until: %s`: nothing to clear'
+                                    % (rid, line), '  (no change)'])
+    return plan_unblock(snap, ctx, rid, on=member, reason=CONDITION_MET + cond,
+                        role_checked=member == 'owner')
 
 
 # --- park / unpark -----------------------------------------------------------------------

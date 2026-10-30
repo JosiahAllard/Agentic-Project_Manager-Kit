@@ -168,5 +168,59 @@ class IntegerSizes(KindsTest):
         self.assertEqual(lines, ['a: 3 cores', 'b: 1 core', 'c: medium cpu'])
 
 
+class RepoKinds(KindsTest):
+    """A repository's own kinds (`.kit.json` "kinds"): read from its main checkout, only for a
+    name that is neither a kit kind nor a kit alias."""
+    HEAVY = {'cpu': 'heavy', 'gpu': 0, 'warn_min': 120, 'why': 'world graph'}
+
+    def setUp(self):
+        super().setUp()
+        from tests import gitfixture
+        self.repo = gitfixture.TempRepo(branch='main')
+        self.addCleanup(self.repo.cleanup)
+        self.kit({'kinds': {'graph-build': self.HEAVY}})
+        self.wt = self.repo.worktree('kinds')
+        self.table = {'a': {'cpu': 1, 'gpu': 0, 'share': False, 'warn_min': 60}}
+        self.path = self.write({'kinds': {'a': {'cpu': 1}}, 'aliases': {'x': {'to': 'a', 'why': 'w'}}})
+
+    def kit(self, data, root=None):
+        self.repo.write('.kit.json', data if isinstance(data, str) else json.dumps(data), root)
+
+    def test_a_worktree_reads_the_main_checkouts_entry_never_its_own(self):
+        """Red before: there was no repo kind at all. The worktree's own .kit.json says 2 cores
+        (an uncommitted edit an agent could make); the main checkout's says heavy."""
+        self.kit({'kinds': {'graph-build': dict(self.HEAVY, cpu=2)}}, self.wt)
+        want = {'cpu': 'heavy', 'gpu': 0, 'share': False, 'warn_min': 120}
+        self.assertEqual(kinds.repo_entry('graph-build', self.wt), want)
+        self.assertEqual(kinds.repo_entry('graph-build', self.repo.root), want)
+
+    def test_an_undeclared_name_or_no_work_tree_is_none(self):
+        self.assertIsNone(kinds.repo_entry('cpu-eval', self.wt))
+        self.assertIsNone(kinds.repo_entry('graph-build', self.dir))       # no git here
+
+    def test_a_main_checkout_kit_json_that_does_not_load_fails_closed(self):
+        self.kit('{')
+        with self.assertRaisesRegex(kinds.KindsError, 'repository kinds of .* cannot be read'):
+            kinds.repo_entry('graph-build', self.wt)
+
+    def test_with_repo_adds_the_repo_kind_to_a_copy(self):
+        got = kinds.with_repo(self.table, 'graph-build', self.wt, self.path)
+        self.assertEqual(got, dict(self.table, **{'graph-build': {
+            'cpu': 'heavy', 'gpu': 0, 'share': False, 'warn_min': 120}}))
+        self.assertNotIn('graph-build', self.table)
+        self.assertIs(kinds.with_repo(self.table, 'nope', self.wt, self.path), self.table)
+
+    def test_a_kit_kind_or_alias_wins_and_never_reads_the_kit_json(self):
+        """The kit wins a clash: a repo entry named like a kit kind or alias is ignored, and a
+        broken .kit.json cannot stop a kit kind from booking."""
+        self.kit({'kinds': {'a': self.HEAVY, 'x': self.HEAVY}})
+        for name in ('a', 'x'):
+            self.assertIs(kinds.with_repo(self.table, name, self.wt, self.path), self.table)
+        self.kit('{')
+        for name in ('a', 'x'):
+            self.assertIs(kinds.with_repo(self.table, name, self.wt, self.path), self.table)
+        self.assertIs(kinds.with_repo(self.table, 'graph-build', None, self.path), self.table)
+
+
 if __name__ == '__main__':
     unittest.main()

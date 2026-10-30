@@ -18,7 +18,7 @@ from kitlib.launcher.settings import LaunchError
 CREDENTIALS = '.credentials.json'
 USAGE_FILE = 'usage-status.json'
 WINDOWS = ('five_hour', 'seven_day')
-HEADROOM_LIMIT = 90      # deep and consultant launches refuse an account at or over this (the PM's headroom)
+HEADROOM_LIMIT = 95      # deep and consultant launches refuse an account at or over this % of either window, the band account picking also skips
 PICK_LIMIT = 95          # pick-account's default
 FRACTION = re.compile(r'\.\d{7,}')   # PowerShell ToString('o') writes 7 fraction digits
 
@@ -139,8 +139,8 @@ def check_headroom(settings, n, now, force, out, limit=HEADROOM_LIMIT):
         return
     msg = 'Account %s is at %s' % (n, ' and '.join(over))
     if not force:
-        raise LaunchError("%s; the last %d%% is the PM's headroom. Pick another account, wait for the "
-                          'reset, or pass --force.' % (msg, 100 - limit), out)
+        raise LaunchError("%s; it is at or over the %d%% limit. Pick another account, wait for the "
+                          'reset, or pass --force.' % (msg, limit), out)
     out.append('--force: starting on account %s anyway; it is at %s.' % (n, ' and '.join(over)))
 
 

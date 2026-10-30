@@ -269,6 +269,35 @@ class Refused(ScratchCase):
         self.assertKept(path, rc, out, 'boom')
 
 
+class HashBatches(ScratchCase):
+    def test_many_paths_are_hashed_in_several_git_calls(self):
+        path = self.scratch_tree()
+        rels = ['f%02d.txt' % i for i in range(12)]
+        for i, rel in enumerate(rels):
+            self.fx.write(rel, 'content %d\n' % i, root=path)
+        calls = []
+        real = remove.git
+
+        def spy(tree, *args):
+            calls.append(args)
+            return real(tree, *args)
+
+        with mock.patch.object(scratch, 'BATCH_CHARS', 40), mock.patch.object(remove, 'git', spy):
+            got, why = scratch.hashes(path, rels)
+        self.assertIsNone(why)
+        self.assertGreater(len(calls), 1)
+        self.assertEqual(sum(len(c) - 2 for c in calls), len(rels))
+        want = {rel: self.git('hash-object', '--', os.path.join(path, rel)) for rel in rels}
+        self.assertEqual(got, want)
+
+    def test_a_failing_batch_fails_the_whole_hash(self):
+        with mock.patch.object(scratch, 'BATCH_PATHS', 1), \
+                mock.patch.object(remove, 'git', return_value=(1, '', 'boom')):
+            got, why = scratch.hashes(self.repo, ['a', 'b'])
+        self.assertIsNone(got)
+        self.assertIn('boom', why)
+
+
 NEW_TEST = 'def test_new():\n    assert False\n'
 
 

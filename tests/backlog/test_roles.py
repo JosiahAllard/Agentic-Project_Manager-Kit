@@ -50,7 +50,8 @@ DESIGN = {
     'catch-up': ('medium', CPO, {}),
     'raw-write': ('high', (), {}),
 }
-VERBS = {'next', 'show', 'list', 'check', 'stale', 'landable', 'add', 'set', 'block', 'unblock',
+VERBS = {'next', 'show', 'list', 'check', 'stale', 'landable', 'find', 'add', 'set', 'block',
+         'unblock',
          'pull', 'release', 'close', 'retire', 'delete', 'clear-review', 'set-status', 'unpark',
          'retarget', 'migrate', 'catch-up'}
 # `uncite --apply` takes the retarget row; roles.py's row names it, so the owner and the PM may apply it.

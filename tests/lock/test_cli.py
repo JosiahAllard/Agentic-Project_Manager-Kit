@@ -496,5 +496,64 @@ class LoadNodes(CliBase):
         self.assertNotIn("--registry", self.tool.parser().format_help())
 
 
+class RepoKinds(CliBase):
+    """run and `hold agent` book a kind from the "kinds" section of the .kit.json in the main
+    checkout of the current directory (a worktree here)."""
+
+    def setUp(self):
+        super().setUp()
+        from tests import gitfixture
+        self.repo = gitfixture.TempRepo(branch="main")
+        self.addCleanup(self.repo.cleanup)
+        self.repo.write(".kit.json", json.dumps({"kinds": {"graph-build": {
+            "cpu": "heavy", "gpu": 0, "warn_min": 120, "why": "the world graph"}}}))
+        wt = self.repo.worktree("kinds")
+        here = os.getcwd()
+        self.addCleanup(os.chdir, here)
+        os.chdir(wt)
+
+    def records(self, folder, prefix):
+        d = self.store.path(folder)
+        return [self.store.read("%s/%s" % (folder, n))
+                for n in (os.listdir(d) if os.path.isdir(d) else []) if n.startswith(prefix)]
+
+    def test_run_books_a_repo_kind_at_its_size(self):
+        import datetime
+        from kitlib.lock import holds as hl
+        from kitlib.lock.store import utc_now
+        from .helpers import OWNER
+        now = utc_now()
+        hl.create(self.store, self.layout(), {"owner": "owner", "scope": "whole", "start": now,
+                                              "end": now + datetime.timedelta(hours=1)},
+                  OWNER, None)
+        code, _, err = self.call("run", "--kind", "graph-build", "--repo", "kit", "--slug", "t",
+                                 "--no-wait", cmd=[sys.executable, "-V"])
+        self.assertEqual(code, 11, err)             # sized and booked, then the owner hold refuses
+        [r] = self.records("ended", "r-")
+        self.assertEqual((r["kind"], r["need"]["cpu"]), ("graph-build", 6))
+
+    def test_an_unknown_kind_names_where_repo_kinds_are_read(self):
+        code, _, err = self.call("run", "--kind", "no-such-kind", "--repo", "kit", "--slug", "t",
+                                 cmd=[sys.executable, "-V"])
+        self.assertEqual(code, 2)
+        self.assertIn('"kinds" section of the .kit.json in the main checkout of', err)
+
+    def test_hold_agent_keeps_a_repo_kinds_slots(self):
+        code, out, err = self.call("hold", "agent", "--repo", "kit", "--slug", "t", "--kind",
+                                   "graph-build", "--for", "1h", agent=True)
+        self.assertEqual(code, 0, out + err)
+        [h] = self.records("holds", "h-")
+        self.assertEqual((h["kind"], len(h["slots"]["cpu"])), ("graph-build", 6))
+
+    def test_hold_agent_refuses_a_repo_kind_past_the_agent_cap(self):
+        self.repo.write(".kit.json", json.dumps({"kinds": {"big": {
+            "cpu": 7, "gpu": 0, "why": "too big"}}}))
+        code, out, err = self.call("hold", "agent", "--repo", "kit", "--slug", "t", "--kind",
+                                   "big", "--for", "1h", agent=True)
+        self.assertEqual(code, 10, out + err)
+        self.assertIn("more than the agent cap 6", out + err)
+        self.assertEqual(self.records("holds", "h-"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

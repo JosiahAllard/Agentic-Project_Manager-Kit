@@ -15,6 +15,9 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `backlog.code_main` matters where the store's checkout is on a branch that shares no history with the code, as the kit's pmdata store is (its `repo.main_branch` is `pmdata`): there `backlog.py add --found-on <branch>` (`plan_add` in `kitlib/backlog/plan.py`) finds no merge base and stops with an ERROR naming the key, until the PM sets it to the code's main branch. In the PM data worktree itself an unset key takes the main checkout's `repo.main_branch`, and the code main is read on the main checkout's `repo.remote` (`code_config` in `kitlib/backlog/pull_branch.py`, used by `open_store` in `kitlib/backlog/opener.py`; docs/backlog.md "The fold-in guard"). `--found-on none` needs no base.
 - Retired keys are still accepted and ignored, so an older install loads: `backlog` may still carry `retired_docs`, `rename_script` and `ledger_repo`, and `landing` may still carry `lanes` and `lock_file` (`RETIRED` in `kitlib/config/schema.py`); nothing reads them. A whole `ruling_cites` or `stubs` section is accepted the same way and dropped unchecked (`RETIRED_SECTIONS` there); any other unknown section still refuses.
 - A repo lists its own heavy programs in `heavy.programs`; the kit defaults are general tools only (godot, blender, dotnet, gradle). For example `{"program": "run_tests.bat", "kind": "test", "why": "runs the engine test suite"}`, `{"program": "graph_build*", "kind": "graph-build", "why": "rebuilds the graph"}` and `{"program": "local_model*", "kind": "local-ai", "unless_args": ["--help"], "why": "loads a model onto the gpu"}`.
+- A repo names its own run kinds in `kinds`, beside the kit's (kitlib/lock/kinds.json), when no kit kind fits a heavy run of its own. For example `{"kinds": {"graph-build": {"cpu": "heavy", "warn_min": 120, "why": "rebuilds the world graph"}}}`. `machine_lock.py run` and `hold agent` book it from any checkout of the repository; it is read from the main checkout's `.kit.json` only, and a kit kind or alias of the same name wins (docs/lock-api.md "Repository kinds"). Add the section only once every kit plugin folder in use has it: an older kit refuses an unknown section.
+
+Operating rule (the PM's, not an owner ruling): switch `landing.gate_once` off if more than 10% of 30 landings under it go red, or the landing lane is over 50% busy for a week. The red count is the `land-ledger.jsonl` lines in the gate result folder with `gate_once` true and a `fail` verdict, and the busy fraction is the `held_s` of the machine lock's history runs with `priority` `land` (docs/gate.md "Result record", "Land ledger"; docs/lock-api.md "Reads"); turning it off is an owner edit to `.kit.json`.
 
 ## With no file
 
@@ -55,6 +58,12 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `roles.<role>.edit_main_checkout` (bool): may edit files in a main checkout; unset: the base role (main: true, any other: false)
 - `roles.<role>.mode` (controller|write|read|test|lander): the role policy this role is held to, over its role file's `mode` (docs/guard.md "Role policy"); unset: the role file's, else none
 - `roles.<role>.why` (string): the ruling that grants it
+- `kinds` (map kind -> {cpu, gpu, share, warn_min, why}): the repository's own run kinds, beside the kit's (kitlib/lock/kinds.json): a run from one of its checkouts may book one by name (docs/lock-api.md "Repository kinds"); a kit kind or kit alias of the same name wins, and the entry is ignored; read from the main checkout only
+- `kinds.<kind>.cpu` (int >= 1 or medium|heavy): its size: a whole number of cpu slots (at most the layout's agent_cap, checked when a run books), or medium or heavy
+- `kinds.<kind>.gpu` (0|pool, default 0): 0, or "pool": the whole gpu pool
+- `kinds.<kind>.share` (bool, default false): with gpu "pool": a run may take one gpu slot instead (--gpu-share training)
+- `kinds.<kind>.warn_min` (int >= 1, default 60): minutes a run may hold its slots before it is warned of
+- `kinds.<kind>.why` (string): the reason for its size, a ruling or a measurement
 - `backlog.store` (ref|branch|main or repo path, default "ref"): the record store: ref (refs/backlog/main), branch (the backlog branch), main (docs/backlog) or a folder (docs/backlog.md); the default ref is read-only, so a repository that writes records names its store
 - `backlog.phases` (list of string, default []): phase names in order
 - `backlog.id_grammar` (upper|mixed, default "upper"): item id spelling

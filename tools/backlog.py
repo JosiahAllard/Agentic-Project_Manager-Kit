@@ -4,11 +4,12 @@
 
   reads   next [--cap N | --all] [--with ID]...     show ID     check     landable BRANCH...
           list [--blocked [--on M]] [--needs-priority] [--status S] [--area A]
-          stale [--days N]
+          stale [--days N]       find TEXT      (open and closed records: id, summary, body)
   writes  add ID --summary S --scope P... --found-on BRANCH|none --why-not-folded T
               [--effort s|m|l] [--ref R] [--reopen] [--body-file F]   (S: at most 120 characters)
           set ID [--<field> V]... [--unset K]... [--body-file F]
           block ID --on M... [--reason T] [--owner-ask Q]   (adds; unblock removes)
+              [--until C]   (one --on: the condition that ends it; docs/backlog.md "block --until")
           retarget OLD NEW [--apply]                (a moved path; a dry run without --apply)
           uncite [--apply]       (owner ruling and question ids -> words; a dry run without --apply)
           unblock ID [--on M] [--reason T]      (several blockers: --on and --reason)
@@ -26,9 +27,10 @@ REFUSED before the write plans. A published write of a MEDIUM or HIGH row append
 audit log, <pm_data>/audit/backlog.jsonl (kitlib.backlog.audit; docs/backlog.md "Audit log"); no
 pm_data is a NOTE and a log that cannot be written a WARNING, on standard error, after the write.
 A marked session may not give `--session` a by-design writer's name (gate-land, owner-hub,
-daily-full: audit_check.BY_DESIGN): REFUSED before the store is opened.
-Exit codes: 0 OK, 1 NOT FOUND / ERROR / a red check / a landable that cannot tell, 2 USAGE /
-REFUSED / NOT LANDABLE.
+daily-full, hub-condition: audit_check.BY_DESIGN): REFUSED before the store is opened.
+Exit codes: 0 OK (a `show` of a closed, retired or deleted id too: ENDED), 1 NOT FOUND (an id
+no commit removed) / ERROR / a red check / a landable that cannot tell, 2 USAGE / REFUSED /
+NOT LANDABLE.
 """
 import argparse
 import os
@@ -40,6 +42,7 @@ from kitlib import kitroot, sessionmark                            # noqa: E402
 from kitlib.backlog import audit                                    # noqa: E402
 from kitlib.backlog import audit_check                              # noqa: E402
 from kitlib.backlog import check as checkmod                        # noqa: E402
+from kitlib.backlog import find as findmod                          # noqa: E402
 from kitlib.backlog import landable as landmod                      # noqa: E402
 from kitlib.backlog import offer as omod                            # noqa: E402
 from kitlib.backlog import plan as pmod                             # noqa: E402
@@ -70,12 +73,49 @@ def audit_line(verb, rid, rows, tip, session):
         sys.stderr.flush()
 
 
+# One correct command per verb, printed under a usage error. Each one parses and passes the verb's
+# own checks: tests/backlog/test_usage_examples.py.
+EXAMPLES = {
+    'next': 'backlog.py next --cap 5',
+    'show': 'backlog.py show EX-EXAMPLE',
+    'find': 'backlog.py find "text to look for"',
+    'list': 'backlog.py list --status open',
+    'check': 'backlog.py check',
+    'stale': 'backlog.py stale --days 30',
+    'landable': 'backlog.py landable kit/example-branch',
+    'add': ('backlog.py add EX-EXAMPLE --summary "<at most 120 characters>" --scope <path> '
+            '--found-on none --why-not-folded "<why>" --body-file <file>'),
+    'set': 'backlog.py set EX-EXAMPLE --scope <path> --body-file <file>',
+    'block': 'backlog.py block EX-EXAMPLE --on owner --owner-ask "item:EX-OTHER until <what the owner decides>"',
+    'retarget': 'backlog.py retarget <old-path> <new-path>',
+    'uncite': 'backlog.py uncite',
+    'unblock': 'backlog.py unblock EX-EXAMPLE --on owner --reason "<why it ends>"',
+    'pull': 'backlog.py --as <branch> pull EX-EXAMPLE',
+    'release': 'backlog.py --as <branch> release EX-EXAMPLE --reason "<why>"',
+    'close': 'backlog.py close EX-EXAMPLE --reason "<what landed>"',
+    'retire': 'backlog.py retire EX-EXAMPLE --why "<why>"',
+    'delete': 'backlog.py delete EX-EXAMPLE --why "<why>"',
+    'clear-review': 'backlog.py clear-review EX-EXAMPLE --reason "<why>"',
+    'set-status': 'backlog.py set-status EX-EXAMPLE parked --q <Q-id>',
+    'unpark': 'backlog.py unpark EX-EXAMPLE',
+    'catch-up': 'backlog.py catch-up',
+}
+
+
+def example_line(verb):
+    """`  example: <command>` for a verb that has one, else ''."""
+    return '  example: %s' % EXAMPLES[verb] if verb in EXAMPLES else ''
+
+
 class Parser(argparse.ArgumentParser):
-    """argparse whose errors print `USAGE:` and exit 2."""
+    """argparse whose errors print `USAGE:` and exit 2, then one example of the verb."""
 
     def error(self, message):
         self.print_usage(sys.stderr)
         sys.stderr.write('USAGE: %s\n' % message)
+        words = self.prog.split()
+        if len(words) > 1 and example_line(words[-1]):
+            sys.stderr.write(example_line(words[-1]) + '\n')
         sys.exit(2)
 
 
@@ -94,6 +134,8 @@ def build_parser():
     v.add_argument('--with', dest='seeds', action='append', default=[])
     v = sub.add_parser('show')
     v.add_argument('id')
+    v = sub.add_parser('find')
+    v.add_argument('text', help='looked for in each id, summary and body, any case')
     v = sub.add_parser('list')
     v.add_argument('--blocked', action='store_true')
     v.add_argument('--on', default=None)
@@ -130,6 +172,7 @@ def build_parser():
     v.add_argument('--on', action='append', default=[])
     v.add_argument('--reason', default=None)
     v.add_argument('--owner-ask', default=None)
+    v.add_argument('--until', default=None)
     v = sub.add_parser('retarget')
     v.add_argument('old')
     v.add_argument('new')
@@ -240,6 +283,21 @@ def do_show(args, ctx, snap):
         say('OWNER HOLD (%s): %s' % (rmod.owner_hold_label(rec), rec.get('owner_ask')))
     say('')
     say((rec.text or '').rstrip('\n'))
+    return 0
+
+
+def do_find(args, ctx, snap):
+    if not args.text.strip():
+        raise Usage('`find` needs some text to look for')
+    banner(snap)
+    lines, omitted = findmod.search(snap, ctx.store, args.text)
+    if not lines:
+        say('no record matches "%s" (open or closed)' % args.text.strip())
+        return 0
+    for line in lines:
+        say(line)
+    say('%d hit(s) shown%s' % (len(lines), ', %d more left out (narrow the text)' % omitted
+                               if omitted else ''))
     return 0
 
 
@@ -437,13 +495,15 @@ def main(argv=None):
             snap = store.load()
         if args.verb == 'landable':
             return do_landable(args, ctx, snap, store.backend)
-        return {'next': do_next, 'show': do_show, 'list': do_list,
+        return {'next': do_next, 'show': do_show, 'find': do_find, 'list': do_list,
                 'check': do_check, 'stale': do_stale}[args.verb](args, ctx, snap)
     except omod.PartitionError as exc:
         say('ERROR: the partition does not add up: %s' % exc)
         return 1
     except Refusal as exc:
         say('%s: %s' % (exc.label, exc))
+        if isinstance(exc, Usage) and example_line(args.verb):
+            say(example_line(args.verb))
         return exc.code
 
 

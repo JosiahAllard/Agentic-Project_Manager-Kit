@@ -118,6 +118,13 @@ the optional lint_runs view: ledger its three ledger counts (LEDGER_COUNTS) or n
 skip marker's {reason, at} only where its `at` is later than the run's `started` and both parse,
 else null (_lint_runs); no view, or one that fails, is an empty list.
 
+Landings (docs/action-hub.md "landings/L-NNN"). POST landings (AGENT) adds one event of the
+landing feed, which tools/land.py posts for each branch it landed (kitlib.hubsite.landings): the
+fields of schema.FIELDS['landings'] (repo, branch, tip and main required; records a list of
+record ids), and the hub sets posted_at. GET landings (ANY) lists them newest first, filtered by
+`repo`, at most `limit` (default FEED_MAX); GET snapshot carries the newest FEED_MAX. Every event
+is kept; none is ever pending or pushed, and no route changes or deletes one.
+
 Skill edits (docs/action-hub.md "skill_edits/E-NNN"). The owner writes a new text for one kit
 skill's source, content/skills/<name>/SKILL.md, and an agent commits it; the hub writes no
 repository. GET skills/{name}/source (ANY) gives {name, text, blob}: the whole SKILL.md of a
@@ -403,6 +410,8 @@ WRITES_WHY = {
 STATUS = {'invalid': 400, 'forbidden': 403, 'not_found': 404, 'conflict': 409, 'store': 503,
           'unavailable': 503, 'internal': 500}
 WAIT_MAX_S = 55
+FEED_MAX = 200                      # the landing feed events GET snapshot and GET landings give
+LIMIT_DIGITS = 9                    # GET landings `limit`: longer is refused, never a huge int()
 LOCK_POLL_S = 0.5                   # how often GET lock/wait looks at the lock's revision
 LOCK_DAYS_MAX = 366                 # GET lock/stats `days`
 TUNNEL_VIA = 'tunnel'               # the tunnel listener's via (kitlib.hubsite.httpd): a remote view
@@ -2043,6 +2052,36 @@ def inbox_read(api, req):
     return api.change('inbox', doc_id, d, changes, req, changes)
 
 
+# landings ("Landings"): the feed tools/land.py posts, one event per landed branch
+LANDING_FIELDS = tuple(f for f in sorted(schema.FIELDS['landings'][1]) if f != 'posted_at')
+
+
+def _newest(docs, n):
+    """The `n` documents of `docs` (a list, each with its `id`) with the highest ids, newest
+    (highest) first."""
+    return sorted(docs, key=lambda d: _natural(d['id']), reverse=True)[:n]
+
+
+def landings_list(api, req):
+    """The events, newest first: at most `limit` (a whole number of at most LIMIT_DIGITS
+    digits, default FEED_MAX) of them, filtered by repo as every listing is."""
+    text = _q(req, 'limit')
+    if text and not (text.isdigit() and text.isascii() and len(text) <= LIMIT_DIGITS
+                     and int(text) > 0):
+        raise _invalid('limit is a whole number from 1 to %s, not %r'
+                       % ('9' * LIMIT_DIGITS, text[:40]), 'limit')
+    return {'items': _newest(api.items('landings', req), int(text) if text else FEED_MAX)}
+
+
+def landings_add(api, req):
+    b = _fields(req, LANDING_FIELDS, required=schema.FIELDS['landings'][0])
+    records = _typed(b, 'records', (list,), 'a list')
+    if records is not None and not all(isinstance(r, str) and r.strip() for r in records):
+        raise _invalid('records is a list of record ids', 'records')
+    b['posted_at'] = api.clock()
+    return api.add('landings', b, req)
+
+
 # approvals: imported here, not at the top, as kitlib.hubsite.approvals imports this module
 def _approval(make, *args):
     from . import approvals as ap
@@ -2995,6 +3034,9 @@ def skill_edits_fail(api, req):
 def snapshot(api, req):
     revision, docs = api.store.snapshot()
     docs.pop('page_html', None)     # a body is read on its own (GET pages/{id}, "Pages")
+    if docs.get('landings'):        # the newest FEED_MAX: every event is kept ("Landings")
+        feed = docs['landings']
+        docs['landings'] = {k: feed[k] for k in sorted(feed, key=_natural)[-FEED_MAX:]}
     if not req.full:                # the paths as GET to_pm and GET finding_marks cut them
         for d in (docs.get('to_pm') or {}).values():
             _unpath_act(d)
@@ -3221,6 +3263,8 @@ ROUTES = (
     _r('POST', '/to_pm/{id}/delete', OWNER, to_pm_delete),
     _r('POST', '/inbox', AGENT, inbox_add),
     _r('POST', '/inbox/{id}/read', OWNER, inbox_read),
+    _r('GET', '/landings', ANY, landings_list),
+    _r('POST', '/landings', AGENT, landings_add),
     _r('GET', '/pages', ANY, pages_list),
     _r('POST', '/pages', AGENT, pages_publish),
     _r('GET', '/pages/{id}', ANY, pages_get),

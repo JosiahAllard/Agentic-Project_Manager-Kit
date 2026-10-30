@@ -19,8 +19,8 @@ Codex runs a plugin only from its cache: `codex plugin add` copies the folder th
 <CODEX_HOME>\\plugins\\cache\\pm-kit\\pm-kit\\<version> and removes the version it held before.
 It does not copy again on its own when the marketplace names a newer folder, so this runs it.
 Nothing here writes config.toml or the cache itself: Codex does, in that one command. A codex.exe
-that cannot be found (PM_KIT_CODEX_EXE, else PATH: sessions.native_codex) is a line naming the
-command to run by hand. Every problem is a line, never an exit code.
+that cannot be found (PM_KIT_CODEX_EXE, else PATH, else the desktop app's own: sessions.native_codex)
+is a line naming the command to run by hand. Every problem is a line, never an exit code.
 """
 import json
 import os
@@ -31,7 +31,7 @@ import tomllib
 MARKET = 'pm-kit'                    # the export's marketplace (kitlib.pluginsource.NAME)
 PLUGIN = 'pm-kit'
 KEY = PLUGIN + '@' + MARKET
-OLD_MARKET = 'pm-kit-local'          # the hand-made copy plugin_copy mirrors into
+OLD_MARKET = 'pm-kit-local'          # the old hand-made copy: switch steps only, never written
 OLD_KEY = PLUGIN + '@' + OLD_MARKET
 MANIFEST = ('.codex-plugin', 'plugin.json')
 MARKETPLACE = ('.agents', 'plugins', 'marketplace.json')

@@ -545,7 +545,22 @@ store's git push (the `push` setting).
   next success (`job_event`). A job may push a word of its own with `ctx.event(word, detail=None)`;
   a detail is one more header field, `[hub push] job <name> <word> detail:<detail> route:pm
   attempt:<k>`, cut to the header alphabet like every field (a sha or a count, never prose). Each job
-  owes at most one push: a newer event replaces one not yet written, its detail with it.
+  owes at most one push: a newer event replaces one not yet written, its detail with it, except a
+  word in `push.JOB_EACH` (`unblocked`), owed once per detail, so two records unblocked in one round
+  are two pushes. `unblock-conditions` (`kitlib/hubjobs/unblock_conditions.py`, every 300 s) reads
+  each `launcher.repos` repository's store with no fetch and, on each blocked record, each `until`
+  line it may act on (docs/backlog.md "block --until"); a met condition clears that one member in one
+  store commit under `Session: hub-condition` (`recordwrite.condition_met`, which re-reads the record
+  and writes nothing when the line is gone) and pushes `unblocked` with detail `<repo>:<ID>`. A
+  to-do or question is read from its hub store document on disk, a record from the named
+  repository's store, a plugin folder under `pluginsource` `export_dir`. Free text, a member the
+  record is not blocked on, an `owner` member on anything but a to-do or a question, a condition
+  holding a machine path, a path that is not on a local drive after its `%VAR%` is filled (a UNC
+  path, a `..` part; never probed), and a condition that cannot be read are never acted on; a
+  record counts as closed only when a commit removed it. Nothing met is a skip, and a store that
+  cannot be read or a refused write is a failure once the pass has done the rest; a write whose
+  commit landed with the index left stale (`IndexStale`) is an unblock, pushed and counted. A stopped coordinator learns of the
+  opened record from `coord-restart`'s backlog wake; nothing else is pushed.
   `session-watch` (`kitlib/hubjobs/session_watch.py`, docs/pm-watch.md "Hub session-watch job") runs
   pm_watch's checks every 60 s, first at 30 s, and pushes at most once a run: one event as its kind
   (`idle`, `stopped`, `usage`, `reset`, `bgfail`, `locknotice`, `remote`, `error`) with its subject
@@ -1227,6 +1242,38 @@ The page draws each pending request above the open questions (`approvalCard`), c
 badge: its title, repo, head, reason and the stored diff as text. Approve and Deny post the decide route
 with the version the page read; they are disabled unless the snapshot says `strong`, and a refusal (a 403
 included) is shown on the card in the server's words.
+
+## landings/L-NNN
+The landing feed: one event per branch `tools/land.py` landed, posted by the landing itself after the
+push is verified and the landing lock released (docs/gate.md "Landing feed"). The event is the land
+ledger line's fields (`result.LEDGER_FIELDS`, picked from the same land record) and the extras
+(`kitlib.hubsite.landings.EXTRA_FIELDS`); the types are `schema.FIELDS['landings']`.
+
+| Field | Written by | Meaning |
+|---|---|---|
+| (doc id) | server | `L-001`, `L-002`, ...: the document's id, not a field; a higher number is newer |
+| branch, tip, run_id, started_at, finished_at, verdict, code, summary, gate_once, escalated | agent | the branch's land ledger line, field for field |
+| repo | agent | the repository's name (`runner.repo_name`) |
+| main_branch, main | agent | the main branch and the new main the landing pushed: one commit for every branch of a batch |
+| records | agent | the backlog record ids the landing closed for this branch (a list, maybe empty) |
+| mode | agent | the merged gate's mode, from its gate-OK record on the new main, or null |
+| deploy | agent | the `Deploy:` trailer values of the tip's message, joined by `; `, or null |
+| posted_at | server | ISO time the hub took it |
+
+Routes, below `/api/v1`: POST `/landings` (agent) adds one event: repo, branch, tip and main are required,
+any other field is refused, and posted_at is the server's. GET `/landings` (any role) lists them newest
+first, filtered by `repo`, at most `limit` (default `FEED_MAX`, 200). No route changes or deletes one.
+
+Every event is kept; `GET /api/v1/snapshot` and the page carry the newest 200. An event is never pending
+and never pushed: the feed is read, not answered. The post is best-effort with a 3 s timeout: a hub that
+is down, has no agent token on this machine, does not answer, or is older than the route (a 404) is one
+WARNING line in the landing's progress, and the event is dropped: no pending file, no retry. The landing's
+outcome and exit code never change.
+
+The page's Landings tab (`#landings`, under More on a phone) shows them newest first under a heading per
+new main (`<repo> <main_branch> at <main>`, so a batch's branches sit together), with the repo filter.
+A row's chips are the repo, the verdict, the mode and Deploy when the tip carried a deploy note; its card
+(`landingCard`) gives the tip, new main, verdict and summary, gate, records closed and the deploy note.
 
 ## Machine lock routes
 The hub server reads and changes the machine lock in-process through `kitlib.lock.api` (the owner's

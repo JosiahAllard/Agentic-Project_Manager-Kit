@@ -77,7 +77,7 @@ PRICED_BY_OWNER = ('owner', 'pm')
 Row = collections.namedtuple('Row', 'verbs risk allowed when over')
 
 ACTIONS = collections.OrderedDict([
-    ('read', Row(('next', 'show', 'list', 'check', 'stale', 'landable'), NONE, ROLES, (), ())),
+    ('read', Row(('next', 'show', 'list', 'check', 'stale', 'landable', 'find'), NONE, ROLES, (), ())),
     ('add', Row(('add',), LOW, tuple(r for r in ROLES if r not in READ_ONLY), (), ())),
     ('set-text', Row(('set',), LOW, LEADS, OWN_GRANTS, ())),
     ('set-price', Row(('set',), LOW, LEADS, (), ())),

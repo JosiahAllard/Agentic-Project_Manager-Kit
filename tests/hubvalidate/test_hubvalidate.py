@@ -127,6 +127,16 @@ class CheckTest(unittest.TestCase):
         # an E- id is the hub's own counter, not a ref the refs check follows
         self.assertIsNone(V._REF.search('see E-001'))
 
+    def test_a_landing_has_no_status_its_repo_tag_is_judged_and_its_l_id_is_a_counter_prefix(self):
+        land = {'repo': 'pm', 'branch': 'kit/x', 'tip': 'a' * 40, 'main': 'b' * 40}
+        docs = {'landings': {'L-001': land, 'L-002': dict(land, repo='ghost')},
+                'repos': {'pm': {'name': 'pm', 'added_at': 'x'}}}
+        self.assertEqual(codes(V.validate(docs)), [('landings/L-002', 'repo-alias')])
+        self.assertEqual(V.REF_COLLECTIONS['L'], 'landings')
+        self.assertEqual(list(V.REF_COLLECTIONS.values()).count('landings'), 1)
+        # an L- id is the hub's own counter, not a ref the refs check follows
+        self.assertIsNone(V._REF.search('see L-001'))
+
     def test_options_and_recommended(self):
         bad = [question(options='x'), question(options=[{'description': 'no label'}]),
                question(recommended=5), question(recommended=True), question(recommended='0')]

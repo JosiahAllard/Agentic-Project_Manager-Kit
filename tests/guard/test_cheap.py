@@ -105,6 +105,30 @@ class Unplaced(World):
         self.warned(W.bash('python -c "open(\'x.txt\', \'w\').write(\'y\')"', self.w.main, sub=True))
         self.warned(W.bash('node -e "require(\'fs\').writeFileSync(\'x\', \'y\')"', self.w.main, sub=True))
 
+    def test_a_warning_quotes_at_most_120_characters_of_the_command_and_a_refusal_all_of_it(self):
+        code = '; '.join("open('x%d.txt', 'w').write('y')" % i for i in range(20))
+        command = 'python -c "%s"' % code
+        self.assertGreater(len(command), 600)
+        warned = self.warned(W.bash(command, self.w.main, sub=True)).reason
+        self.assertNotIn('`%s`' % command, warned)
+        self.assertIn('`%s%s`' % (command[:rules.CITE_MAX], rules.ELIDED), warned)
+        self.w.user_config({'guard_rules': {'unplaced': 'deny'}})
+        denied = self.decide(W.bash(command, self.w.main, sub=True))
+        self.assertEqual((denied.verdict, denied.rule), ('deny', 'unplaced'), denied.reason)
+        self.assertIn('`%s`' % command, denied.reason)                   # a refusal keeps its full text
+        self.assertIn(' Instead: %s %s' % (denied.instead, rules.tag('unplaced', 'subagent')), warned)
+
+    def test_cited_cuts_only_a_long_quote_of_the_command_and_reads_past_its_backticks(self):
+        cmd = 'Set-Content -Path x.txt -Value "a`nb" ' + 'y' * 200
+        what = '`%s` writes x.txt; see `Set-Content`' % cmd
+        self.assertEqual(rules.cited(what, cmd),
+                         '`%s%s` writes x.txt; see `Set-Content`' % (cmd[:rules.CITE_MAX], rules.ELIDED))
+        self.assertEqual(rules.cited(what, None), what)
+        short = '`echo hi` writes x'
+        self.assertEqual(rules.cited(short, 'echo hi'), short)
+        other = '`%s`' % ('z' * 200)                                     # not the command's text
+        self.assertEqual(rules.cited(other, cmd), other)
+
     def test_git_with_a_computed_dir_warns(self):
         self.warned(W.bash('git -C "$d" commit -m x', self.w.wt, sub=True))
 

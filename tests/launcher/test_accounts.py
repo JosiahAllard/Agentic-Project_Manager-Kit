@@ -44,14 +44,23 @@ class LaunchDir(unittest.TestCase):
 class Headroom(unittest.TestCase):
     def test_refused_at_the_limit_unless_forced_and_a_reset_window_is_free(self):
         h = Home(self)
-        h.usage('1', five=(90, NOW + DAY / 24), week=(20, NOW + DAY))
+        h.usage('1', five=(95, NOW + DAY / 24), week=(20, NOW + DAY))
         out = []
-        with self.assertRaisesRegex(A.LaunchError, "Account 1 is at 90% of its five_hour window.*PM's headroom"):
+        with self.assertRaisesRegex(A.LaunchError, "Account 1 is at 95% of its five_hour window.*95% limit"):
             A.check_headroom(h.settings, '1', NOW, False, out)
         A.check_headroom(h.settings, '1', NOW, True, out)
         self.assertIn('--force: starting on account 1 anyway', out[-1])
         h.usage('2', five=(99, NOW - DAY), week=(10, NOW + DAY))
         A.check_headroom(h.settings, '2', NOW, False, out)       # its five-hour window has reset
+
+    def test_the_limit_is_95_at_or_over_is_refused_and_94_is_not(self):
+        self.assertEqual(A.HEADROOM_LIMIT, 95)
+        h = Home(self, accounts=('1', '2'))
+        h.usage('1', five=(94, NOW + DAY / 24), week=(94, NOW + DAY))
+        h.usage('2', five=(20, NOW + DAY / 24), week=(95, NOW + DAY))
+        A.check_headroom(h.settings, '1', NOW, False, [])
+        with self.assertRaisesRegex(A.LaunchError, "Account 2 is at 95% of its seven_day window"):
+            A.check_headroom(h.settings, '2', NOW, False, [])
 
     def test_no_usage_file_is_said_not_refused(self):
         h = Home(self)

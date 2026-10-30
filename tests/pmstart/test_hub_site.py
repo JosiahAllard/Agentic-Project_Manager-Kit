@@ -117,7 +117,7 @@ class HubSiteTest(unittest.TestCase):
         out = site(FakeClient(health=health))
         self.assertEqual(out[1], "hub: push up (last delivery to the PM: written, 0 undelivered); "
                                  "watcher up (beat 42s ago)")
-        self.assertFalse(any("wait" in line for line in out), out)
+        self.assertFalse(any("wait" in line.replace(pmstart.HUB_TOOL, "") for line in out), out)
 
     def test_push_up_before_any_delivery_and_with_no_heartbeat_yet(self):
         health = {"ok": True, "push": {"state": "up", "last": None, "undelivered": 3},
@@ -133,7 +133,7 @@ class HubSiteTest(unittest.TestCase):
         self.assertTrue(line.startswith("hub: WARN push down (last delivery to the PM: not-written, "
                                         "2 undelivered); watcher down (beat 900s ago)"), line)
         self.assertIn('read python "%s" pending --for pm' % pmstart.HUB_TOOL, line)
-        self.assertNotIn("wait", line)
+        self.assertNotIn("wait", line.replace(pmstart.HUB_TOOL, ""))
 
     def test_no_push_worker_is_a_warn_that_nothing_arrives_by_itself(self):
         for health in ({"ok": True}, {"ok": True, "push": None, "watcher": None},

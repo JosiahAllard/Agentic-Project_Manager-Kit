@@ -3,7 +3,7 @@ it does. docs/kit-json.md is these lines (`doc_lines()`); tests/config keeps the
 
 A section's value is an object, or (where `FILE_OK`) a string naming a repo-relative JSON file
 that holds the object. Defaults of None mean "absent": the tool that reads the key decides.
-Kit-level sections (repo, owner, hook, heavy, roles) are read by kitlib itself; the rest are the
+Kit-level sections (repo, owner, hook, heavy, roles, kinds) are read by kitlib itself; the rest are the
 per-tool sections the PM kit's tools read (kit/tools/_kit.py SECTIONS), checked here for shape only.
 """
 from kitlib.host import registry
@@ -60,6 +60,18 @@ IN_FLIGHT = Obj({
     'wait_s': Field(Int(0, 3600), None, 'most seconds to wait; unset: 100 (inferred, not measured: under the agent shell 120 s timeout)'),
     'command': Field(Argv, None, 'argv run in the main checkout: exit 0 in flight (first line names the holder), 1 none, else in flight'),
 }, what='{wait_s, command}')
+
+# A repository's own run kind ("kinds", kitlib.lock.kinds.repo_entry): the kit table's entry shape
+# (kitlib/lock/kinds.json, kinds.check_entry) plus its reason. A whole-number cpu past the layout's
+# agent_cap is refused when a run books it (the layout is the machine's, not the config's).
+KIND_RE = r'[a-z][a-z0-9-]*'
+KIND_ENTRY = Obj({
+    'cpu': Field(Either(Int(1), Enum('medium', 'heavy')), None, 'its size: a whole number of cpu slots (at most the layout\'s agent_cap, checked when a run books), or medium or heavy'),
+    'gpu': Field(Enum(0, 'pool'), 0, '0, or "pool": the whole gpu pool'),
+    'share': Field(Bool(), False, 'with gpu "pool": a run may take one gpu slot instead (--gpu-share training)'),
+    'warn_min': Field(Int(1), 60, 'minutes a run may hold its slots before it is warned of'),
+    'why': Field(Str(), None, 'the reason for its size, a ruling or a measurement'),
+}, required=('cpu', 'why'), what='{cpu, gpu, share, warn_min, why}')
 
 ROLE = Obj({
     'edit_main_checkout': Field(Bool(), None, 'may edit files in a main checkout; unset: the base role (main: true, any other: false)'),
@@ -160,6 +172,7 @@ SECTIONS = {
         'programs': Field(ListOf(HEAVY_ENTRY), [], 'repo heavy programs, added to the kit defaults'),
     },
     'roles': {},
+    'kinds': {},
     'backlog': {
         'store': Field(Either(Enum('ref', 'branch', 'main'), RelPath()), 'ref',
                        'the record store: ref (refs/backlog/main), branch (the backlog branch), main (docs/backlog) or a folder (docs/backlog.md); the default ref is read-only, so a repository that writes records names its store'),
@@ -335,11 +348,17 @@ SECTIONS = {
 # A section that may be a string naming a repo-relative JSON file. guard never: a file beside
 # .kit.json would let a change to it widen what agent sessions may write past the kit-json rule.
 # modules never: a file beside .kit.json would let an agent repoint the owner's module map.
-FILE_OK = frozenset(SECTIONS) - {'repo', 'owner', 'hook', 'guard', 'modules'}
+# kinds never: a file beside .kit.json would let a change to it size runs without the owner.
+FILE_OK = frozenset(SECTIONS) - {'repo', 'owner', 'hook', 'guard', 'modules', 'kinds'}
 # Sections whose content is a table the kit does not shape-check (an object of anything).
 OPAQUE = frozenset(('forbidden', 'pieces'))
-# Sections that are a map of one entry type: role name -> permissions, over policy.ROLE_DEFAULTS.
-MAPS = {'roles': (ROLE, 'role', 'agent type (or main, subagent) -> permissions, over the kit defaults')}
+# Sections that are a map of one entry type: (entry type, key name, doc, key type or None).
+# roles: role name -> permissions, over policy.ROLE_DEFAULTS; kinds: the repository's own run kinds.
+MAPS = {
+    'roles': (ROLE, 'role', 'agent type (or main, subagent) -> permissions, over the kit defaults', None),
+    'kinds': (KIND_ENTRY, 'kind', 'the repository\'s own run kinds, beside the kit\'s (kitlib/lock/kinds.json): a run from one of its checkouts may book one by name (docs/lock-api.md "Repository kinds"); a kit kind or kit alias of the same name wins, and the entry is ignored; read from the main checkout only',
+              Str(pattern=KIND_RE, what='a kind name ([a-z][a-z0-9-]*)')),
+}
 
 
 # Keys no tool reads any more, per section. A config that still carries one loads: the key is
@@ -354,7 +373,8 @@ def section_type(name):
     if name in OPAQUE:
         return MapOf(Any(), 'key')
     if name in MAPS:
-        return MapOf(MAPS[name][0], MAPS[name][1])
+        t, what, _doc, key = MAPS[name]
+        return MapOf(t, what, key)
     return Obj(SECTIONS[name], what='"%s"' % name)
 
 
@@ -377,7 +397,7 @@ def doc_lines():
             out.append('- `%s`: a table the kit passes through unchecked (a file path or an object)' % name)
             continue
         if name in MAPS:
-            t, what, doc = MAPS[name]
+            t, what, doc, _key = MAPS[name]
             out.append('- `%s` (map %s -> %s): %s' % (name, what, t.describe(), doc))
             for k, f in t.fields.items():
                 d = '' if f.default is None else ', default %s' % _fmt(f.default)

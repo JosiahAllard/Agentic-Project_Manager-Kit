@@ -48,12 +48,14 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    account, main tip, and "ask: holds, owner decisions since <time of your last PM check-in,
    kept in your state note>, anything to act on". Its reply is your brief. No PM listed -> ask the owner in your own chat.
 4. The start context's `rulebooks` line names the standing rules and the command that reads them.
-   Read your state note (`<agent temp>/<repo slug>-coordinator/state-<session>.md`, below); treat as stale. `docs/ops/coordinator-runbook.md`
+   The start context carries your state note's path and last lines (Read it whole only when they are not enough; treat as stale), `hub pending`, the `next` offer and the
+   `--classify` list; a line saying "could not read X" -> run that call yourself. A note labelled guessed:
+   check its file name is state-<your session name>.md before acting on it. The `next` offer is the local copy; `backlog.py next` fetches. `docs/ops/coordinator-runbook.md`
    exists -> read it too, and again after every compaction.
-5. Check real state: worktrees, unmerged branches, main vs remote, running build/test
+5. Check real state: unmerged branches, main vs remote, running build/test
    processes, every lock and port the profile names. Then
-   `python <kit>/tools/worktree_remove.py -C <main checkout> --classify --apply`: it removes A
-   and E trees and drops O (orphan) registrations. For each B tree, land it or record why
+   `python <kit>/tools/worktree_remove.py -C <main checkout> --classify --apply` (the start context's list is its
+   read-only run): it removes A and E trees and drops O (orphan) registrations. For each B tree, land it or record why
    not. For each C tree, dispatch it, or stop its record (the `next` line) and `--abandon`.
    Leave L trees alone. Send the PM the summary and the B/C list.
 6. Pricing pass and backlog audit: `python <kit>/tools/backlog.py -C <repo> list --needs-priority`. Leave
@@ -96,14 +98,14 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   else: count agents in flight against your cap and fill free slots from your work set,
   engine-free work beside lock-bound work. In flight = ListAgents `running`; an agent stopped on
   its own background gate is waiting, not in flight, and wakes when the gate exits (<kit>/docs/gate.md
-  "Waiting on a gate: who arms what"). A landing you submitted is not an agent: its `wait-result`
-  command is yours to keep running (skill `land-branch`). A gate whose
+  "Waiting on a gate: who arms what"). A landing you submitted is not an agent: its one
+  `land.py ... --wait-result --submit` background call is yours to keep running (skill `land-branch`). A gate whose
   process is gone with no report -> fresh agent re-gates the branch (the final gate `<kit>/docs/gate.md` "The final gate" names (when unsure, `--full`)). Nothing
   re-wakes you later.
 - Nothing startable left in the set and 1 or 2 items being built -> wind down (skill
   session-handoff): review what you have, then write into the state note every LAND verdict
   you hold (branch, tip, reviewer, range), every landing not yet reported (branch | tip |
-  result; not yet named in any message to the PM) and every branch whose agent is still running, and
+  result; not yet named in any message to the PM; a pass the Landings feed shows is reported) and every branch whose agent is still running, and
   SendMessage the PM `ready to restart: <state note path>`;
   it starts your successor on a fresh set. Start nothing new, leave `next` to it. Each item goes
   to an end, as the owner ruled: landed, blocked on its record with the reason and its branch kept
@@ -132,7 +134,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - ONE state note: `<agent temp>/<repo slug>-coordinator/state-<session>.md` (`<session>` is your session name; `<agent temp>` is `AGENT_TEMP`, else `TEMP`), outside the repo, <= 8 KB,
   overwritten whole with Write - never appended, no dated copies. Fields: main hash; open
   items and holds (work set item | state; in flight branch | agent | state; landings submitted (branch | tip);
-  landings not yet reported (branch | tip | result); waiting on owner; locks/ports held); last PM check-in (time); next step. Open items only: landed history goes in the
+  landings not yet reported (branch | tip | result: a non-pass, or a pass whose feed post warned); waiting on owner; locks/ports held); last PM check-in (time); next step. Open items only: landed history goes in the
   repo's records (landing notes), never the note, except landings not yet reported. No narrative. A successor reads it as stale.
 - Write it, and anything under your host's config folder (`~/.claude`, the environment variable `CLAUDE_CONFIG_DIR`),
   with Edit/Write, never a shell command: a shell write there blocks on an approval prompt and
@@ -172,12 +174,14 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   gate or landing step written in an indexed doc counts), and for CI permissions and secrets. A CI
   change that only adds strictness: skill branch-review.
 - Tracked `.claude/` files and CLAUDE.md are owner-only: no session or agent edits them.
-- Message the PM only for: a decision you need (owner or PM); any landing result other than a
-  pass; a pass that carries a decision, a follow-up for the PM to price, or is the last of a batch
-  (no other landing you submitted is still queued or running); a refusal (Never); or something
+- Message the PM only for: a decision you need (owner or PM); a landing that needs an action (a
+  `stuck` landing, a record close that failed, or a deploy step its tip's `Deploy:` note names); a
+  follow-up for the PM to price; a refusal (Never); or something
   the owner must do or know (main or CI broken, a lock or resource stuck, a usage limit); plus the
   start check-in (step 3); and the ready-to-restart, ready-to-stop and hand-off replies, whose state
-  note lists every landing not yet reported. Each landing message names every landing not yet
+  note lists every landing not yet reported. A pass the hub's Landings feed shows counts as
+  reported; not yet reported is a non-pass result, or a pass whose feed post warned (`WARNING: the
+  landing of <branch> was not posted to the hub feed`). Each landing message names every landing not yet
   reported. Never a message that only acknowledges or informs,
   and never forward an agent's notice. Small facts ride in the state note and your next real message. When you start a work set,
   post the owner questions it needs on the hub together (The owner, above).
