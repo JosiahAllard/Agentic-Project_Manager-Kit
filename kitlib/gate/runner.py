@@ -112,7 +112,10 @@ HASH_IF_SET = ('smoke_steps', 'docs_only')
 HASH_REMOVED = {'python_tests': 'discover', 'python_tests_floor': None, 'trailers': None}
 # A renamed kind hashes under the name it had when records were first written (kitlib/lock/
 # kinds.json "aliases"), so "gate".kind under either name, and the default, hash as before the
-# rename: records from both sides of it verify. Fixed here, never read from the table.
+# rename: records from both sides of it verify. Fixed here, never read from the table. A kind
+# rename must add its entries here (the new name, and any name between), each mapped to the name
+# first written, not the previous one (tests/gate/test_branch_gate.py checks it against the
+# aliases). A repository-defined kind in "gate".kind goes through this same mapping.
 HASH_KIND_AS = {'test': 'engine-test', 'app-run': 'engine-run'}
 
 
