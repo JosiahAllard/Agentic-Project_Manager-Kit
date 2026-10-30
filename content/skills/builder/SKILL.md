@@ -5,7 +5,7 @@ description: Use when you build or fix on a branch - as worker, senior-worker, s
 
 # Builder
 
-1. Start with `python <kit>/tools/preflight.py -C <worktree>`. A profile section naming a topic: `python <kit>/tools/doc_index.py -C <worktree> --find <topic>` (`--tools`, or `--section "<heading>"`), then that one section; never `docs/INDEX.md` whole. `<kit>/tools/codemap.py` shows where code lives. Use your search and read tools, not shell grep, cat or sed; scripts go in your scratch folder, never the repo; write targets are literal paths, never a shell variable.
+1. Start with `python <kit>/tools/preflight.py -C <worktree>`. A profile section naming a topic: `python <kit>/tools/doc_index.py -C <worktree> --find <topic>` (`--tools`, or `--section "<heading>"`), then that one section; never `docs/INDEX.md` whole. `<kit>/tools/codemap.py` shows where code lives; `codemap.py --symbol NAME [path]` reads one Python function or class (`Class.method` too), not the whole file. Use your search and read tools, not shell grep, cat or sed; scripts go in your scratch folder, never the repo; write targets are literal paths, never a shell variable.
 2. Fix what was observed with the smallest change: no new config key, hook, subsystem, option, abstraction or generalisation unless the brief names it.
 3. Understand before changing: state the mechanism you believe is at work and the observation that would prove you wrong, then look for it; a fix without a confirmed mechanism is a guess. Mark inferences: "I observed" and "I expect" differ.
 4. Stay inside your brief's scope: files that are not yours stay untouched; report what you noticed in them.
