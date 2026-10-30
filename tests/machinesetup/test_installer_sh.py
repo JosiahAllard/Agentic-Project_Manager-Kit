@@ -13,7 +13,26 @@ from kitlib.proc import bash
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCRIPT = os.path.join(ROOT, 'installer', 'machine-setup.sh').replace('\\', '/')
-SHELL = bash.git_bash() if os.name == 'nt' else shutil.which('sh')
+
+
+def posix_shell():
+    """The shell the cases run under. On Windows Git's own usr/bin/bash.exe: the bin/bash.exe
+    launcher (the one found when only Git's cmd folder is on PATH, as in a scheduled run) resets
+    PATH so Git's real uname comes before the fake one."""
+    if os.name != 'nt':
+        return shutil.which('sh')
+    found = bash.git_bash()
+    if found:
+        git = os.path.dirname(os.path.dirname(found))
+        if os.path.basename(git).lower() == 'usr':
+            git = os.path.dirname(git)
+        usr = os.path.join(git, 'usr', 'bin', 'bash.exe')
+        if os.path.isfile(usr):
+            return usr
+    return found
+
+
+SHELL = posix_shell()
 
 
 def fake(path, text):
@@ -38,7 +57,10 @@ class InstallerSh(unittest.TestCase):
         fake(os.path.join(self.bin, 'uname'), '#!/bin/sh\necho %s\n' % name)
 
     def run_sh(self, *args, python=True):
-        env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ.get('PATH', ''))
+        # The shell's own folder after the fake: its dirname, tr and uname are the ones a run whose
+        # PATH lacks Git's usr/bin would otherwise not find.
+        path = os.pathsep.join([self.bin, os.path.dirname(SHELL), os.environ.get('PATH', '')])
+        env = dict(os.environ, PATH=path)
         argv = [SHELL, SCRIPT] + (['--python', self.python] if python else []) + list(args)
         r = subprocess.run(argv, capture_output=True, text=True, env=env, timeout=60)
         return r.returncode, r.stdout.strip()
