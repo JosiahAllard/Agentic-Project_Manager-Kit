@@ -66,6 +66,23 @@ class TheDefaultStoreLine(tp.Fixture):
             HEAD % 1 + IMPLICIT + ', so backlog.py -C on this checkout reads that copy; the live '
             'store: %s -C "%s" list' % (self.backlog_cmd(), wt.replace('\\', '/'))])
 
+    def test_a_linked_worktree_opens_the_live_store_so_no_line(self):
+        """store.worktree_live_store: `-C` here never reads the copy the line warns of."""
+        self.seed('A')
+        self.pm_worktree('kit/backlog')
+        wt = self.repo.worktree('wk', branch='kit/wk')
+        self.assertEqual(defaultstore.lines(wt, load_config(wt), 'T'), [])
+
+    def test_a_detached_worktree_still_reads_the_copy(self):
+        self.seed('A')
+        pm = self.pm_worktree('kit/backlog')
+        wt = self.repo.worktree('wk', branch='kit/wk')
+        self.repo.git('checkout', '-q', '--detach', cwd=wt)
+        self.assertEqual(defaultstore.lines(wt, load_config(wt), 'T'), [
+            HEAD % 1 + IMPLICIT + ', so backlog.py -C on this checkout reads that copy; the live '
+            'store: %s -C "%s" list' % (defaultstore.nextblock.command('T', 'backlog'),
+                                        pm.replace('\\', '/'))])
+
     def test_a_pm_data_worktree_naming_the_ref_store_makes_the_ref_live_and_no_line(self):
         """Refs are shared by every worktree: the ref the PM data worktree names is this one."""
         self.seed('A')

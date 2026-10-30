@@ -1357,6 +1357,38 @@ def pm_data_live_store(root):
     return pm_root, named, None
 
 
+def worktree_live_store(top, cfg):
+    """`(pm_root, branch)` when a run from the checkout `top` opens the live store in the PM data
+    worktree instead of its own: `top`'s `.kit.json` (`cfg`) names no "backlog".store, `top` is a
+    linked worktree of its repository (git's own answer; the PM data worktree itself is excluded
+    by pm_data_live_store), that repository's PM data worktree names a store of its own
+    (pm_data_live_store, read without error), and `top` has a branch checked out, `branch`, the
+    one the run acts as. None otherwise: the main checkout, a detached HEAD, a named store or no
+    live store keep `top`'s own (the implicit ref, whose writes default_store_refusal refuses).
+    A PM data worktree that cannot be found or read is pm_data_live_store's `why`, so also None:
+    a write then refuses naming that `why` (default_store_refusal) and preflight's backlog line
+    names it. Nothing is caught here: anything else pm_data_live_store raises is a defect, never
+    a quiet fall back to the stale ref. The same resolution `-C <pm data> --as <branch>` spells
+    out by hand (docs/backlog.md "The store a worktree opens")."""
+    if cfg.written('backlog', 'store') is not None:
+        return None
+    branch = worktree_branch(top)
+    if branch is None:
+        return None
+    pm_root, named, why = pm_data_live_store(top)
+    if pm_root is None or not named or why:
+        return None
+    return pm_root, branch
+
+
+def worktree_branch(top):
+    """The branch checked out at `top` when it is a linked worktree of its repository, else None
+    (the main checkout, a detached HEAD): the checkouts worktree_live_store can resolve."""
+    if gitrepo.classify(top).kind != gitrepo.LINKED:
+        return None
+    return refs.current_branch(top)[0] or None
+
+
 def unreadable_kit_json(pm_root, why):
     """The clause naming a PM data worktree whose `.kit.json` cannot be read (pm_data_live_store)."""
     return 'the .kit.json of the PM data worktree %s cannot be read: %s' % (

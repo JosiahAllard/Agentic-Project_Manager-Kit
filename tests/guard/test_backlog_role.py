@@ -3,13 +3,20 @@ subagent's backlog.py run is judged by kitlib.backlog.roles for the role its hoo
 (backlog-role), and code that imports kitlib.backlog, a write of the backlog's refs and an edit of
 a folder store's record files are raw writes no agent session makes (backlog-raw-write). A main
 session's backlog.py run is the tool's own check (tests/backlog/test_policy.py)."""
+import json
 import os
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
-from kitlib import agentname
-from kitlib.git import repo
+from kitlib import agentname, pmdata
+from kitlib.backlog import policy, roles
+from kitlib.git import refs, repo
 from kitlib.guard import backlogrole, context
+
+from tests.backlog.helpers import TODAY, priced
+from tests.gitfixture import TempRepo, fixture_env
+from tests.home import temp_home
 
 from . import world as W
 from .claudehost import decide
@@ -45,10 +52,6 @@ class Base(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         self.reads = []
-        self.live = None                        # the PM data worktree whose store holds the records
-        p = mock.patch.object(backlogrole, 'live_store', lambda root: self.live, create=True)
-        p.start()
-        self.addCleanup(p.stop)
 
     def read(self, root, rid):
         self.reads.append((W.fwd(root), rid))
@@ -392,30 +395,36 @@ class AsFromItsWorktree(Base):
     def test_the_refusal_names_the_accepted_form(self):
         self.rec = pulled_by('kit/other')
         d = self.refused(self.run_as('kit/wt', cwd=self.w.main))
-        self.assertIn('from your branch\'s linked worktree as `python %s -C "%s" --as <your branch> block X-1 ...`'
-                      % (backlogrole.rules.kit_tool(self.w.ctx(), backlogrole.TOOL), self.store), d.reason)
+        self.assertIn('run it as one call, `python %s -C <your worktree> block X-1 ...`, with -C your '
+                      'branch\'s linked worktree, no --as and no cd'
+                      % backlogrole.rules.kit_tool(self.w.ctx(), backlogrole.TOOL), d.reason)
+        self.assertNotIn('--as <your branch>', d.reason)
+        self.assertNotIn('cd "', d.reason)
         d = self.refused(self.cmd(self.bl('set X-1 --scope s')))
-        self.assertIn('--as <your branch> set X-1 ...', d.reason)
-        self.assertIn('a branch that does not hold the pull, does not count', d.reason)
+        self.assertIn('-C <your worktree> set X-1 ...', d.reason)
+        self.assertIn('the main checkout, the PM data worktree, or a branch that does not hold the pull, '
+                      'does not count', d.reason)
 
     def test_the_form_is_named_only_when_its_own_pull_would_allow_it(self):
         for args in ('close X-1', 'block X-1 --owner-ask q', 'set X-1 --scope $S'):
             with self.subTest(args):
                 d = self.refused(self.run_as('kit/wt', args, agent_type='worker'))
-                self.assertNotIn('--as <your branch>', d.reason)
+                self.assertNotIn('<your worktree>', d.reason)
         d = self.refused(self.run_as('kit/wt', cwd=self.w.main, agent_type='reviewer'))
-        self.assertNotIn('--as <your branch>', d.reason)
+        self.assertNotIn('<your worktree>', d.reason)
 
 
 class HeldStore(Base):
-    """The stores of OwnPullInstead and OwnPullDecision: the worktree's holds nothing, w.plain
-    stands for the PM data worktree (read_record and live_store are patched, so any folder serves)."""
+    """The stores of OwnPullInstead and OwnPullDecision: `held` maps a folder to the record the
+    store it opens holds. The branch's worktree opens the live store (read_record's own opener,
+    RealStore below); w.main stands for a checkout holding nothing, w.plain for the PM data
+    worktree (read_record is patched, so any folder serves)."""
 
     def setUp(self):
         super(HeldStore, self).setUp()
-        self.live = self.w.plain
         self.store = W.fwd(self.w.plain)
-        self.held = {}                          # store folder -> the record its store holds
+        self.main = W.fwd(self.w.main)
+        self.held = {}                          # folder -> the record the store it opens holds
 
     def read(self, root, rid):
         self.reads.append((W.fwd(root), rid))
@@ -425,93 +434,95 @@ class HeldStore(Base):
         """The decision on the refusal's Instead, run as the refused command was."""
         return self.cmd(d.instead, agent_type, tool=tool, cwd=cwd)
 
-    def form(self, words, at=None, tool='Bash'):
-        run = 'python %s -C "%s" --as kit/wt %s' % (backlogrole.rules.kit_tool(self.w.ctx(), backlogrole.TOOL),
-                                                   self.store, words)
-        if tool == 'PowerShell':
-            return 'cd "%s"; if ($?) { %s }' % (at or self.wt, run)
-        return 'cd "%s" && %s' % (at or self.wt, run)
+    def form(self, words):
+        return 'python %s -C "%s" %s' % (backlogrole.rules.kit_tool(self.w.ctx(), backlogrole.TOOL),
+                                         self.wt, words)
+
+    def from_main(self, words, branch='kit/wt'):
+        """The run at the main checkout's store, as `branch`."""
+        return 'python "%s" -C "%s" --as %s %s' % (self.tool, self.main, branch, words)
 
 
 class OwnPullInstead(HeldStore):
-    """A builder's `set` on its own pull of a folder store, run
-    with -C its worktree, reads the worktree's store (refs/backlog/main), finds no record and is
-    refused; the refusal named `-C <worktree> --as <your branch>`, which reads the same store and
-    is refused again. The Instead is now the run written out against the store that holds the
-    record (the PM data worktree's, backlogrole.live_store) from the branch's worktree, and that
-    form passes (HeldStore: where each store is)."""
+    """A builder's run on its own pull of the PM data store. `-C <its worktree>` alone is the form:
+    one bare call, from any directory, reading the store the worktree opens. The Instead of a run
+    aimed elsewhere is that form written out; a chained `cd` is no form (it chains a write with
+    another command, AGENTS.md)."""
 
-    def test_the_form_names_the_store_that_holds_it_and_passes(self):
-        self.held[self.store] = pulled_by('kit/wt')
+    def test_the_bare_worktree_run_is_its_own_from_any_directory(self):
+        self.held[self.wt] = pulled_by('kit/wt')
+        for args in ('set X-1 --scope s', 'release X-1 --reason r', 'block X-1 --on Y-2 --reason r'):
+            for tool, text in (('Bash', self.bl(args)), ('PowerShell', '& ' + self.bl(args))):
+                for cwd in (None, self.w.main):
+                    with self.subTest(args, tool=tool, cwd=cwd):
+                        self.allowed(self.cmd(text, tool=tool, cwd=cwd))
+        self.assertIn((self.wt, 'X-1'), self.reads)
+
+    def test_the_form_names_the_worktree_and_passes(self):
+        self.held[self.wt] = pulled_by('kit/wt')
         for args, words in (('set X-1 --scope s', 'set X-1 --scope s'),
                             ('release X-1 --reason r', 'release X-1 --reason r'),
                             ('block X-1 --on Y-2 --reason "a b"', "block X-1 --on Y-2 --reason 'a b'"),
                             ('--no-fetch --session S set X-1 --scope s', '--no-fetch --session S set X-1 --scope s')):
             for tool in ('Bash', 'PowerShell'):
                 with self.subTest(args, tool=tool):
-                    text = self.bl(args) if tool == 'Bash' else '& ' + self.bl(args)
+                    text = self.from_main(args) if tool == 'Bash' else '& ' + self.from_main(args)
                     d = self.refused(self.cmd(text, tool=tool))
-                    self.assertEqual(d.instead, self.form(words, tool=tool))
-                    self.assertIn('The record in the store %s is pulled by kit/wt' % self.store, d.reason)
+                    self.assertEqual(d.instead, self.form(words))
+                    self.assertIn('The record is pulled by kit/wt', d.reason)
+                    self.assertIn(self.wt, d.reason)
+                    self.assertNotIn('--as', d.instead)
+                    self.assertNotIn('cd ', d.instead)
                     self.allowed(self.again(d, tool))
                     self.allowed(self.again(d, tool, cwd=self.w.main))
-
-    def test_from_the_main_checkout_with_c_its_worktree(self):
-        self.held[self.store] = pulled_by('kit/wt')
-        d = self.refused(self.cmd(self.bl('set X-1 --scope s'), cwd=self.w.main))
-        self.assertEqual(d.instead, self.form('set X-1 --scope s'))
-        self.allowed(self.again(d, cwd=self.w.main))
 
     def test_someone_elses_pull_is_refused_with_the_read(self):
         read = 'python %s -C "%s" show X-1' % (backlogrole.rules.kit_tool(self.w.ctx(), backlogrole.TOOL), self.wt)
         for rec in (pulled_by('kit/other'), Rec(id='X-1', state='open'), None,
                     Rec(id='X-1', state='done', pulled_by='kit/wt')):
             with self.subTest(rec=rec):
-                self.held[self.store] = rec
+                self.held[self.wt] = rec
                 d = self.refused(self.cmd(self.bl('set X-1 --scope s')))
                 self.assertEqual(d.instead, read)
-                self.assertNotIn(self.store, d.reason)            # a store not holding its pull is never named
+                self.assertNotIn('The record is pulled by', d.reason)
                 self.allowed(self.again(d))
 
     def test_it_never_names_a_branch_the_run_does_not_act_as(self):
-        self.held[self.store] = pulled_by('kit/other')
+        self.held[self.wt] = pulled_by('kit/other')
         d = self.refused(self.cmd(self.bl('--as kit/other set X-1 --scope s')))
         self.assertNotIn('kit/other', d.instead)
         self.assertTrue(d.instead.endswith('show X-1'), d.instead)
-        self.held[self.store] = pulled_by('kit/wt')
+        self.held[self.wt] = pulled_by('kit/wt')
         d = self.refused(self.cmd(self.bl('--as kit/other set X-1 --scope s')))
         self.assertTrue(d.instead.endswith('show X-1'), d.instead)
         self.assertNotIn('--as kit/wt', d.instead)
 
-    def test_a_store_found_without_its_worktree_is_named_in_the_sentence(self):
-        # run from the main checkout as kit/wt: the store is found, the branch's worktree is not
-        self.held[self.store] = pulled_by('kit/wt')
-        d = self.refused(self.cmd('python "%s" -C "%s" --as kit/wt set X-1 --scope s' % (self.tool, W.fwd(self.w.main)),
-                                  cwd=self.w.main))
-        self.assertIn('-C "%s" --as <your branch> set X-1 ...' % self.store, d.reason)
+    def test_no_worktree_in_view_is_named_in_the_sentence(self):
+        # run from the main checkout as kit/wt: the guard sees no worktree of that branch
+        self.held[self.wt] = pulled_by('kit/wt')
+        d = self.refused(self.cmd(self.from_main('set X-1 --scope s'), cwd=self.w.main))
+        self.assertIn('-C <your worktree> set X-1 ...', d.reason)
         self.assertTrue(d.instead.endswith('show X-1'), d.instead)
 
     def test_a_lead_row_or_a_reviewer_gets_no_form(self):
-        self.held[self.store] = pulled_by('kit/wt')
+        self.held[self.wt] = pulled_by('kit/wt')
         for args, agent_type in (('close X-1', 'worker'), ('set X-1 --scope s --priority 3', 'worker'),
                                  ('set X-1 --scope s', 'reviewer')):
             with self.subTest(args, agent_type=agent_type):
                 d = self.refused(self.cmd(self.bl(args), agent_type))
-                self.assertNotIn('--as kit/wt', d.instead)
+                self.assertNotIn('The record is pulled by', d.reason)
+                self.assertNotIn('<your worktree>', d.reason)
 
 
 class OwnPullDecision(HeldStore):
-    """The own-pull fix changes only the printed Instead: each input here refuses or passes as it
-    did before the fix (green at the base, docs/redfirst.md). The own pull run with -C its worktree,
-    someone else's pull, `--as` another branch, a reviewer and a lead row are refused as
-    backlog-role; the form the fix prints (-C the store that holds the record, from the branch's
-    worktree) passes. Bash and PowerShell each."""
+    """Who passes: the own pull run with -C its worktree, and -C <store> --as <branch> from that
+    branch's worktree (unchanged). Someone else's pull, `--as` another branch, a reviewer, a lead
+    row, and a run from the main checkout or the PM data worktree stay refused as backlog-role.
+    Bash and PowerShell each."""
 
-    def test_the_same_inputs_refuse_or_pass_as_before(self):
+    def test_refused(self):
         mine, other = pulled_by('kit/wt'), pulled_by('kit/other')
-        rows = (('own pull, -C its worktree', mine, 'set X-1 --scope s', 'worker'),
-                ('own pull, from the main checkout', mine, 'set X-1 --scope s', 'worker'),
-                ('someone else\'s pull', other, 'set X-1 --scope s', 'worker'),
+        rows = (('someone else\'s pull', other, 'set X-1 --scope s', 'worker'),
                 ('an open record', Rec(id='X-1', state='open'), 'release X-1', 'worker'),
                 ('--as another branch', mine, '--as kit/other set X-1 --scope s', 'worker'),
                 ('a reviewer', mine, 'set X-1 --scope s', 'reviewer'),
@@ -520,17 +531,97 @@ class OwnPullDecision(HeldStore):
         for name, rec, args, agent_type in rows:
             for tool in ('Bash', 'PowerShell'):
                 with self.subTest(name, tool=tool):
-                    self.held = {self.store: rec}
+                    self.held = {self.wt: rec}
                     text = self.bl(args) if tool == 'Bash' else '& ' + self.bl(args)
-                    cwd = self.w.main if 'main checkout' in name else None
-                    self.refused(self.cmd(text, agent_type, tool=tool, cwd=cwd))
+                    self.refused(self.cmd(text, agent_type, tool=tool))
+
+    def test_the_main_checkout_and_the_pm_data_worktree_are_refused(self):
+        mine = pulled_by('kit/wt')
+        self.w.user_config({'pm_data': {'path': self.w.plain}})
+        for folder in (self.main, self.store):
+            for cwd in (None, self.w.main):
+                with self.subTest(folder=folder, cwd=cwd):
+                    self.held = {self.main: mine, self.store: mine, self.wt: mine}
+                    self.refused(self.cmd('python "%s" -C "%s" set X-1 --scope s' % (self.tool, folder), cwd=cwd))
+
+    def test_passes(self):
+        self.held = {self.wt: pulled_by('kit/wt'), self.store: pulled_by('kit/wt')}
         for tool in ('Bash', 'PowerShell'):
             for cwd in (None, self.w.main):
-                with self.subTest('the printed form', tool=tool, cwd=cwd):
-                    self.held = {self.store: mine}
-                    self.allowed(self.cmd(self.form('set X-1 --scope s', tool=tool), tool=tool, cwd=cwd))
-                    self.held = {self.store: other}
-                    self.refused(self.cmd(self.form('set X-1 --scope s', tool=tool), tool=tool, cwd=cwd))
+                with self.subTest('the worktree', tool=tool, cwd=cwd):
+                    self.allowed(self.cmd(self.form('set X-1 --scope s'), tool=tool, cwd=cwd))
+            with self.subTest('--as from its worktree', tool=tool):
+                self.allowed(self.cmd('python "%s" -C "%s" --as kit/wt set X-1 --scope s' % (self.tool, self.store),
+                                      tool=tool))
+
+
+class RealStore(unittest.TestCase):
+    """The guard's decision over a real store (read_record unpatched): a linked worktree on the
+    pulling branch reads the PM data worktree's live store through the tool's own opener, so
+    `-C <worktree>` is its own pull. Another branch's worktree, the main checkout and the PM data
+    worktree are not. ctx is the two things the decision reads, over the same checkouts."""
+
+    def setUp(self):
+        patch = mock.patch.dict(os.environ, fixture_env(), clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        temp_home(self)
+        self.repo = TempRepo(bare_remote=True)
+        self.addCleanup(self.repo.cleanup)
+        pmdata.write(self.repo.common_dir(), 'pmdata', 'private', self.repo.head())
+        self.pm = self.repo.worktree('pm', branch='pmdata')
+        self.repo.write('.kit.json', json.dumps({'backlog': {'store': 'kit/backlog'}}) + '\n', root=self.pm)
+        self.repo.write('kit/backlog/FOO.md',
+                        priced('FOO', state='pulled', pulled_at=TODAY, pulled_by='kit/wk', scope='tools/x/**')['FOO'],
+                        root=self.pm)
+        self.repo.commit('the live store', '.kit.json', 'kit/backlog/FOO.md', cwd=self.pm)
+        self.wt = self.repo.worktree('wk', branch='kit/wk')
+        self.other = self.repo.worktree('oth', branch='kit/oth')
+        p = mock.patch.object(backlogrole.rules, 'kit_tool', lambda ctx, name: 'tool.py')
+        p.start()
+        self.addCleanup(p.stop)
+
+    def place(self, where):
+        if os.path.normcase(os.path.normpath(where)) == os.path.normcase(os.path.normpath(self.pm)):
+            return SimpleNamespace(kind=repo.MAIN, top=self.pm)         # as ctx.place answers it
+        got = repo.classify(where)
+        return SimpleNamespace(kind=got.kind, top=repo.toplevel(where)[0])
+
+    def decide(self, folder, here=None, rid='FOO'):
+        """The refusal sentence of `-C folder set <rid> --scope tools/x/a.py` by a worker, or ''."""
+        ctx = SimpleNamespace(git=SimpleNamespace(current_branch=refs.current_branch), place=self.place)
+        words = ['-C', folder, 'set', rid, '--scope', 'tools/x/a.py']
+        pairs = [(w, True) for w in words]
+        cmd = SimpleNamespace(shell=backlogrole.rules.sh.BASH)
+        text, _form, _instead = backlogrole.own_pull_refusal(ctx, cmd, policy.read_argv(pairs),
+                                                             roles.role_of('worker', True), here, pairs)
+        return text
+
+    def test_its_worktree_reads_the_live_store(self):
+        rec = backlogrole.read_record(self.wt, 'FOO')
+        self.assertIsNotNone(rec, 'the guard read the dead default ref, not the live store')
+        self.assertEqual(rec.get('pulled_by'), 'kit/wk')
+
+    def test_its_worktree_passes_from_any_directory(self):
+        self.assertFalse(self.decide(self.wt))
+        self.assertFalse(self.decide(self.wt, here=self.repo.root))
+
+    def test_another_branchs_worktree_is_refused(self):
+        self.assertTrue(self.decide(self.other))
+
+    def test_naming_another_branchs_worktree_acts_as_that_branch(self):
+        """The residual docs/guard.md "Known limits" states: only the -C folder's branch is compared,
+        so from kit/wk's worktree, -C kit/oth's worktree passes on kit/oth's pull."""
+        self.repo.write('kit/backlog/BAR.md',
+                        priced('BAR', state='pulled', pulled_at=TODAY, pulled_by='kit/oth', scope='tools/y/**')['BAR'],
+                        root=self.pm)
+        self.repo.commit('another pull', 'kit/backlog/BAR.md', cwd=self.pm)
+        self.assertFalse(self.decide(self.other, here=self.wt, rid='BAR'))
+        self.assertTrue(self.decide(self.wt, rid='BAR'))
+
+    def test_the_main_checkout_and_the_pm_data_worktree_are_refused(self):
+        self.assertTrue(self.decide(self.repo.root))
+        self.assertTrue(self.decide(self.pm))
 
 
 class QuotedWords(Base):
