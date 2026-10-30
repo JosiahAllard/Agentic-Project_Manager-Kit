@@ -60,8 +60,6 @@ PROCWATCH = (STARTS_NOTHING + 'a standalone process report (its own folder alone
 ENTRY_EXEMPT = {
     'boot/hook.py': BOOT_HOOK,
     'boot/kitboot.py': BOOT_KITBOOT,
-    'hosts/codex/shell/boot/hook.py': BOOT_HOOK + ' (the Codex plugin\'s byte copy of boot/hook.py)',
-    'hosts/codex/shell/boot/kitboot.py': BOOT_KITBOOT + ' (the Codex plugin\'s byte copy)',
     'kitlib/tooldeps/pool_worker.py': POOL_WORKER,
     'optional/comfy/compare_sheet.py': STARTS_NOTHING + COMFY,
     'optional/comfy/render_glb.py': COMFY + ', and it runs inside Blender\'s own Python, where '
@@ -86,7 +84,6 @@ ENTRY_DIRS = ('boot', 'githooks', 'hosts', 'kitlib', 'mcp', 'optional', 'tools')
 # Modules a whole kind of run imports before anything else; none has a __main__ block.
 FIRST_IMPORTED = {
     'boot/kitboot.py': 'every host entry runs it before it imports kitlib',
-    'hosts/codex/shell/boot/kitboot.py': 'the Codex plugin\'s byte copy of boot/kitboot.py',
     'kitlib/host/hookmain.py': 'the one hook runner behind boot/hook.py',
     'tests/__init__.py': 'every test run imports the tests package before any test module',
     'tools/_host.py': 'the shared tools import it to reach a host adapter',
@@ -289,7 +286,7 @@ class EntryPoints(unittest.TestCase):
         for rel in ('tools/gate.py', 'tools/_host.py', 'tools/agent_view.py', 'tools/kit_release.py',
                     'tools/render_content.py', 'tools/machine_lock.py', 'githooks/pre-push',
                     'githooks/pre-commit.py', 'reserve_ui.pyw', 'tests/__init__.py', 'boot/hook.py',
-                    'boot/kitboot.py', 'hosts/codex/shell/boot/hook.py', 'kitlib/host/hookmain.py',
+                    'boot/kitboot.py', 'kitlib/host/hookmain.py',
                     'mcp/lock_server.py', 'hosts/codex/shell/mcp/lock_server.py',
                     'hosts/codex/shell/scripts/kit.py', 'optional/bridge/tools/bridge_service.py',
                     'optional/agenttemp/agent_temp_sweep.py', 'optional/procwatch/procwatch.py',

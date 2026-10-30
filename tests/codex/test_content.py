@@ -83,6 +83,30 @@ class Agents(unittest.TestCase):
                     self.assertNotIn(value.encode(), data, (path, value))
 
 
+class Retired(unittest.TestCase):
+    def test_a_file_left_in_a_retired_folder_is_stale(self):
+        """The skills and boot copies the Codex renderer no longer writes: a file left in either is
+        drift (`stale:`), so render_content --check fails and --write removes it."""
+        import tempfile
+
+        class Agents:                       # the Codex renderer's own folders, without its manifests
+            r = cc.renderer()
+            owned, retired = r.owned, r.retired
+
+            def render(self, content):
+                return self.r.render(content)
+
+        left = ('hosts/codex/shell/skills/old/SKILL.md', 'hosts/codex/shell/boot/kitboot.py')
+        with tempfile.TemporaryDirectory() as root:
+            for rel in left:
+                os.makedirs(os.path.join(root, os.path.dirname(rel)))
+                with open(os.path.join(root, rel), 'wb') as f:
+                    f.write(b'x\n')
+            lines = kcontent.drift(root, [Agents()], content=hc.Content(roles=(), skills=()))
+        self.assertEqual([l for l in lines if l.startswith('stale:')],
+                         ['stale: %s' % rel for rel in sorted(left)])
+
+
 class DefaultRole(unittest.TestCase):
     def test_an_unmarked_session_is_the_read_type(self):
         """A Codex session with no PM_KIT_ROLE runs as the analyst, the read type (a role file the
@@ -231,26 +255,11 @@ class Manifests(unittest.TestCase):
                 r.hooks()
 
 
-class Vendored(unittest.TestCase):
-    def test_the_plugin_ships_the_kits_boot_folder_byte_for_byte_and_its_hosts_entry(self):
-        files = cc.renderer().vendored(ROOT)
-        want = {}
-        for name in ('kitboot.py', 'hook.py'):
-            with open(os.path.join(ROOT, 'boot', name), 'rb') as f:
-                want['hosts/codex/shell/boot/' + name] = f.read()
-        with open(os.path.join(ROOT, 'hosts.json'), encoding='utf-8') as f:
-            entry = json.load(f)['codex']
-        self.assertEqual(json.loads(files.pop(cc.HOSTS_REL)), {'codex': entry})
-        self.assertEqual(files, want)
-        rendered = kcontent.render(ROOT, [cc.renderer()])
-        for path in list(want) + [cc.HOSTS_REL]:
-            self.assertIn(path, rendered)
-
+class Hook(unittest.TestCase):
     def load_hook(self):
-        """The plugin's copy of boot/hook.py, as a module."""
+        """boot/hook.py, the plugin's hook entry (the export's own boot folder), as a module."""
         import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            'codex_hook', os.path.join(ROOT, 'hosts', 'codex', 'shell', 'boot', 'hook.py'))
+        spec = importlib.util.spec_from_file_location('codex_hook', os.path.join(ROOT, 'boot', 'hook.py'))
         hook = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(hook)
         return hook

@@ -7,7 +7,7 @@ a test fails when they differ from what the renderer writes now (tests/content/t
 
 - `content/roles/<name>.md`: one role. Front matter, then a neutral body.
 - `content/skills/<name>/`: one skill folder, shipped byte for byte on every host. Claude's plugin
-  loads it from there; Codex still ships a copy (see "Codex").
+  loads it from there, and so does Codex's, from the export (see "Codex").
 - `content/default-profile.md`: the agent profile every role reads when a repository has none
   (docs/agent-profile.md). Not rendered: it holds no tokens and names no host
   (tests/content/test_default_profile.py).
@@ -140,19 +140,17 @@ account's model runs; docs/ROSTER.md), `model_reasoning_effort` (the role's `eff
 `sandbox_mode` (`read-only` for a `read` or `lander` mode role, else the role's `sandbox`) and `developer_instructions`, the body with Codex's token values
 as a TOML multi-line string. A Codex agent file has no tool list, so `capabilities` and `cache` are not
 rendered; nor is `compact`, because no per-agent compact key in a Codex agent file has been established
-(no Codex install here to check). It copies each skill folder to `hosts/codex/shell/skills/<name>/` and owns both folders; the
-copy stays until a live Codex install shows it loads skills from outside its plugin folder
-(hosts/codex/README.md "Not verified"). Its
+(no Codex install here to check). It owns the agents folder alone: Codex loads the skills from
+`./content/skills/` in the export, so none is copied. Its `retired()` names `hosts/codex/shell/skills`
+and `hosts/codex/shell/boot`, the folders the old hand-made copy needed, so a file left in either is
+stale. Its
 manifests are `hosts/codex/shell/plugin.json` (the name and version; `./content/skills/`, the hooks file and `mcp.json` named from the export root, where the export places it as `.codex-plugin/plugin.json`, docs/plugin-source.md "Layout"),
 `hosts/codex/shell/mcp.json` (the read-only lock server and the hub server) and `hosts/codex/shell/hooks/hooks.json`
-(every declared hook event running `boot/hook.py codex <event>`, the plugin's copy, as one
+(every declared hook event running `boot/hook.py codex <event>`, the export's own entry, as one
 command string), with `hooks.linux.json` beside it as for Claude ("Manifests"): the Linux command
 line joined as a POSIX shell line, `${PLUGIN_ROOT}/boot/hook.py` in double quotes and the body in
-single quotes (`posix_quote`). Its `vendored(root)` ships byte copies of `boot/kitboot.py` and `boot/hook.py` in
-`hosts/codex/shell/boot/`, and `hosts/codex/shell/hosts.json`, hosts.json's Codex entry alone: the
-Codex plugin root is `hosts/codex/shell`, so a copied plugin carries the hook entry, the hook data it
-reads before the kit boots and the check that verifies the kit it binds; `--check` fails when a copy
-drifts. Claude needs none: its plugin root is the whole kit, `boot/` included. Status:
+single quotes (`posix_quote`). Nothing is vendored: the Codex plugin root is the export folder, which
+holds `boot/` and `hosts.json`, as Claude's does. Status:
 hosts/codex/README.md.
 
 ## Manifests
