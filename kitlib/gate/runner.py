@@ -93,10 +93,13 @@ def gate_config(cfg):
     the hash still names what decides the steps. A key of HASH_IF_SET that is unset is left out,
     so a config that sets none of them hashes as it did before the key existed: a record a kit
     without the key wrote still verifies. Each key of HASH_REMOVED is put in with the default it
-    hashed as, so a record a kit that still had the key wrote verifies too."""
+    hashed as, so a record a kit that still had the key wrote verifies too. A renamed kind
+    hashes under its old name (HASH_KIND_AS)."""
     gate = cfg.section('gate')
     hashed = {k: v for k, v in gate.items() if not (k in HASH_IF_SET and v is None)}
     hashed.update((k, v) for k, v in HASH_REMOVED.items() if k not in hashed)
+    if isinstance(hashed.get('kind'), str):
+        hashed['kind'] = HASH_KIND_AS.get(hashed['kind'], hashed['kind'])
     return hashed
 
 
@@ -107,6 +110,10 @@ HASH_IF_SET = ('smoke_steps', 'docs_only')
 # the steps: dropping one would change every repo's hash, so every gate-OK record written on the
 # other side of that kit change would fail verify_record (docs/gate.md "Gate-OK record").
 HASH_REMOVED = {'python_tests': 'discover', 'python_tests_floor': None, 'trailers': None}
+# A renamed kind hashes under the name it had when records were first written (kitlib/lock/
+# kinds.json "aliases"), so "gate".kind under either name, and the default, hash as before the
+# rename: records from both sides of it verify. Fixed here, never read from the table.
+HASH_KIND_AS = {'test': 'engine-test', 'app-run': 'engine-run'}
 
 
 def gate_config_at(root, rev):

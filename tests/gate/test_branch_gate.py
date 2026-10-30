@@ -303,14 +303,22 @@ class GateConfigHash(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             self.assertFalse(set(runner.HASH_REMOVED) & set(kconfig.load(root).section('gate')))
 
+    def test_a_kind_under_its_new_or_retired_name_hashes_alike(self):
+        # gate.kind "test" and "engine-test" (and app-run, engine-run) name one kind: a record
+        # made under either verifies under the other, in old and new kits alike.
+        for new, old in (('test', 'engine-test'), ('app-run', 'engine-run')):
+            a = gate_ok.config_hash(runner.gate_config(self.Cfg({'steps': [], 'kind': new})))
+            b = gate_ok.config_hash(runner.gate_config(self.Cfg({'steps': [], 'kind': old})))
+            self.assertEqual(a, b, new)
+        self.assertNotEqual(runner.gate_config(self.Cfg({'kind': 'build'})),
+                            runner.gate_config(self.Cfg({'kind': 'engine-test'})))
+
     def test_a_default_config_hashes_as_it_did_before_the_keys_were_removed(self):
         # The hash a repo with no gate config had at 19f5763e0, while python_tests,
         # python_tests_floor and trailers were gate keys: a record from either side verifies.
-        # Re-pinned when the default gate.kind became "test" (was "engine-test"): a record
-        # written before that, for a repo on the default kind, does not verify after it.
         with tempfile.TemporaryDirectory() as root:
             self.assertEqual(gate_ok.config_hash(runner.gate_config(kconfig.load(root))),
-                             '238c3f289d44e7745ad27ab2cf52ccc3be38d7bcd5556f326d9058e58cd8cbec')
+                             'fe96461f7c0adde1d0e99dd14663dd5352ed730909ba5fcfa68415cb5e237b6f')
 
 
 def mode_step(word):
