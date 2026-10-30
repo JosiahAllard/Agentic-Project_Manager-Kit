@@ -272,7 +272,8 @@ def own_pull_refusal(ctx, cmd, argv, who, here=None, pairs=None):
     (plan.holder_form). Any other --as is not this session's. When the own pull alone would allow
     the run, the form sentence names the accepted way, else it is ''; the form is that way written
     out (own_form) when the guard finds the store holding the record pulled by the branch the run
-    acts as, and that branch's worktree, else None. Nothing own_form reads changes the decision."""
+    acts as, and that branch's worktree (or, for an --as run from no linked worktree, with
+    YOUR_WORKTREE for it), else None. Nothing own_form reads changes the decision."""
     from kitlib.backlog import policy, roles
     root = _root(cmd, here, argv)                # None: no record read, so never its own pull
     rec, branch = None, None
@@ -293,7 +294,7 @@ def own_pull_refusal(ctx, cmd, argv, who, here=None, pairs=None):
         found = own_form(ctx, cmd, argv, who, root, here, pairs)
         if found is not None and found[3] is not None:
             store, b, wt, instead = found
-            form = OWN_FOUND % (rules.fwd(store), b, rules.fwd(wt))
+            form = OWN_FOUND % (rules.fwd(store), b, rules.fwd(wt)) if wt else OWN_PLACE % (rules.fwd(store), b)
         else:
             store = found[0] if found is not None else root
             form = OWN_FORM % (rules.kit_tool(ctx, TOOL), rules.quote(store) if store else '<store>', argv.verb,
@@ -308,20 +309,27 @@ def own_form(ctx, cmd, argv, who, root, here, pairs):
     worktree (live_store: a folder store the run's folder does not read), and the run written
     again as `python <tool> -C <store> --as <branch> <verb> <words>` from that branch's worktree:
     the folder the tool runs in when it is in a linked worktree on that branch, else the run's
-    folder when that is one. (store, branch, None, None) when the store is found but no worktree
-    or the words do not read; None when no store read holds the record pulled by that branch
-    (someone else's pull, or none). It never names a branch the run does not act as, nor a store
-    it did not read the record in."""
+    folder when that is one. With no such worktree, an --as run from no linked worktree (the
+    main checkout a subagent's shell starts each call in, a plain folder) is written with
+    YOUR_WORKTREE for the folder (not when its -C is a linked worktree on another branch): the
+    guard does not look the branch's worktree up, since the --as
+    alone never shows it is this session's, and the form passes only from the worktree the
+    session fills in. (store, branch, None, None) when the store is found but the run is in a
+    linked worktree on another branch, or the words do not read; None when no store read holds
+    the record pulled by that branch (someone else's pull, or none). It never names a branch the
+    run does not act as, nor a store it did not read the record in."""
     from kitlib.backlog import policy, roles
     b = argv.branch if argv.branch is not None else (_branch_at(ctx, root) if root else None)
     if not root or not isinstance(b, str) or not b or rules.shell_word(b) != b:
         return None
     hp = ctx.place(here) if here else None
+    placeholder = False
     if hp is not None and hp.kind == repo.LINKED and hp.top:
         wt, at = (hp.top, here) if _branch_at(ctx, hp.top) == b else (None, None)
     else:
         wt = ctx.place(root).top if _worktree_on(ctx, root, b) else None
         at = wt
+        placeholder = wt is None and argv.branch is not None and ctx.place(root).kind != repo.LINKED
     stores = [root]
     pm = live_store(wt or root)
     if pm and paths.norm(pm) != paths.norm(root):
@@ -334,11 +342,11 @@ def own_form(ctx, cmd, argv, who, root, here, pairs):
         if not policy.own_pull(rec, b) or \
                 policy.refusal(who, policy.sort(argv.verb, argv.given, rec), (roles.OWN_PULL,)) is not None:
             continue
-        words = _rerun_words(pairs) if wt else None
+        words = _rerun_words(pairs) if wt or placeholder else None
         if words is None:
             return store, b, None, None
         run = 'python %s -C %s --as %s %s' % (rules.kit_tool(ctx, TOOL), rules.quote(store), b, words)
-        return store, b, wt, rules.cd_line(rules.fwd(at), run, rules.outer_shell(cmd))
+        return store, b, wt, rules.cd_line(rules.fwd(at) if wt else YOUR_WORKTREE, run, rules.outer_shell(cmd))
     return None
 
 
@@ -381,6 +389,12 @@ OWN_FORM = (' It is your own pull only when the record is pulled by the branch t
 # the form refusal sentence when own_form found the store and the worktree
 OWN_FOUND = (' The record in the store %s is pulled by %s: run it from that branch\'s worktree %s, with -C '
              'that store and --as that branch:')
+# the form refusal sentence when own_form found the store but the run is in no linked worktree
+OWN_PLACE = (' The record in the store %s is pulled by %s, but the run is in no linked worktree on that branch '
+             '(a subagent\'s shell starts each call where it was started, not in its worktree), and --as alone '
+             'never shows the branch is yours. If it is, cd into your worktree on that branch in the same call, '
+             'with -C that store and --as that branch (your worktree for the placeholder):')
+YOUR_WORKTREE = '<your worktree>'               # own_form's folder when the guard sees none
 
 
 # ---------------------------------------------------------------- code that skips the tool

@@ -488,8 +488,9 @@ class OwnPullInstead(HeldStore):
         self.held[self.store] = pulled_by('kit/wt')
         d = self.refused(self.cmd('python "%s" -C "%s" --as kit/wt set X-1 --scope s' % (self.tool, W.fwd(self.w.main)),
                                   cwd=self.w.main))
-        self.assertIn('-C "%s" --as <your branch> set X-1 ...' % self.store, d.reason)
-        self.assertTrue(d.instead.endswith('show X-1'), d.instead)
+        self.assertIn('The record in the store %s is pulled by kit/wt, but the run is in no linked worktree'
+                      % self.store, d.reason)
+        self.assertEqual(d.instead, self.form('set X-1 --scope s', at=backlogrole.YOUR_WORKTREE))
 
     def test_a_lead_row_or_a_reviewer_gets_no_form(self):
         self.held[self.store] = pulled_by('kit/wt')
@@ -498,6 +499,57 @@ class OwnPullInstead(HeldStore):
             with self.subTest(args, agent_type=agent_type):
                 d = self.refused(self.cmd(self.bl(args), agent_type))
                 self.assertNotIn('--as kit/wt', d.instead)
+
+
+class AsFromOutsideItsWorktree(HeldStore):
+    """A builder's `-C <store> --as <its branch> set <ID> --scope ...` run from the main checkout,
+    where a subagent's shell starts each call (KIT-SCOPE-NARROW-AS: 143 builder refusals, 113
+    retried in the same shape). The run shows no linked worktree on the branch, so it stays
+    refused: --as alone never grants the own pull. Its Instead named only `show`; it now names the
+    form that passes, the same run with a cd into the session's worktree in the same call, the
+    folder left for the session to fill in (backlogrole.YOUR_WORKTREE): the guard never looks the
+    --as branch's worktree up."""
+
+    def setUp(self):
+        super(AsFromOutsideItsWorktree, self).setUp()
+        self.held[self.store] = pulled_by('kit/wt')
+
+    def run_as(self, branch, tool='Bash'):
+        text = 'python "%s" -C "%s" --as %s set X-1 --scope s' % (self.tool, self.store, branch)
+        return self.cmd(text if tool == 'Bash' else '& ' + text, tool=tool, cwd=self.w.main)
+
+    def filled(self, d, tool='Bash'):
+        """The refusal's Instead with the session's worktree filled in, run from the main checkout."""
+        self.assertIn(backlogrole.YOUR_WORKTREE, d.instead)
+        return self.cmd(d.instead.replace(backlogrole.YOUR_WORKTREE, self.wt), tool=tool, cwd=self.w.main)
+
+    def test_the_instead_names_the_form_that_passes_for_its_own_pull(self):
+        for tool in ('Bash', 'PowerShell'):
+            with self.subTest(tool=tool):
+                d = self.refused(self.run_as('kit/wt', tool))
+                self.assertEqual(d.instead, self.form('set X-1 --scope s', at=backlogrole.YOUR_WORKTREE, tool=tool))
+                self.assertIn('--as alone never shows the branch is yours', d.reason)
+                self.assertNotIn('Ask a session whose role may take it', d.reason)
+                self.allowed(self.filled(d, tool))
+
+    def test_as_another_branchs_pull_is_still_refused(self):
+        # the record is kit/other's pull: --as kit/other is refused from the main checkout, and the
+        # Instead filled in with this session's worktree (on kit/wt) is refused again
+        self.held[self.store] = pulled_by('kit/other')
+        d = self.refused(self.run_as('kit/other'))
+        self.refused(self.filled(d))
+        # --as its own branch on another branch's pull: no form, only the read
+        d = self.refused(self.run_as('kit/wt'))
+        self.assertTrue(d.instead.endswith('show X-1'), d.instead)
+        self.assertNotIn(backlogrole.YOUR_WORKTREE, d.instead)
+
+    def test_no_placeholder_when_the_run_shows_another_branch(self):
+        # -C a linked worktree on kit/wt with --as kit/other: the run's folder says another branch
+        self.held = {self.wt: None, self.store: pulled_by('kit/other')}
+        d = self.refused(self.cmd('python "%s" -C "%s" --as kit/other set X-1 --scope s' % (self.tool, self.wt),
+                                  cwd=self.w.main))
+        self.assertNotIn(backlogrole.YOUR_WORKTREE, d.instead)
+        self.assertNotIn('kit/other', d.instead)
 
 
 class OwnPullDecision(HeldStore):
