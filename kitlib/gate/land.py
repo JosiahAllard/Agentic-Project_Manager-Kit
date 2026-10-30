@@ -260,7 +260,7 @@ MERGE_TIMEOUT = 300
 POLL_S = 5.0
 # a record close_pulled closed: at_landing.close_landed's line, `closed <id> in the backlog store`
 _CLOSED = re.compile(r'closed (\S+) in the backlog store\b')
-STEP_CMD ='    $ '      # a STUCK clear step's command line starts with this
+STEP_CMD = '    $ '      # a STUCK clear step's command line starts with this
 TREE_NAME = '_landing'   # the landing tree's folder, under the config's worktrees_dir
 TREE_LOCK = 'kit landing tree (kitlib.gate.land)'     # its git worktree lock reason
 # The scope check (step 5, Lander.scope_check): True refuses a branch that changes a path outside
