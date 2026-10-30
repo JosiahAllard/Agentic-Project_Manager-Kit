@@ -41,7 +41,7 @@ class BranchGate(fixtures.GateRepoCase):
         later = self.repo.commit('later', 'b.py', cwd=wt)
         self.assertIsNotNone(gate_ok.verify(wt, later)[1])
         # the run went through the scratch lock store
-        self.assertTrue(any(d.get('kind') == 'engine-test' for d in self.store.history_records(1)))
+        self.assertTrue(any(d.get('kind') == 'test' for d in self.store.history_records(1)))
 
     def test_the_lock_run_is_a_gate_run(self):
         """The gate books as a gate (book(gate=True)), so the lock stops the build daemons it
@@ -306,9 +306,11 @@ class GateConfigHash(unittest.TestCase):
     def test_a_default_config_hashes_as_it_did_before_the_keys_were_removed(self):
         # The hash a repo with no gate config had at 19f5763e0, while python_tests,
         # python_tests_floor and trailers were gate keys: a record from either side verifies.
+        # Re-pinned when the default gate.kind became "test" (was "engine-test"): a record
+        # written before that, for a repo on the default kind, does not verify after it.
         with tempfile.TemporaryDirectory() as root:
             self.assertEqual(gate_ok.config_hash(runner.gate_config(kconfig.load(root))),
-                             'fe96461f7c0adde1d0e99dd14663dd5352ed730909ba5fcfa68415cb5e237b6f')
+                             '238c3f289d44e7745ad27ab2cf52ccc3be38d7bcd5556f326d9058e58cd8cbec')
 
 
 def mode_step(word):

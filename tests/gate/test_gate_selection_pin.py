@@ -48,7 +48,7 @@ PINNED = {
     'warn_lines': None,
     'zero_tests': None,
     'errors': None,
-    'kind': 'engine-test',
+    'kind': 'test',
     'smoke_steps': ['kit-suite'],
     'docs_only': {'globs': ['docs/*.md'], 'steps': ['kit-suite']},
 }
