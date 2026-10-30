@@ -718,6 +718,24 @@ class GateOnceDocs(ScopedCase):
                          ('docs', ['scrub']))
         self.assertFalse(any(l.startswith(ONCE) for l in said), said)
 
+    def test_a_merge_diff_git_cannot_list_escalates_to_full(self):
+        # Lander.once_escalate: the first diff that is not to the tip is the merge's (base..merge)
+        _, tip, _ = self.gated({'docs/guide.md': 'words\n'})
+        real, failed = runner.changed_between, []
+
+        def changed_between(root, a, b):
+            if b != tip and not failed:
+                failed.append(b)
+                return None, 'git broke'
+            return real(root, a, b)
+        said = []
+        with mock.patch.object(runner, 'changed_between', changed_between):
+            out = self.lander(BRANCH, self.main, tip, say=said.append).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(failed, [out.merge])
+        self.assertEqual(gate_ok.mode_of(gate_ok.read(self.repo.root, out.merge)[0]), 'full')
+        self.assertTrue(any(l.startswith(ONCE) for l in said), said)
+
 
 class GateOnceRed(ScopedCase):
     """The merged gate under "landing".gate_once runs each step's full_cmd: here it fails where
