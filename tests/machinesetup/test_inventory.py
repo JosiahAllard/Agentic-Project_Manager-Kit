@@ -150,11 +150,62 @@ class Reports(Planted):
         self.assertNotIn(os.path.basename(self.home), text)
         self.assertIn(inventory.HOME_TEXT, text)
 
+    @windows_only('directory junctions are Windows only')
+    def test_the_home_folder_is_not_printed_in_a_link_line(self):
+        junction(os.path.join(self.dirs['b'], 'skills'), os.path.join(self.kit, 'content', 'skills'))
+        res = self.run_inventory()
+        link_lines = [l for l in inventory.lines(res) if 'leftover link' in l]
+        link_lines += res['folders'][1]['links']
+        self.assertEqual(2, len(link_lines))
+        for l in link_lines:
+            self.assertNotIn(os.path.basename(self.home), l)
+            self.assertIn('remove it with: cmd /c rmdir "%USERPROFILE%', l)
+
     def test_the_summary_counts_the_findings(self):
         s = self.res['summary']
         self.assertEqual(4, s['folders'])
         self.assertEqual(3, s['with_findings'])
         self.assertIn('summary: 4 folder(s), 3 need attention', inventory.lines(self.res)[-1])
+
+
+class Variants(Fixture):
+    @windows_only('directory junctions are Windows only')
+    def test_a_run_from_an_export_still_finds_links_into_the_checkout(self):
+        os.makedirs(os.path.join(self.root, '.git'))
+        os.makedirs(os.path.join(self.kit, '.git'))
+        exp = os.path.join(self.root, 'kit-export')
+        os.makedirs(exp)
+        write(os.path.join(exp, '.pm-kit-export'), json.dumps({'checkout': self.kit}))
+        junction(os.path.join(self.dirs['b'], 'skills'), os.path.join(self.kit, 'content', 'skills'))
+        res = inventory.inventory(self.home, exp, export_dir=self.export)
+        self.assertEqual(1, len(self.entry(res, 'b')['links']))
+        self.assertIn('leftover link', self.entry(res, 'b')['links'][0])
+
+    def test_an_unreadable_launcher_config_flags_no_folder_as_not_an_account(self):
+        machine_config(self.home, {'launcher': {'accounts': 'not an object'}}, case=self)
+        res = self.run_inventory()
+        self.assertEqual(3, len(res['folders']))
+        self.assertEqual([], [f for f in res['folders'] if f['not_account']])
+        self.assertEqual(1, len([n for n in res['notes'] if 'launcher config unreadable' in n]))
+        self.assertFalse(any(inventory.NOT_ACCOUNT in f['issues'] for f in res['folders']))
+
+    def test_an_org_sign_in_counts(self):
+        org = os.path.join(self.home, '.claude-org')
+        write(os.path.join(org, '.claude.json'), json.dumps({'oauthAccount': {'k': 1}}))
+        self.migrate(org)
+        machine_config(self.home, {'launcher': {'accounts': {n: ['~/.claude-' + k]
+                                                             for k, n in self.names.items()},
+                                                'orgs': {'1': '~/.claude-org'}}}, case=self)
+        res = self.run_inventory()
+        o = [f for f in res['folders'] if f['label'] == 'org 1'][0]
+        self.assertTrue(o['signed_in'])
+        self.assertFalse(o['not_account'])
+
+    def test_a_missing_plugin_state_is_noted_once(self):
+        os.remove(os.path.join(self.export, 'state.json'))
+        res = self.run_inventory()
+        self.assertEqual(1, len([n for n in res['notes'] if 'no export state' in n]))
+        self.assertFalse(any('no export state' in i for f in res['folders'] for i in f['issues']))
 
 
 class ReadOnly(Planted):

@@ -168,13 +168,13 @@ The write keeps the machine config's other keys and its layout (`kitlib/machines
 
 `python tools/account_inventory.py` (`--json` for one JSON object; `--home`, `--kit`, `--export-dir` as the other machine tools) shows how far each Claude account folder has drifted from the shared setup (`kitlib/machinesetup/inventory.py`). It is read only: it changes nothing, removes nothing and writes nothing into any account folder; the removals it prints are for the owner to run by hand. It exits 0 whenever it ran, whatever it found. For each folder of `kitlib.pluginsource.claude` `account_folders` it prints:
 
-- the launcher label (`launcher.accounts` number, or `org N`; `default` for an unlisted `~/.claude`) and whether `.credentials.json` exists (existence only; the file is never read);
+- the launcher label (`launcher.accounts` number, or `org N`; `default` for an unlisted `~/.claude`) and whether the folder is signed in: `.credentials.json` exists, or, for an org folder, its `.claude.json` has an `oauthAccount` (`launcher.accounts` `signed_in`, `org_signed_in`; existence only, no credential value is read or printed). When the launcher config cannot be read, one `launcher config unreadable` note is printed, the labels are unknown and no folder is flagged as not an account;
 - the pm-kit plugin's state in the export's `state.json`: migrated, and refreshed (its last refresh exited 0), with the command that fixes a missing one, and a pm-kit marketplace path that is not the export (`marketplace_mismatches`);
 - each `settings.json` hook that the managed settings template (`hosts/<host>/managed-settings.json`) also carries, so it runs twice;
 - each leftover link under the folder, with the command that removes the link only (`links.survey`);
 - a `~/.claude-*` folder that no launcher account or org lists, flagged `not an account; check before retiring`. Nothing is retired.
 
-Paths show the home folder as `%USERPROFILE%`. A final line sums up the folders and findings. Limits: whether the export is behind kit main needs the remote, so it is not checked (`plugin_refresh.py` is the dry run for that); a hook that names the kit by another path than the template's (an export instead of the checkout) is not matched.
+Paths show the home folder as `%USERPROFILE%`; the printed removal commands are `cmd` commands (`%USERPROFILE%` expands only in `cmd`, so run them there, not in PowerShell or Git Bash). A final line sums up the folders and findings. Limits: whether the export is behind kit main needs the remote, so it is not checked (`plugin_refresh.py` is the dry run for that); a hook that names the kit by another path than the template's (an export instead of the checkout) is not matched.
 
 ## PM repo pointer
 

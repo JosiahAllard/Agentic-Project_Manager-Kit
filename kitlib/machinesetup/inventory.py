@@ -4,7 +4,8 @@ folder, the export or the machine config, and removes nothing. The owner runs th
 names by hand.
 
 inventory(home, kit, export_dir=None) -> a dict: for each account folder (kitlib.pluginsource
-account_folders), its launcher label, whether a credentials file exists (existence only, never read),
+account_folders), its launcher label, whether it is signed in (a credentials file exists, or an org folder's account
+record: kitlib.launcher.accounts, never read for its value),
 the pm-kit plugin's state (migrated to the export, refreshed: kitlib.pluginsource state.json),
 the settings.json hooks that the managed settings template also carries (they run twice), and the
 leftover links (kitlib.machinesetup.links, each with the command that removes the link only). A
@@ -17,7 +18,6 @@ import os
 import types
 
 from kitlib import pluginsource as ps
-from kitlib.config import user
 from kitlib.launcher import accounts as laccounts
 from kitlib.launcher import settings as lsettings
 
@@ -29,7 +29,7 @@ NOT_ACCOUNT = 'not an account; check before retiring'
 _IGNORED_LINK_NOTE = 'a real folder, left as it is'      # links.survey's note that asks nothing of the owner
 
 
-def _labels(home, ls):
+def _labels(ls):
     """{normalised folder: [label]} from the launcher: account n is "n", an org n is "org n"."""
     out = {}
     if ls is None:
@@ -46,7 +46,7 @@ def _launcher(home):
     try:
         return lsettings.load(home), None
     except Exception as e:                        # a missing or bad launcher config: report it, go on
-        return None, 'the launcher config cannot be read (%s); no folder has a label' % type(e).__name__
+        return None, 'launcher config unreadable (%s); account labels unknown' % type(e).__name__
 
 
 def _template_hooks(kit, home, export_dir):
@@ -93,6 +93,12 @@ def _duplicates(folder, template, home):
 
 
 def _links(folder, kit):
+    """The leftover-link notes of `folder`. `kit` is the main checkout (managed.stable_kit), so a run
+    from a plugin export still finds the links into the checkout."""
+    try:
+        kit = managed.stable_kit(kit)
+    except managed.ManagedError:
+        pass
     plan = Plan(sections=('links',))
     links.survey(plan, folder, types.SimpleNamespace(kit=kit, old_kit=None))
     return [n for n in plan.notes['links'] if _IGNORED_LINK_NOTE not in n]
@@ -101,7 +107,7 @@ def _links(folder, kit):
 def _plugin(folder, state, state_why, export_dir):
     """{'migrated', 'refreshed', 'problems': [text]} for one folder."""
     if state is None:
-        return {'migrated': False, 'refreshed': False, 'problems': [state_why]}
+        return {'migrated': False, 'refreshed': False, 'problems': ['pm-kit plugin state unknown; see the note']}
     migrated = ps.migrated(state, folder)
     rec = ps._record(state, folder)
     refreshed = migrated and rec.get('rc') == 0
@@ -135,19 +141,23 @@ def inventory(home, kit, export_dir=None):
                 state_why = 'pm-kit plugin: no export state at %s yet: %s' % (export_dir, ps.refresh_cmd(True))
         except ps.StateError as e:
             state_why = 'pm-kit plugin: %s' % e
+    if state is None:
+        notes.append(state_why)
     ls, why = _launcher(home)
     if why:
         notes.append(why)
-    labels = _labels(home, ls)
+    labels = _labels(ls)
     template, why = _template_hooks(kit, home, export_dir)
     if why:
         notes.append(why)
     folders = []
     for f in ps.account_folders(home):
         label = labels.get(norm(f))
-        unlisted = not label and os.path.basename(f) != lsettings.DEFAULT_FOLDER
+        unlisted = ls is not None and not label and os.path.basename(f) != lsettings.DEFAULT_FOLDER
         if not label:
-            label = [] if unlisted else [laccounts.DEFAULT_LABEL]
+            label = [] if ls is None or unlisted else [laccounts.DEFAULT_LABEL]
+        signed = laccounts.signed_in(f) or (any(x.startswith('org ') for x in label)
+                                            and laccounts.org_signed_in(f))
         plug = _plugin(f, state, state_why, export_dir)
         issues = list(plug['problems'])
         dups = _duplicates(f, template, home)
@@ -157,7 +167,7 @@ def inventory(home, kit, export_dir=None):
         if unlisted:
             issues.append(NOT_ACCOUNT)
         folders.append({'folder': f, 'label': ', '.join(label) or None,
-                        'signed_in': laccounts.signed_in(f), 'plugin': plug,
+                        'signed_in': signed, 'plugin': plug,
                         'duplicates': dups, 'links': lnk, 'not_account': unlisted, 'issues': issues})
     res = {'folders': folders, 'notes': notes,
            'summary': {'folders': len(folders),
