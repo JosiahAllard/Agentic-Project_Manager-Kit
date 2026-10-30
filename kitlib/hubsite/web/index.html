@@ -3277,7 +3277,7 @@ ul.hist .sch-line{display:block}
   document.addEventListener("visibilitychange", () => { if (!document.hidden) poke(); });
   window.addEventListener("online", poke);
   window.addEventListener("pageshow", e => { if (e && e.persisted) poke(); });
-  const nap = (ms, stop) => new Promise(done => { const t = setTimeout(done, ms); stop.addEventListener("abort", () => { clearTimeout(t); done(); }); });
+  const nap = (ms, stop) => new Promise(done => { if (stop.aborted) { done(); return; } const t = setTimeout(done, ms); stop.addEventListener("abort", () => { clearTimeout(t); done(); }); });
   async function watch(){
     // After a failure the lists are read again before waiting: what was missed is shown, and the notice at
     // the top goes as soon as the server answers, not when the next change comes.

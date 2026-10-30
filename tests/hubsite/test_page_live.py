@@ -77,6 +77,25 @@ class NudgeTest(unittest.TestCase):
         self.assertEqual(got["sleeps"], [])
         self.assertEqual(got["waiting"], 1)
 
+    def test_a_nudge_during_a_read_that_is_refused_is_not_lost(self):
+        got = dom("""
+            let armed = false;
+            server.route = c => {
+              if (!armed || c.path !== "/snapshot") return undefined;
+              armed = false; fireWin("online");                  // the nudge lands while this read is out
+              return { status: 500, body: { ok: false, error: { code: "internal", message: "x", field: "" } } };
+            };
+            await start();
+            const before = calls.filter(c => c.path === "/snapshot").length;
+            armed = true; await wake();
+            return { read: calls.filter(c => c.path === "/snapshot").length - before,
+                     sleeps: sleeps(), waiting: waits.length, err: text($("#loaderr")) };
+        """, snapshot())
+        self.assertEqual(got["sleeps"], [])                     # no back-off is slept through
+        self.assertEqual(got["read"], 2)                        # the refused read, and one at once after it
+        self.assertEqual(got["waiting"], 1)
+        self.assertEqual(got["err"], "")
+
 
 @unittest.skipUnless(NODE, "node is needed to run the page's logic")
 class SignInTest(unittest.TestCase):
