@@ -1408,6 +1408,22 @@ class PlainCommit(unittest.TestCase):
                 held = d.instead.replace('<patch>', 'fix.patch')      # the placeholder is no shell word
                 self.assertIsNone(self.decide(held, sub=True), held)
 
+    def test_a_merge_or_pull_names_sync_base_with_the_worktree_and_the_typed_hash(self):
+        """The Instead line is the exact command to run: this worktree, and the one hash the agent
+        typed (rules.typed_hash); a branch name or two hashes leave <hash> for the coordinator's."""
+        tool = 'python "%s/tools/sync_base.py" -C "%s" ' % (W.fwd(self.w.kit_dir), W.fwd(self.w.wt))
+        for shell, text, commit in (
+                (bash, 'git merge --no-edit d6454c8fa', 'd6454c8fa'),
+                (ps, 'git merge -m "sync" 0123abcdef', '0123abcdef'),
+                (bash, 'git pull origin d6454c8faa49', 'd6454c8faa49'),
+                (bash, 'git merge origin/main', '<hash>'),
+                (bash, 'git merge abc123', '<hash>'),
+                (bash, 'git merge d6454c8fa 99fe8fadb', '<hash>')):
+            with self.subTest(text):
+                d = self.decide(text, sub=True, shell=shell)
+                self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
+                self.assertEqual(d.instead, tool + '%s --model "<your model>"' % commit)
+
     def test_a_sequence_step_names_what_commit_py_leaves(self):
         for text in ('git cherry-pick --continue', 'git revert --continue', 'git am --continue'):
             with self.subTest(text):

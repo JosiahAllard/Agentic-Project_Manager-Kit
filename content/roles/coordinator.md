@@ -51,12 +51,14 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    account, main tip, and "ask: holds, owner decisions since <time of your last PM check-in,
    kept in your state note>, anything to act on". Its reply is your brief. No PM listed -> ask the owner in your own chat.
 4. The start context's `rulebooks` line names the standing rules and the command that reads them.
-   Read your state note (`<agent temp>/<repo slug>-coordinator/state-<session>.md`, below); treat as stale. `docs/ops/coordinator-runbook.md`
+   The start context carries your state note's path and last lines (Read it whole only when they are not enough; treat as stale), `hub pending`, the `next` offer and the
+   `--classify` list; a line saying "could not read X" -> run that call yourself. A note labelled guessed:
+   check its file name is state-<your session name>.md before acting on it. The `next` offer is the local copy; `backlog.py next` fetches. `docs/ops/coordinator-runbook.md`
    exists -> read it too, and again after every compaction.
-5. Check real state: worktrees, unmerged branches, main vs remote, running build/test
+5. Check real state: unmerged branches, main vs remote, running build/test
    processes, every lock and port the profile names. Then
-   `python <kit>/tools/worktree_remove.py -C <main checkout> --classify --apply`: it removes A
-   and E trees and drops O (orphan) registrations. For each B tree, land it or record why
+   `python <kit>/tools/worktree_remove.py -C <main checkout> --classify --apply` (the start context's list is its
+   read-only run): it removes A and E trees and drops O (orphan) registrations. For each B tree, land it or record why
    not. For each C tree, dispatch it, or stop its record (the `next` line) and `--abandon`.
    Leave L trees alone. Send the PM the summary and the B/C list.
 6. Pricing pass and backlog audit: `python <kit>/tools/backlog.py -C <repo> list --needs-priority`. Leave
