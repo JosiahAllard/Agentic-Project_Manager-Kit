@@ -430,18 +430,26 @@ ul.hist .sch-line{display:block}
   const PAIR_HOW = "On the PC, in the kit folder, run `python tools/hub.py open` and open the link it prints.";
   const PAIR_AGAIN = "this browser is not paired with the hub (yet, or any more: it was unpaired, or its session ran out). " + PAIR_HOW;
   const noAnswer = () => { const err = new Error("the hub server did not answer"); err.status = 0; err.code = "network"; err.field = ""; err.retryAfter = 0; err.unpaired = false; return err; };
+  // The hub's routes never redirect, so a redirect is the tunnel's sign-in (Cloudflare Access) sending this page to
+  // its login: only a reload of the page signs in again. It is fetched with redirect "manual", so it is told apart from
+  // a call that got no answer (a redirect to the login's own site would fail as a network error).
+  const SIGNIN_AGAIN = "the tunnel's sign-in has run out or was refused: reload this page to sign in again";
+  const signIn = () => { const err = noAnswer(); err.message = SIGNIN_AGAIN; err.code = "signin"; return err; };
   const hub = {
     base: "/api/v1",
-    async call(method, path, body, ms){
+    // stop, when given, is a signal that ends the call early too (the watch loop's nudge); it fails as no answer.
+    async call(method, path, body, ms, stop){
       // A controller and a timer end a call that says nothing; older browsers have no timeout signal of their own.
       const ac = new AbortController(), timer = setTimeout(() => ac.abort(), ms || 30000);
-      const init = { method, credentials: "same-origin", cache: "no-store", headers: { Accept: "application/json", "X-Hub-Via": "web" }, signal: ac.signal };
+      if (stop) { if (stop.aborted) ac.abort(); else stop.addEventListener("abort", () => ac.abort()); }
+      const init = { method, credentials: "same-origin", cache: "no-store", redirect: "manual", headers: { Accept: "application/json", "X-Hub-Via": "web" }, signal: ac.signal };
       if (method !== "GET") { init.headers["Content-Type"] = "application/json"; init.body = JSON.stringify(body || {}); }
       let r, j = null;
       try {
         r = await fetch(this.base + path, init);
+        if (r.type === "opaqueredirect") throw signIn();
         try { j = await r.json(); } catch (e) {}
-      } catch (e) { throw noAnswer(); }
+      } catch (e) { throw e && e.code === "signin" ? e : noAnswer(); }
       finally { clearTimeout(timer); }
       if (r.ok && !j) throw noAnswer();
       if (r.ok && j.ok !== false) return j;
@@ -454,7 +462,7 @@ ul.hist .sch-line{display:block}
     },
     snapshot(){ return this.call("GET", "/snapshot"); },
     // The server answers a wait within about 55 s; the page gives up on one that says nothing for 90 s.
-    wait(since){ return this.call("GET", "/wait?since=" + encodeURIComponent(String(since)), null, 90000); },
+    wait(since, stop){ return this.call("GET", "/wait?since=" + encodeURIComponent(String(since)), null, 90000, stop); },
     post(path, body){ return this.call("POST", path, body); }
   };
   const seg = id => encodeURIComponent(String(id));
@@ -1061,6 +1069,15 @@ ul.hist .sch-line{display:block}
   const hubRetryMs = (fails, retryAfter, unpaired) => {
     const r = Number(retryAfter), asked = r > 0 ? Math.max(1, Math.min(r, 300)) * 1000 : 0;
     return unpaired ? Math.max(HUB_UNPAIRED_MS, asked) : asked || Math.min(60000, 1000 * 2 ** Math.min(Math.max(fails, 1), 6));
+  };
+  // The watch loop's wait after a failure. When it was the long-poll that failed and the snapshot read just before it
+  // answered (read), the server is there and only the long request is cut (a proxy or tunnel closing it, a 502 or a
+  // 524): the snapshot is read again within HUB_POLL_MS whatever the run of failures, so the page still follows the
+  // hub by polling. A wait the server asked for (Retry-After) and an unpaired browser keep hubRetryMs's.
+  const HUB_POLL_MS = 15000;
+  const hubNextMs = (fails, retryAfter, unpaired, read) => {
+    const ms = hubRetryMs(fails, retryAfter, unpaired);
+    return read && !unpaired && !(Number(retryAfter) > 0) ? Math.min(ms, HUB_POLL_MS) : ms;
   };
   // A question bound to a record (its record is an object): only its card offers the standing-rule box and button.
   const qBound = d => !!(d && d.record && typeof d.record === "object" && !Array.isArray(d.record));
@@ -3251,28 +3268,45 @@ ul.hist .sch-line{display:block}
       throw e;
     }
   }
+  // The nudge: the tab shown again, the browser back online, or the page restored from the browser's back-forward
+  // cache ends what the watch loop is waiting on (its long-poll or its sleep after a failure), and the snapshot is read
+  // at once. A phone that slept may hold a long-poll on a connection that is gone, and a run of failures while the tab
+  // was hidden may have it sleeping for a minute: either way the owner, back on the page, would see old lists.
+  let nudge = null;
+  const poke = () => { if (nudge) nudge.abort(); };
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) poke(); });
+  window.addEventListener("online", poke);
+  window.addEventListener("pageshow", e => { if (e && e.persisted) poke(); });
+  const nap = (ms, stop) => new Promise(done => { if (stop.aborted) { done(); return; } const t = setTimeout(done, ms); stop.addEventListener("abort", () => { clearTimeout(t); done(); }); });
   async function watch(){
     // After a failure the lists are read again before waiting: what was missed is shown, and the notice at
     // the top goes as soon as the server answers, not when the next change comes.
     let again = true;
     for (;;) {
+      const stop = nudge = new AbortController();
+      let read = false;                                 // the snapshot read just before this wait answered
       try {
         if (again) { await refresh(); again = false; loadSay(""); countFindings(); }    // fails is kept: only a wait that answers ends the run of failures
-        const w = await hub.wait(rev);
+        read = true;
+        const w = await hub.wait(rev, stop.signal);
         if (w.reset) rev = 0;                           // the server's history does not reach back to rev: take whatever it holds now
         await refresh();
         countFindings();
         fails = 0; loadSay("");
       } catch (e) {
+        // A nudge ended the wait: read again at once, with no failure counted and nothing said.
+        if (stop.signal.aborted && e && e.code === "network") { again = true; continue; }
         const old = ready ? " The lists may be out of date." : "";
         fails++; again = true;
-        const ms = hubRetryMs(fails, e && e.retryAfter, e && e.unpaired), msg = (e && e.message) || "no reason given";
+        const signin = !!e && e.code === "signin";
+        const ms = hubNextMs(fails, e && e.retryAfter, e && (e.unpaired || signin), read), msg = (e && e.message) || "no reason given";
         loadSay(e && e.unpaired ? "This browser is not paired with the hub (yet, or any more: it was unpaired, or its session ran out). " + PAIR_HOW + " This page reads the hub server again every " + Math.round(ms / 1000) + " s, and carries on by itself once it is paired." + old
+          : signin ? "The tunnel's sign-in has run out or was refused: reload this page to sign in again. Until then this page tries again every " + Math.round(ms / 1000) + " s." + old
           : e && e.status === 429 ? "The hub server is busy and asked this page to wait. Reading again in " + Math.round(ms / 1000) + " s." + old
           : e && e.code === "network" ? "Cannot reach the hub server (" + msg + ")." + old + " Trying again."
           : e && e.status ? "The hub server refused the read (" + msg + ")." + old + " Trying again."
           : "This page could not show what the hub server sent (" + msg + ")." + old + " Trying again.");
-        await sleep(ms);
+        await nap(ms, stop.signal);
       }
     }
   }

@@ -90,18 +90,19 @@ class VerdictCli(GateRepoCase):
         self.assert_usage(self.run_tool(*self.add_args(**{'--branch': 'refs/heads/kit/a'})))
         self.assert_usage(self.run_tool('drop', 'kit/a', '--tip', self.tip[:12]))
 
-    def test_a_high_risk_self_review_is_refused_with_an_instead_line(self):
-        for over in ({'--reviewer-id': 'coord-1'}, {'--reviewer': 'pm-kit:coordinator'}):
-            with self.subTest(**over):
-                code, out, err = self.run_tool(*self.add_args(**dict(over, **{'--risk': 'High'})))
-                self.assertEqual(code, 2, (out, err))
-                lines = out.splitlines()
-                self.assertTrue(lines[0].startswith('REFUSED: a High-risk verdict needs a reviewer '
-                                                    'other than the coordinator'), out)
-                self.assertEqual(lines[-1], V.SELF_REVIEW_INSTEAD)
-                self.assertNotIn('QUEUED', out)
-                self.assertEqual(V.scan(self.repo.common_dir()), ([], []))
-        code, out, err = self.run_tool(*self.add_args(**{'--risk': 'Medium', '--reviewer-id': 'coord-1'}))
+    def test_a_medium_or_high_risk_self_review_is_refused_with_an_instead_line(self):
+        for risk in ('Medium', 'High'):
+            for over in ({'--reviewer-id': 'coord-1'}, {'--reviewer': 'pm-kit:coordinator'}):
+                with self.subTest(risk=risk, **over):
+                    code, out, err = self.run_tool(*self.add_args(**dict(over, **{'--risk': risk})))
+                    self.assertEqual(code, 2, (out, err))
+                    lines = out.splitlines()
+                    self.assertTrue(lines[0].startswith('REFUSED: a %s-risk verdict needs a reviewer '
+                                                        'other than the coordinator' % risk), out)
+                    self.assertEqual(lines[-1], V.SELF_REVIEW_INSTEAD)
+                    self.assertNotIn('QUEUED', out)
+                    self.assertEqual(V.scan(self.repo.common_dir()), ([], []))
+        code, out, err = self.run_tool(*self.add_args(**{'--risk': 'Low', '--reviewer-id': 'coord-1'}))
         self.assertEqual((code, out.strip()), (0, 'QUEUED kit/a %s' % self.tip), err)
 
     def test_list_drops_a_landed_entry_and_says_so(self):
