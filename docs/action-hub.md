@@ -313,7 +313,7 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 
 | Verb | Prints |
 |---|---|
-| `questions [--status S] [--repo R] [--since ISO]` | `Q-1 v2 open [repo] title` |
+| `questions [--status S] [--repo R] [--since ISO]` | `Q-1 v2 open [repo] title`; a done one ends ` (done by the hub: <done_why>)` when the hub marked it done ("Done by the hub"), else ` (done: <done_why>)`, the why on one line (`questions show` too) |
 | `questions show Q-1 [--json]` | the `Q-1 v2 answered [repo] title` line, then its options (the recommended one marked), context, answer and note |
 | `questions add --title T [--repo R] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] (--record REPO:ID \| --class rule\|machine\|cross-repo\|go) [--from KEY]` | `ASKED Q-2`, then any warning lines |
 | `questions log Q-1 [--unfiled WHY] --if-version V` | `LOGGED Q-1` |

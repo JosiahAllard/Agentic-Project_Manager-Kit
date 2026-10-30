@@ -194,7 +194,7 @@ class CliTest(cli.VerbCase):
         self.assertEqual(self.ok('questions', 'done', 'Q-1000', '--why', 'a landing go',
                                  '--if-version', '2'), ['DONE Q-1000'])
         self.assertEqual(self.ok('questions', '--status', 'done'),
-                         ['Q-1000 v3 done [kit] which way'])
+                         ['Q-1000 v3 done [kit] which way (done: a landing go)'])
         self.assertEqual(self.direct('/pending')['items'], [])
         self.assertIn('REFUSED invalid: ', self.refused(
             'questions', 'done', 'Q-1000', '--why', 'again', '--if-version', '3'))
