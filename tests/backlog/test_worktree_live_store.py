@@ -13,6 +13,7 @@ from unittest import mock
 
 from kitlib import pmdata
 from kitlib.backlog import opener
+from kitlib.backlog import store as smod
 
 from tests.backlog.helpers import TODAY, priced
 from tests.gitfixture import TempRepo, fixture_env
@@ -109,6 +110,18 @@ class WorktreeLiveStore(unittest.TestCase):
         self.repo.write('.kit.json', json.dumps({'backlog': {}}) + '\n', root=self.pm)
         ctx = opener.open_store(self.wt, fetch=False)
         self.assertTrue(same_path(ctx.root, self.wt), ctx.root)
+
+    def test_a_pm_data_record_that_cannot_be_read_keeps_its_own_and_a_write_names_why(self):
+        with mock.patch.object(pmdata, 'read', side_effect=pmdata.PmDataError('bad json')):
+            ctx = opener.open_store(self.wt, fetch=False)
+            refusal = smod.default_store_refusal(self.wt)
+        self.assertTrue(same_path(ctx.root, self.wt), ctx.root)
+        self.assertIn('cannot read the PM data record: bad json', refusal)
+
+    def test_an_unexpected_failure_is_raised_never_a_quiet_stale_read(self):
+        with mock.patch.object(smod, 'pm_data_live_store', side_effect=RuntimeError('defect')):
+            with self.assertRaises(RuntimeError):
+                opener.open_store(self.wt, fetch=False)
 
 
 if __name__ == '__main__':

@@ -587,10 +587,10 @@ class RealStore(unittest.TestCase):
         got = repo.classify(where)
         return SimpleNamespace(kind=got.kind, top=repo.toplevel(where)[0])
 
-    def decide(self, folder, here=None):
-        """The refusal sentence of `-C folder set FOO --scope tools/x/a.py` by a worker, or ''."""
+    def decide(self, folder, here=None, rid='FOO'):
+        """The refusal sentence of `-C folder set <rid> --scope tools/x/a.py` by a worker, or ''."""
         ctx = SimpleNamespace(git=SimpleNamespace(current_branch=refs.current_branch), place=self.place)
-        words = ['-C', folder, 'set', 'FOO', '--scope', 'tools/x/a.py']
+        words = ['-C', folder, 'set', rid, '--scope', 'tools/x/a.py']
         pairs = [(w, True) for w in words]
         cmd = SimpleNamespace(shell=backlogrole.rules.sh.BASH)
         text, _form, _instead = backlogrole.own_pull_refusal(ctx, cmd, policy.read_argv(pairs),
@@ -608,6 +608,16 @@ class RealStore(unittest.TestCase):
 
     def test_another_branchs_worktree_is_refused(self):
         self.assertTrue(self.decide(self.other))
+
+    def test_naming_another_branchs_worktree_acts_as_that_branch(self):
+        """The residual docs/guard.md "Known limits" states: only the -C folder's branch is compared,
+        so from kit/wk's worktree, -C kit/oth's worktree passes on kit/oth's pull."""
+        self.repo.write('kit/backlog/BAR.md',
+                        priced('BAR', state='pulled', pulled_at=TODAY, pulled_by='kit/oth', scope='tools/y/**')['BAR'],
+                        root=self.pm)
+        self.repo.commit('another pull', 'kit/backlog/BAR.md', cwd=self.pm)
+        self.assertFalse(self.decide(self.other, here=self.wt, rid='BAR'))
+        self.assertTrue(self.decide(self.wt, rid='BAR'))
 
     def test_the_main_checkout_and_the_pm_data_worktree_are_refused(self):
         self.assertTrue(self.decide(self.repo.root))
