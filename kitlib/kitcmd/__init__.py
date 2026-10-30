@@ -49,7 +49,7 @@ SELF = 'kit'                         # this command's own tool name, never run t
 # The kit tools that act on a repository checkout named by -C or the current directory. A name
 # the kit has no command for yet is left out.
 SHARED = (
-    'backlog', 'checkout_guard', 'codemap', 'commit', 'daily_full', 'doc_budget',
+    'backlog', 'checkout_guard', 'codemap', 'commit', 'coord_state', 'daily_full', 'doc_budget',
     'doc_index', 'forbidden', 'gate', 'land', 'landed', 'ledger', 'machine_paths', 'module_map',
     'new_worktree',
     'pieces', 'preflight', 'pytests', 'redfirst', 'review_pack', 'stack_skill',
