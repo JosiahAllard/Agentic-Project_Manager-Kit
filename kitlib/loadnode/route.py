@@ -26,8 +26,9 @@ Choice = collections.namedtuple('Choice', 'where node why')     # where: MAIN or
 
 
 def need_of(kind, store=None, table=None, layout=None):
-    """{'cpu', 'gpu'}: the slots a run of `kind` books on this machine. KeyError for a kind the
-    kinds table does not name; kitlib.lock.kinds.KindsError for one it cannot size."""
+    """{'cpu', 'gpu'}: the slots a run of `kind` books on this machine; a retired name (the
+    kinds table's `aliases`) sizes as the kind it names. KeyError for a kind the kinds table does
+    not name; kitlib.lock.kinds.KindsError for one it cannot size."""
     from kitlib.lock import kinds as kinds_mod
     from kitlib.lock import layout as lay
     if table is None or layout is None:
@@ -35,6 +36,7 @@ def need_of(kind, store=None, table=None, layout=None):
         store = store or Store()
         table = table if table is not None else kinds_mod.load(store.kinds_path)
         layout = layout if layout is not None else lay.in_force(store, adopt=False)['layout']
+    kind = kinds_mod.resolve(kind, table, store.kinds_path if store is not None else None)
     return lay.need_for(layout, table[kind])
 
 

@@ -24,10 +24,10 @@ The tables are read from "tool_tests": `extra`, `pinned`, `patterns`, `whole_tre
 
 ## kit_tests
 
-`tools/kit_tests.py` (kitlib/tooldeps/selftree.py) runs the kit's own suite, whole or only the test packages a branch's change can reach. Kit build agents run their branch with `--select`, and kit landings gate with `--select` too; `--full` runs the whole suite by hand. `gate.py --full` and `daily_full.py` run the whole suite once the kit-suite gate step has a `full_cmd` running `--full` (docs/gate.md "Steps") and `daily_full` is enabled in `.kit.json`; the owner schedules daily_full.py. A `daily_cmd` running `--full --both-tiers` makes the daily run also run `tiers.REAL_GIT_MODULES` on real git ("Fake git" below). Every `--select` and `--full` run also runs the test modules the change adds or changes on real git, as a second pass (below). Wrap either in the machine lock, booking 2 cores (the engine-test size, `medium_cores`: 2 on the default layout, and `--cores` above it exits 2; 4 logical processors, so 4 modules at once); `<repo>` is `repo.name` in `.kit.json`:
+`tools/kit_tests.py` (kitlib/tooldeps/selftree.py) runs the kit's own suite, whole or only the test packages a branch's change can reach. Kit build agents run their branch with `--select`, and kit landings gate with `--select` too; `--full` runs the whole suite by hand. `gate.py --full` and `daily_full.py` run the whole suite once the kit-suite gate step has a `full_cmd` running `--full` (docs/gate.md "Steps") and `daily_full` is enabled in `.kit.json`; the owner schedules daily_full.py. A `daily_cmd` running `--full --both-tiers` makes the daily run also run `tiers.REAL_GIT_MODULES` on real git ("Fake git" below). Every `--select` and `--full` run also runs the test modules the change adds or changes on real git, as a second pass (below). Wrap either in the machine lock, booking 2 cores (the test size, `medium_cores`: 2 on the default layout, and `--cores` above it exits 2; 4 logical processors, so 4 modules at once); `<repo>` is `repo.name` in `.kit.json`:
 
 ```
-python <kit>/tools/machine_lock.py run --repo <repo> --slug <slug> --kind engine-test --cores 2 -- python tools/kit_tests.py --select
+python <kit>/tools/machine_lock.py run --repo <repo> --slug <slug> --kind test --cores 2 -- python tools/kit_tests.py --select
 ```
 
 To gate a worktree from another directory, run that worktree's own gate.py with an absolute `-C`: `python <worktree>/tools/gate.py -C <worktree> --full`. With no `-C` or a relative one, a gate.py run on another checkout of its repository is refused (docs/gate.md "The caller's checkout").
@@ -259,7 +259,7 @@ Reads that still take a quiet exit 1 as an answer include kitlib/guard/prepush.p
 
 `PidHold._pass` measured 11.5-14.8% of one core while the hold runs (kitlib/proc/shield.py, comment on `_pass`).
 
-The whole kit suite, measured 2026-10-10 on the development machine (12 physical cores, other agents' runs sharing it). Every run was `python tools/kit_tests.py --full [--pid-hold]` booked through the machine lock with `--kind engine-test --cores 4` (8 logical processors, 8 jobs; the lock now caps engine-test at `medium_cores`, 2 on the default layout, so a rerun books `--cores 2`), 3794 tests in 170 modules, all passing. "Suite" is kit_tests' own `OK in Ns`; "wall" is the whole lock run, booking and the hold's warm-up included.
+The whole kit suite, measured 2026-10-10 on the development machine (12 physical cores, other agents' runs sharing it). Every run was `python tools/kit_tests.py --full [--pid-hold]` booked through the machine lock with `--kind engine-test --cores 4` (8 logical processors, 8 jobs; the lock now caps engine-test, renamed `test`, at `medium_cores`, 2 on the default layout, so a rerun books `--kind test --cores 2`), 3794 tests in 170 modules, all passing. "Suite" is kit_tests' own `OK in Ns`; "wall" is the whole lock run, booking and the hold's warm-up included.
 
 | Runs | Hold | Suite (s) | Wall (s) |
 |---|---|---|---|

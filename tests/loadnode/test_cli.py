@@ -413,7 +413,7 @@ class Gate(unittest.TestCase):
         with mock.patch.object(node_cli, '_notice_dir', notice_dir):
             code, _, _ = self.gate('--node', 'box1')
         self.assertEqual(code, 0)
-        self.assertEqual(asked, ['engine-test'])
+        self.assertEqual(asked, ['test'])
         self.assertEqual(self.notice_dirs, ['N:/notices'])
 
     def test_a_named_node_usage_errors_are_2_and_gate_nothing(self):

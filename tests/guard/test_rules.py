@@ -59,13 +59,13 @@ ROWS = [
 
     # ---------------------------------------------------------------- heavy programs
     ('godot with no lock', lambda w: bash('godot --headless --path .', w.wt), 'deny', 'heavy',
-     LOCK + ' --kind engine-run --repo demo --slug wt -- godot --headless --path .'),
+     LOCK + ' --kind app-run --repo demo --slug wt -- godot --headless --path .'),
     ('godot.exe by path, PowerShell', lambda w: ps('& "C:\\Program Files\\Godot\\godot.exe" --headless', w.main, sub=True),
-     'deny', 'heavy', LOCK + ' --kind engine-run --repo demo --slug main -- "C:\\Program Files\\Godot\\godot.exe" --headless'),
+     'deny', 'heavy', LOCK + ' --kind app-run --repo demo --slug main -- "C:\\Program Files\\Godot\\godot.exe" --headless'),
     ('env flag alone is no lock', lambda w: bash('MACHINE_LOCK_RUN=r-20261006T120000Z-abcdef:1:2 godot -s x.gd', w.wt),
-     'deny', 'heavy', LOCK + ' --kind engine-run --repo demo --slug wt -- godot -s x.gd'),
+     'deny', 'heavy', LOCK + ' --kind app-run --repo demo --slug wt -- godot -s x.gd'),
     ('godot nested in bash -c', lambda w: bash('bash -c "godot --headless"', w.wt), 'deny', 'heavy',
-     LOCK + ' --kind engine-run --repo demo --slug wt -- godot --headless'),
+     LOCK + ' --kind app-run --repo demo --slug wt -- godot --headless'),
     ('godot in Start-Process', lambda w: ps('Start-Process -FilePath godot.exe -ArgumentList "--headless"', w.wt),
      'deny', 'heavy', None),
     ('blender -b is a render', lambda w: bash('blender -b scene.blend -a', w.wt), 'deny', 'heavy',
@@ -203,7 +203,7 @@ ROWS = [
     ('unclosed quote hiding a subagent merge in its worktree', lambda w: bash("echo 'x ; git merge kit/wt", w.wt, sub=True), 'deny', 'unreadable', None),
     ('cmd /c with a trailing backslash root', lambda w: bash('cmd /c "dir /s C:\\"', w.wt), 'deny', 'root-search', None),
     ('variable program running godot', lambda w: bash('GODOT=/c/tools/godot.exe; $GODOT --headless', w.wt), 'deny', 'heavy',
-     LOCK + ' --kind engine-run --repo demo --slug wt -- <the program $GODOT names> --headless'),
+     LOCK + ' --kind app-run --repo demo --slug wt -- <the program $GODOT names> --headless'),
 
     # ---------------------------------------------------------------- backlog roles (tests/guard/test_backlog_role.py)
     ('subagent builder closes a record', lambda w: bash('python "%s/tools/backlog.py" -C "%s" close X-1'

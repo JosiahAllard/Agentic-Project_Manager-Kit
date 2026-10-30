@@ -220,6 +220,7 @@ from kitlib.gate import steps as S
 from kitlib.git import cmd, refs, repo
 from kitlib.guard import ownercommits
 from kitlib.host import registry
+from kitlib.lock import kinds as lockkinds
 from kitlib.lock import queue as lockqueue
 from kitlib.lock import run as lockrun
 from kitlib.lock.store import EXIT_USAGE, LockError, Store
@@ -1863,7 +1864,7 @@ class Lander(object):
         merge undone). After a node-routed fallback rebook_here booked the base's kind already:
         nothing to do."""
         kind, booked = self.cfg.section('gate')['kind'], self.booked_kind
-        if booked is None or booked == kind:
+        if booked is None or self.same_kind(booked, kind):
             return None
         self.say('the base %s books "gate".kind %s, not %s as this landing did: releasing the '
                  "landing's %s run and booking a %s run for the merged gate, waiting with no "
@@ -1877,11 +1878,19 @@ class Lander(object):
             return G.Outcome(G.FAILED, [line], verdict=line, results=[])
         return None
 
+    def same_kind(self, a, b):
+        """True when kind names a and b book the same kind: equal once a retired name (an alias
+        in the lock's kinds table) is read as the kind it names now, so a base whose config
+        still names the old name, or already the new one, is not a different kind."""
+        path = self.queue_store().kinds_path
+        al = lockkinds.aliases(path)
+        return lockkinds.canonical(a, table_aliases=al) == lockkinds.canonical(b, table_aliases=al)
+
     def route_need(self, lr, kind):
         """The slots the merged gate's kind `kind` needs on a node, for recheck: `(need, None)`,
         the plan's when the base's config names the kind booked (book_turn); else `kind` sized
         again (lr.need_of), or `(None, why)` when it cannot be, and the landing gates here."""
-        if self.booked_kind in (None, kind):
+        if self.booked_kind is None or self.same_kind(self.booked_kind, kind):
             return self.route.need, None
         try:
             return lr.need_of(kind, self.queue_store()), None
