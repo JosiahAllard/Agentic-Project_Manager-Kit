@@ -11,7 +11,8 @@ posted to the hub on this machine (docs/action-hub.md "landings/L-NNN").
                       None
   post(events, client=None, timeout=POST_TIMEOUT_S)
                       each event POSTed to /landings as the agent; the lines to say: one WARNING
-                      per event the hub did not take, and the event is dropped
+                      per event the hub did not take, and the event is dropped; no hub running or
+                      no agent token drops the rest of the batch with one WARNING
 
 The post is best-effort: nothing here raises, Ctrl+C included, and nothing a post does changes a
 landing. A hub that is down, that has no agent token here, that does not answer in its time, or
@@ -67,24 +68,51 @@ def _why(e, timeout):
     return ' '.join(('%s: %s' % (type(e).__name__, e)).split())
 
 
+def _skips_the_rest(e):
+    """True when `e` will fail every later post the same way: no hub is running."""
+    from kitlib.hubsite import serve      # here: as default_client
+    return isinstance(e, serve.NotRunning)
+
+
+def _warning(branches, why):
+    return ('WARNING: the landing of %s was not posted to the hub feed (%s); the landing stands'
+            % (', '.join(str(b) for b in branches), why))
+
+
 def post(events, client=None, timeout=POST_TIMEOUT_S):
     """Each of `events` POSTed to the hub (default_client when `client` is None); the lines to
-    say: a WARNING for each event the hub did not take, which is dropped. Never raises."""
+    say: a WARNING for each event the hub did not take, which is dropped. No client, no agent
+    token here (the client's token(AGENT) fails) or no hub running drops that event and every
+    later one with one WARNING naming their branches. Never raises."""
     lines = []
+    events = list(events or ())
+    if not events:
+        return lines
     try:
         hub = client if client is not None else default_client(timeout)
-    except BaseException as e:      # noqa: BLE001 - no hub to post to: each event is dropped
-        hub, made = None, e
-    for ev in events:
+        if callable(getattr(hub, 'token', None)):
+            hub.token(AGENT)        # no agent token: every post would fail the same way
+    except BaseException as e:      # noqa: BLE001 - nothing to post with: each event is dropped
+        return [_warning([ev.get('branch') for ev in events], _why_safe(e, hub=None,
+                                                                        timeout=timeout))]
+    for i, ev in enumerate(events):
         try:
-            if hub is None:
-                raise made
             hub.post(PATH, AGENT, ev)
         except BaseException as e:  # noqa: BLE001 - the landing stands whatever happens here
+            why = _why_safe(e, hub, timeout)
             try:
-                why = _why(e, getattr(hub, 'timeout', timeout))
-            except BaseException:   # noqa: BLE001 - still say it
-                why = type(e).__name__
-            lines.append('WARNING: the landing of %s was not posted to the hub feed (%s); the '
-                         'landing stands' % (ev.get('branch'), why))
+                rest = _skips_the_rest(e)
+            except BaseException:   # noqa: BLE001 - post the rest
+                rest = False
+            if rest:
+                lines.append(_warning([d.get('branch') for d in events[i:]], why))
+                break
+            lines.append(_warning([ev.get('branch')], why))
     return lines
+
+
+def _why_safe(e, hub, timeout):
+    try:
+        return _why(e, getattr(hub, 'timeout', timeout))
+    except BaseException:           # noqa: BLE001 - still say it
+        return type(e).__name__

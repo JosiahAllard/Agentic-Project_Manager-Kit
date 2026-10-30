@@ -91,12 +91,30 @@ class PostTest(unittest.TestCase):
                 self.assertWarned(landings.post([event()], client=hub), why)
                 self.assertEqual(hub.posted, [('/landings', AGENT, event())])
 
-    def test_a_client_that_cannot_be_made_drops_every_event_with_a_warning_each(self):
+    def test_a_client_that_cannot_be_made_drops_the_batch_with_one_warning(self):
         with mock.patch.object(landings, 'default_client', side_effect=OSError('no config')):
             lines = landings.post([event(), event(branch='kit/y')])
-        self.assertEqual(len(lines), 2)
-        self.assertIn('kit/y', lines[1])
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn('the landing of kit/x, kit/y was not posted', lines[0])
         self.assertIn('OSError: no config', lines[0])
+
+    def test_no_hub_running_skips_the_rest_of_the_batch_with_one_warning(self):
+        hub = Raises(serve.NotRunning(8790))
+        evs = [event(), event(branch='kit/y'), event(branch='kit/z')]
+        lines = landings.post(evs, client=hub)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn('the landing of kit/x, kit/y, kit/z was not posted', lines[0])
+        self.assertIn('no hub is running', lines[0])
+        self.assertEqual(len(hub.posted), 1, 'nothing more is tried')
+
+    def test_a_failure_that_is_not_the_hubs_absence_still_tries_the_rest(self):
+        for error in (client.Refused(400, {'ok': False, 'error': {'code': 'invalid'}}),
+                      serve.NoAnswer('x'), ValueError('bad')):
+            with self.subTest(error=type(error).__name__):
+                hub = Raises(error)
+                lines = landings.post([event(), event(branch='kit/y')], client=hub)
+                self.assertEqual(len(lines), 2, lines)
+                self.assertEqual(len(hub.posted), 2)
 
     def test_no_events_post_nothing(self):
         hub = Raises(AssertionError('posted'))
@@ -124,12 +142,16 @@ class RealTransportTest(unittest.TestCase):
         self.assertEqual(len(lines), 1, lines)
         self.assertIn('did not answer in 0.3s', lines[0])
 
-    def test_no_agent_token_is_a_warning(self):
+    def test_no_agent_token_drops_the_batch_with_one_warning_and_asks_nothing(self):
         empty = tempfile.mkdtemp(prefix='kit-landings-notokens-')
         self.addCleanup(shutil.rmtree, empty, True)
-        lines = landings.post([event()], client=client.Client(1, tokens=empty, timeout=0.3))
+        asked = []
+        hub = client.Client(1, tokens=empty, timeout=0.3, ask=lambda *a, **k: asked.append(a))
+        lines = landings.post([event(), event(branch='kit/y')], client=hub)
         self.assertEqual(len(lines), 1, lines)
-        self.assertIn('ServeError', lines[0])
+        self.assertIn('the landing of kit/x, kit/y was not posted', lines[0])
+        self.assertIn('ServeError: no agent token', lines[0])
+        self.assertEqual(asked, [])
 
 
 class Hub(object):
@@ -202,11 +224,13 @@ class RoundTripTest(unittest.TestCase):
                 status, obj = self.call('POST', '/landings', AGENT, body)
                 self.assertEqual((status, obj['error']['field']), (400, field), obj)
         self.assertEqual(self.call('POST', '/landings', OWNER, event())[0], 403)
-        for limit in ('0', 'x', '-1', '1.5'):
+        for limit in ('0', 'x', '-1', '1.5', '1' * 10, '9' * 5000, '١'):
             with self.subTest(limit=limit):
                 status, obj = self.call('GET', '/landings', OWNER, query={'limit': limit})
                 self.assertEqual((status, obj['error']['field']), (400, 'limit'))
         self.assertEqual(self.hub.store.docs('landings'), {})
+        status, obj = self.call('GET', '/landings', OWNER, query={'limit': '9' * 9})
+        self.assertEqual((status, obj['items']), (200, []))
 
     def test_an_unknown_repo_is_kept_with_the_stores_warning(self):
         self.hub.store.put('repos', 'kit', {'name': 'kit'})

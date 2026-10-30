@@ -411,6 +411,7 @@ STATUS = {'invalid': 400, 'forbidden': 403, 'not_found': 404, 'conflict': 409, '
           'unavailable': 503, 'internal': 500}
 WAIT_MAX_S = 55
 FEED_MAX = 200                      # the landing feed events GET snapshot and GET landings give
+LIMIT_DIGITS = 9                    # GET landings `limit`: longer is refused, never a huge int()
 LOCK_POLL_S = 0.5                   # how often GET lock/wait looks at the lock's revision
 LOCK_DAYS_MAX = 366                 # GET lock/stats `days`
 TUNNEL_VIA = 'tunnel'               # the tunnel listener's via (kitlib.hubsite.httpd): a remote view
@@ -2062,11 +2063,13 @@ def _newest(docs, n):
 
 
 def landings_list(api, req):
-    """The events, newest first: at most `limit` (a whole number, default FEED_MAX) of them,
-    filtered by repo as every listing is."""
+    """The events, newest first: at most `limit` (a whole number of at most LIMIT_DIGITS
+    digits, default FEED_MAX) of them, filtered by repo as every listing is."""
     text = _q(req, 'limit')
-    if text and not (text.isdigit() and text.isascii() and int(text) > 0):
-        raise _invalid('limit is a whole number above 0, not %r' % text, 'limit')
+    if text and not (text.isdigit() and text.isascii() and len(text) <= LIMIT_DIGITS
+                     and int(text) > 0):
+        raise _invalid('limit is a whole number from 1 to %s, not %r'
+                       % ('9' * LIMIT_DIGITS, text[:40]), 'limit')
     return {'items': _newest(api.items('landings', req), int(text) if text else FEED_MAX)}
 
 
