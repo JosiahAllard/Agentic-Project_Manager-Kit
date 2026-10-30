@@ -13,6 +13,14 @@ that was current then, and prune keeps every export replaced less than a day ago
 start header that named an export already old enough to prune is caught by the gone check, at the
 first tool event after the prune.
 
+A subagent is the exception: its start hook runs from the folder its session began on, and that
+header would be fresh, so the hour would hold the line back for most of a subagent's life while
+tools from that folder refuse a .kit.json holding a key newer than the folder. So a subagent's
+start header names the current folder outright (start_kit), and is recorded as naming it.
+
+  start_kit(kit, environ)        at a subagent's start: the folder its header names, the one the
+                                 guard names (advice_kit) when `kit` and that folder are exports,
+                                 else `kit`. Never raises
   note(kit, payload, agent)      at a start event whose text holds the header: when `kit` is an
                                  export (it holds pluginsource.MARKER), write the folder to
                                  <export root>/headers/<key>; at a SessionStart, drop records
@@ -87,6 +95,11 @@ def note(kit, payload, agent=None, event=None, now=None):
         return False
 
 
+def _guard_kit(kit, environ):
+    from kitlib.guard import rules
+    return rules.advice_kit(_Ctx(kit, os.environ if environ is None else environ))
+
+
 class _Ctx(object):
     """What kitlib.guard.rules.advice_kit reads: kit, environ, user(). The machine config is read
     from the home the hook's own environment names (USERPROFILE, else HOME), never looked up: an
@@ -104,6 +117,20 @@ class _Ctx(object):
             return user.user_config(home)
         except Exception as e:
             return {'error': str(e)}
+
+
+def start_kit(kit, environ=None):
+    """The folder a subagent's start header names: the current export when `kit` is an export (a
+    session run from a kit checkout stays on it), else `kit`, as on any failure: a start never
+    fails for this."""
+    try:
+        from kitlib import pluginsource
+        if not kit or not os.path.isfile(os.path.join(kit, pluginsource.MARKER)):
+            return kit
+        current = _guard_kit(kit, environ)
+        return current if current and os.path.isfile(os.path.join(current, pluginsource.MARKER)) else kit
+    except Exception:
+        return kit
 
 
 def text(kit):
@@ -126,8 +153,7 @@ def line(kit, payload, agent=None, environ=None, current=None, write=True, now=N
         if not k or not kit:
             return None
         if current is None:
-            from kitlib.guard import rules
-            current = rules.advice_kit(_Ctx(kit, os.environ if environ is None else environ))
+            current = _guard_kit(kit, environ)
             if not current or not os.path.isfile(os.path.join(current, pluginsource.MARKER)):
                 return None
         root = os.path.dirname(os.path.normpath(current))
