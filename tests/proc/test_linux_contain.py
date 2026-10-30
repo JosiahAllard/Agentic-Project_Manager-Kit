@@ -218,6 +218,26 @@ class Tiers(unittest.TestCase):
         self.assertEqual(text.count('os.getuid()'), 1)
         self.assertEqual(text.count('os.getgid()'), 1)
 
+    def test_root_is_w2_with_no_w1_trial_and_a_user_still_tries_w1(self):
+        # under sudo root has no user systemd, so it is unscoped; a W1 namespace maps root's own
+        # id only, and git there could not stat the kit user's 0750 home (VM kit-linux-ref, T-324)
+        c = contain()
+        with mock.patch.object(c.os, 'geteuid', create=True, return_value=0), \
+                mock.patch.object(c, 'parent_job', return_value=None), \
+                mock.patch.object(c, 'trial', return_value=(None, (), 'no systemd-run')), \
+                mock.patch.object(c, 'w1_trial', side_effect=AssertionError('a W1 trial ran')):
+            tier = c._probe()
+        self.assertEqual((tier.name, tier.lacks, tier.why, tier.w1),
+                         ('W2', c.W2_LACKS, 'no systemd-run', c.W1_ROOT))
+        self.assertTrue(tier.text.endswith('; %s)' % c.W1_ROOT), tier.text)
+        self.assertIs(type(c.Job.__new__(c.Job, tier=tier)), c.WeakJob)
+        with mock.patch.object(c.os, 'geteuid', create=True, return_value=1000), \
+                mock.patch.object(c, 'parent_job', return_value=None), \
+                mock.patch.object(c, 'trial', return_value=(None, (), 'no systemd-run')), \
+                mock.patch.object(c, 'w1_trial', return_value=None) as w1:
+            self.assertEqual(c._probe().name, 'W1')
+        w1.assert_called_once_with()
+
 
 BASE_JOB = 'pmkit-job-41-2-0a1b2c.scope'
 

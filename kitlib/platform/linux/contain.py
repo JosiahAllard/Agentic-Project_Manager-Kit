@@ -86,7 +86,9 @@ so). processes() is None on every tier: a cgroup has no count of the processes e
 
 W1 (NsJob): the starter, a python (the AppArmor user-namespace rule of Ubuntu 23.10 and later can
 be met for the interpreter alone), reads its ids, unshares a user and a PID namespace, maps its own
-uid and gid onto themselves (setgroups denied), and forks the job's pid 1, the reaper. The reaper
+uid and gid onto themselves (setgroups denied), and forks the job's pid 1, the reaper. Root never
+gets W1 (W1_ROOT): mapped alone, uid 0 keeps no capability over another user's files, and only a
+writer in the parent namespace could map more, so root's unscoped tier is W2. The reaper
 makes a mount namespace of its own, mounts a fresh /proc (the command sees the job's processes
 only, by their pids in the namespace), forks the stub (W2's: the ready and go pipes, then exec),
 closes its standard streams and then reaps every orphan in the job. It reads the watch pipe as
@@ -270,7 +272,8 @@ for _ in range(passes):
 # 5 (FDS), argv armed (1/0), the stub's shell, the stub (WSTUB), then the command. It says
 # `r <pid 1's pid>`, the reaper `x <why>` when it fails, the stub `s <its pid in the namespace>`.
 # The uid and gid are read before the unshare: after it they read as the overflow id until the
-# maps are written, and only the writer's own id may be mapped.
+# maps are written, and only the writer's own id may be mapped (from inside the namespace, root
+# included: so root is never W1, W1_ROOT).
 NSTART = r'''import os, select, signal, sys, time
 R, G, K = 3, 4, 5
 arm, sh, stub, cmd = sys.argv[1] == '1', sys.argv[2], sys.argv[3], sys.argv[4:]
@@ -937,8 +940,15 @@ def _probe():
     return _unscoped(gwhy or why)
 
 
+W1_ROOT = ("W1 not used as root: its namespace maps root's own id only, so root's capabilities "
+           "would not reach another user's files (a 0750 home folder closed to its git)")
+
+
 def _unscoped(why):
-    """W1 when its trial works here, else W2 with why W1 is not used."""
+    """W1 when its trial works here, else W2 with why W1 is not used. Root (sudo's root steps,
+    which have no user systemd) is W2 without a trial: W1_ROOT."""
+    if hasattr(os, 'geteuid') and os.geteuid() == 0:    # (the tests run this module on Windows)
+        return Tier('W2', W2_LACKS, why=why, w1=W1_ROOT)
     no = w1_trial()
     if no is None:
         return Tier('W1', W1_LACKS, why=why)
