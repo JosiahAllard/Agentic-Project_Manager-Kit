@@ -24,7 +24,7 @@ sys.path.insert(0, KIT)
 
 from kitlib.config import ConfigError, load as load_config        # noqa: E402
 from kitlib.git import refs, repo                                   # noqa: E402
-from kitlib.preflight import board, paths, report, state                  # noqa: E402
+from kitlib.preflight import board, paths, report, state           # noqa: E402
 
 USAGE = 2
 

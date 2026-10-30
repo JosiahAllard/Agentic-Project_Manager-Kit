@@ -31,7 +31,7 @@ One rule runs through both: a reading that failed is printed as `?`, `UNKNOWN`, 
 Exit codes:
 
 - **0**: the report. The report is read, not gated on, so a failed reading is a line, never an exit code.
-- **2**: a usage error, a `-C` directory in no git work tree, or a `.kit.json` the tool cannot use. A bad `.kit.json` prints `preflight: refused: kit configuration: <why>`.
+- **2**: a usage error, a `-C` directory in no git work tree, a `-C` that is a drive and colon with no separator (`Z:GitHub...`, a Windows path whose backslashes the shell ate; the message names the forward-slash form), or a `.kit.json` the tool cannot use. Printed paths use forward slashes. A bad `.kit.json` prints `preflight: refused: kit configuration: <why>`.
 
 **The lock line** comes from the kit lock's own status. `kitlib/preflight/lockline.py` runs `<kit>/tools/machine_lock.py status --json` (docs/lock-api.md) and summarises it as:
 
