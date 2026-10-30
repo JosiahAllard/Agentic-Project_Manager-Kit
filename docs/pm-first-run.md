@@ -29,6 +29,11 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    prints nothing. When the owner gives the first ruling, `python <kit>/tools/ledger.py add --repo <name>`
    creates that repository's file (with `ledger_path` alone, the one ledger file) and prints the new ruling's id. From an existing one-file ledger: docs/ledger.md "A new ledger".
 
+4a. **Set `dev_drive`** (hand step, Windows only; skip with no Dev Drive). The owner sets
+   `dev_drive` in the machine config to the Dev Drive's root folder, and moves the tool caches
+   onto it (docs/machine-setup.md "Dev Drive (owner steps)").
+   Success: a new session's start shows no `dev_drive` warning.
+
 5. **Check the machine lock.** No setup. Run `python <kit>/tools/machine_lock.py status`.
    Success: it prints the layout (threads, cpu and gpu slots) and what holds each slot. Never run
    `division`: that is the owner's choice (docs/lock-api.md).

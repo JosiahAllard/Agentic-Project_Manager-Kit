@@ -187,6 +187,20 @@ The write keeps the machine config's other keys and its layout (`kitlib/machines
 
 `kitlib/machinesetup/repo.py`; `tools/machine_setup.py --repo PATH --owner-email EMAIL --agent-email EMAIL [--main-branch NAME] [--repo-name NAME] [--stack NAME] [--pm-data DIR [--private-remote URL]] [--apply]`. What `installer/new-repo.ps1` did before this step, now in Python and tested on any platform; the script is its PowerShell front end and passes its parameters through (`-Target` is `--repo`). It writes into the repository and nothing on the machine; no machine option goes with it. What it writes, refuses and prints is docs/install.md "Committed setup (--repo)".
 
+## Dev Drive (owner steps)
+
+Machine setup does none of these: each is a hand step for the owner, done once per machine.
+
+- **Set `dev_drive`** in the machine config (docs/kit-json.md "Machine config keys") to the Dev Drive's root folder, once the kit, repositories, worktrees, `AGENT_TEMP` and every `guard.data_roots` and `guard_mark_roots` folder are on it. From then on the guard holds every agent write to the drive (docs/guard.md "Write jail", "Outer bound"); until then every session start warns that the bound is off.
+- **Move the tool caches onto the drive.** The guard does not see a program's own writes ("Known limits"), so a cache left on the system drive keeps growing there. Set each as a user environment variable to a folder on the Dev Drive, then open new terminals and sessions:
+  - `PIP_CACHE_DIR` (pip);
+  - `npm_config_cache` (npm);
+  - `NUGET_PACKAGES` (NuGet's global packages folder);
+  - `DOTNET_CLI_HOME` (the .NET CLI's home folder: tools, first-run files);
+  - `UV_CACHE_DIR` (uv), `CARGO_HOME` (cargo) and `GRADLE_USER_HOME` (Gradle), where used;
+  - Godot's editor data and cache (`%APPDATA%\Godot`): run Godot in self-contained mode (a `._sc_` file beside the editor binary on the Dev Drive), where used.
+- **Not moved by a variable:** `git config --global` writes `~/.gitconfig`, and other tools write `%APPDATA%` and `%LOCALAPPDATA%`; these stay on the system drive.
+
 ## Not done here
 
 - **Removing links.** Every leftover link is reported with its removal command ("Links") and left for the owner to remove. Other links into the older kit clone, for example `agents` and `hooks`, are noted and left: the plugin replaces agents, and the launcher starts the agent `launcher.coordinator_agent` names (docs/launcher.md "Settings").

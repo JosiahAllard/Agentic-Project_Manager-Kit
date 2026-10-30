@@ -32,6 +32,17 @@ class HeaderText(unittest.TestCase):
     def test_it_names_no_host(self):
         self.assertNotRegex(header.text('/k'), r'(?i)claude|codex|plugin_root')
 
+    def test_it_warns_naming_the_key_while_the_machine_config_sets_no_dev_drive(self):
+        # docs/guard.md "Write jail", "Outer bound": dev_drive unset leaves the bound off, said at every start
+        for user in ({'dev_drive': None}, {'dev_drive': '  '}, {}, None):
+            with self.subTest(user=user):
+                text = header.text('C:/k', user=user)
+                self.assertIn('\nWarning: the machine config sets no dev_drive', text)
+                self.assertIn('docs/kit-json.md "Machine config keys"', text)
+        text = header.text('C:/k', user={'dev_drive': 'D:/'})
+        self.assertNotIn('dev_drive', text)
+        self.assertTrue(text.endswith('never a folder to look for.'), text)
+
 
 class ClaudeContext(unittest.TestCase):
     def test_session_and_subagent_start_carry_additional_context(self):

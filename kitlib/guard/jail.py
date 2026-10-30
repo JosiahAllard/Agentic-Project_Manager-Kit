@@ -29,6 +29,10 @@ only holds <pointer>/.pm-kit (the PM repository's own checkout) is kept; rules.m
 refuses the writes inside that folder. A root's mode holds wherever it nests: a target inside a read-only data root is denied though
 it also lies in the checkout or temp, and one inside an add-only root may only be new.
 
+The outer bound (rules.dev_drive_bound, rule dev-drive): a write the roots allow is still refused
+when it is not on the Dev Drive, the machine config's dev_drive (dev_root, on_drive); unset, the
+bound is off. While it denies, roots drops a data or mark root off the Dev Drive.
+
 Paths compare after kitlib.guard.paths.norm(real=True): os.path.realpath (symlinks and junctions
 resolved, `..` folded), then the case fold (os.path.normcase on Windows). On Linux whether a root
 allows a target is read with the strict fold (a mount in doubt does not fold); whether a
@@ -235,11 +239,13 @@ def mark_roots(ctx, mark):
     return out
 
 
-def roots(ctx, cwd, is_root, mark=None):
+def roots(ctx, cwd, is_root, mark=None, dev=None, dropped=None):
     """[Root] for a session running in `cwd`, its own checkout first; `mark` (a main session's
     launcher mark, None for a subagent) adds its guard_mark_roots. A root of any kind that touches
     a machine config folder (touches_config) is dropped unless it is read-only: a data root, TMP or AGENT_TEMP at the home folder or above would otherwise let the
-    session write the machine config. A read-only root only denies, so it is kept."""
+    session write the machine config. A read-only root only denies, so it is kept. `dev`, the Dev
+    Drive's root (dev_root) when the outer bound denies: a data or mark root off it that may write
+    is dropped too, and appended to the list `dropped` when one is given."""
     out = []
     own = own_root(ctx, cwd, is_root)
     if own:
@@ -247,7 +253,35 @@ def roots(ctx, cwd, is_root, mark=None):
     out.extend(Root(p, TEMP) for p in temp_roots(ctx))
     out.extend(Root(p, DATA, mode) for p, mode in data_roots(ctx, cwd))
     out.extend(Root(p, MARK, mode) for p, mode in mark_roots(ctx, mark))
-    return [r for r in out if r.mode == READ_ONLY or not touches_config(ctx, r.path)]
+    kept = []
+    for r in out:
+        if r.mode != READ_ONLY and touches_config(ctx, r.path):
+            continue
+        if dev and r.mode != READ_ONLY and r.kind in (DATA, MARK) and not on_drive(r.path, dev):
+            if dropped is not None:
+                dropped.append(r)
+            continue
+        kept.append(r)
+    return kept
+
+
+def dev_root(ctx):
+    """The Dev Drive's root folder, the machine config's dev_drive (kitlib.config.user.dev_drive),
+    or None: unset, or a config that does not read (ctx.user's tolerant read sets no key). None
+    leaves the outer bound off."""
+    try:
+        user = ctx.user()
+    except Exception:  # noqa: BLE001 - no config read: the bound stays off, as with no key
+        return None
+    return kuser.dev_drive(user) if isinstance(user, dict) else None
+
+
+def on_drive(path, dev):
+    """True when `path`, real()ed (links and junctions resolved), is `dev` or below it; read with
+    the strict fold, as what the jail allows is (allow_real)."""
+    t = allow_real(path) or real(path)
+    d = allow_real(dev) or real(dev)
+    return inside(t, d)
 
 
 def judge(target, rs):
@@ -269,12 +303,13 @@ def judge(target, rs):
     return OUTSIDE, None
 
 
-def destination(rs):
+def destination(rs, dev=None):
     """Where the alternative aims: the session's own checkout, else the temp folder; never one a
-    read-only or add-only root holds (a role whose checkout is read-only is pointed at temp)."""
+    read-only or add-only root holds (a role whose checkout is read-only is pointed at temp), nor,
+    with `dev` (the Dev Drive's root), one off the Dev Drive."""
     for kind in (CHECKOUT, TEMP):
         for r in rs:
-            if r.kind == kind and judge(r.path, rs)[0] is None:
+            if r.kind == kind and judge(r.path, rs)[0] is None and (not dev or on_drive(r.path, dev)):
                 return r
     return None
 

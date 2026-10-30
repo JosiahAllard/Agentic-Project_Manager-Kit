@@ -4,9 +4,12 @@ off the file that sets those roots. Real folders throughout, so symlinks, juncti
 resolved the way the guard resolves them."""
 import json
 import os
+import shutil
+import tempfile
 import unittest
 
 from kitlib import config as kconfig
+from kitlib import guard
 from kitlib.git import repo
 from kitlib.guard import commands as cm
 from kitlib.guard import context, rules
@@ -14,7 +17,7 @@ from kitlib.guard import shell as sh
 from kitlib.lockmcp import PLUGIN_NAME
 
 from . import world as W
-from .claudehost import decide
+from .claudehost import action, decide
 from .world import bash, event, ps
 
 P = PLUGIN_NAME + ':'                 # kitlib.agentname.PREFIX (tests/agentname pins it)
@@ -1816,6 +1819,120 @@ class KitJson(Base):
 
     def test_outside_a_checkout_it_is_only_a_file(self):
         self.allowed(self.write(os.path.join(self.w.temp, 'fixture', '.kit.json')))
+
+
+class DevDrive(Base):
+    """The outer bound (docs/guard.md "Write jail", "Outer bound"): with the machine config's
+    dev_drive set, an agent session's write that its roots allow is still refused off the Dev
+    Drive (rule dev-drive), and a data or mark root off it is dropped with a warning. Here the
+    Dev Drive is the world's base folder and `off` a folder beside it."""
+
+    def setUp(self):
+        Base.setUp(self)
+        self.off = tempfile.mkdtemp(prefix='kit-guard-off-', dir=os.path.dirname(self.w.base))
+        self.addCleanup(shutil.rmtree, self.off, True)
+        self.agents = {'AGENT_TEMP': self.off}
+
+    def bound(self, **more):
+        self.w.user_config(dict({'dev_drive': self.w.base}, **more))
+
+    def judged(self, payload):
+        return guard.decide(action(payload), self.w.ctx(environ=self.agents))
+
+    def test_unset_the_bound_is_off(self):
+        self.allowed(self.write(os.path.join(self.off, 'x.txt'), env=self.agents))
+        self.w.user_config({})
+        self.allowed(self.write(os.path.join(self.off, 'x.txt'), env=self.agents))
+
+    def test_a_write_its_roots_allow_is_refused_off_the_dev_drive(self):
+        self.bound()
+        for tool in ('Write', 'Edit', 'NotebookEdit'):
+            with self.subTest(tool):
+                d = self.jailed(self.write(os.path.join(self.off, 'x.txt'), env=self.agents, tool=tool), 'dev-drive')
+                self.assertIn('is not on the Dev Drive (%s)' % W.fwd(self.w.base), d.reason)
+                self.assertIn('Instead: ', d.reason)
+                self.assertIn(W.fwd(self.w.wt), d.instead)          # the same write in its own worktree
+        d = self.jailed(self.run_bash('echo x > "%s/y.txt"' % W.fwd(self.off), env=self.agents), 'dev-drive')
+        self.assertIn('is not on the Dev Drive', d.reason)
+        self.jailed(self.run_ps('Set-Content -Path "%s/y.txt" -Value x' % W.fwd(self.off), env=self.agents),
+                    'dev-drive')
+
+    def test_writes_on_the_dev_drive_and_null_targets_pass(self):
+        self.bound()
+        self.allowed(self.write(os.path.join(self.w.wt, 'src', 'a.py'), env=self.agents))
+        self.allowed(self.write(os.path.join(self.w.temp, 'gate.log'), env=self.agents))
+        self.allowed(self.write(os.path.join(self.w.sib, 'a.py'), env=self.agents))
+        self.allowed(self.run_bash('echo x > /dev/null 2>&1', env=self.agents))
+        self.allowed(self.run_ps('echo x 2>$null > NUL', env=self.agents))
+
+    def test_the_owner_session_is_not_held(self):
+        self.bound()
+        self.allowed(self.write(os.path.join(self.off, 'x.txt'), sub=False, env=self.agents))
+
+    def test_a_drive_root_dev_drive(self):
+        drive = os.path.splitdrive(self.w.base)[0] + '/'
+        away = os.path.join(other_drive(self.w.base), 'agents')
+        self.bound(dev_drive=drive)
+        self.allowed(self.write(os.path.join(self.w.wt, 'a.py'), env={'AGENT_TEMP': away}))
+        self.jailed(self.write(os.path.join(away, 'x.txt'), env={'AGENT_TEMP': away}), 'dev-drive')
+
+    def test_a_root_reached_through_a_junction_off_the_dev_drive(self):
+        link = os.path.join(self.w.base, 'agentlink')
+        try:
+            import _winapi
+            _winapi.CreateJunction(self.off, link)
+        except (ImportError, AttributeError, OSError) as e:
+            self.skipTest('no junction: %s' % e)
+        self.bound()
+        self.jailed(self.write(os.path.join(link, 'x.txt'), env={'AGENT_TEMP': link}), 'dev-drive')
+
+    def test_git_making_a_folder_off_the_dev_drive(self):
+        self.bound()
+        d = self.jailed(self.run_bash('git worktree add "%s/w" -b x/y' % W.fwd(self.off), env=self.agents),
+                        'dev-drive')
+        self.assertIn('is not on the Dev Drive', d.reason)
+        self.allowed(self.run_bash('git worktree add "%s/w" -b x/y' % W.fwd(self.w.temp), env=self.agents))
+
+    def test_a_mark_root_off_the_dev_drive_is_dropped_with_a_warning(self):
+        notes = os.path.join(self.off, 'pmnotes')
+        os.makedirs(notes)
+        self.bound(guard_mark_roots={'pm': [{'path': notes, 'mode': 'open', 'why': 'test'}]})
+        d = self.jailed(self.write(os.path.join(notes, 'x.md'), env=PM, sub=False), 'dev-drive')
+        self.assertIn('is not on the Dev Drive', d.reason)
+        ok = guard.decide(action(event('Write', {'file_path': os.path.join(self.w.wt, 'a.md'), 'content': 'x'},
+                                       self.w.wt, False)), self.w.ctx(environ=PM))
+        self.assertEqual((ok.verdict, ok.rule), ('allow', rules.WARNED), ok.reason)
+        self.assertIn('the mark root "%s" is not on the Dev Drive' % W.fwd(notes), ok.reason)
+        self.assertIn("guard_mark_roots", ok.reason)
+
+    def test_a_data_root_off_the_dev_drive_is_dropped_with_a_warning(self):
+        data = os.path.join(self.off, 'research')
+        os.makedirs(data)
+        self.w.kit({'repo': {'name': 'demo', 'push_block': True},
+                    'guard': {'data_roots': [{'path': data, 'mode': 'open', 'why': 'test'}]}})
+        self.allowed(self.write(os.path.join(data, 'x.md')))          # unset: the root stands
+        self.bound()
+        self.jailed(self.write(os.path.join(data, 'x.md')), 'dev-drive')
+        ok = guard.decide(action(event('Write', {'file_path': os.path.join(self.w.wt, 'a.md'), 'content': 'x'},
+                                       self.w.wt, True)), self.w.ctx(environ={}))
+        self.assertEqual((ok.verdict, ok.rule), ('allow', rules.WARNED), ok.reason)
+        self.assertIn('the data root "%s" is not on the Dev Drive' % W.fwd(data), ok.reason)
+        self.assertIn('.kit.json guard.data_roots', ok.reason)
+
+    def test_the_owner_sets_the_rule_to_warn_or_off(self):
+        notes = os.path.join(self.off, 'pmnotes')
+        os.makedirs(notes)
+        roots = {'pm': [{'path': notes, 'mode': 'open', 'why': 'test'}]}
+        self.bound(guard_rules={'dev-drive': 'warn'}, guard_mark_roots=roots)
+        warned = self.judged(event('Write', {'file_path': os.path.join(self.off, 'x.txt'), 'content': 'x'},
+                                   self.w.wt, True))
+        self.assertEqual((warned.verdict, warned.rule), ('allow', rules.WARNED), warned.reason)
+        self.assertIn('is not on the Dev Drive', warned.reason)
+        self.allowed(self.write(os.path.join(notes, 'x.md'), env=PM, sub=False))   # warn: not dropped
+        self.bound(guard_rules={'dev-drive': 'off'}, guard_mark_roots=roots)
+        quiet = self.judged(event('Write', {'file_path': os.path.join(self.off, 'x.txt'), 'content': 'x'},
+                                  self.w.wt, True))
+        self.assertEqual((quiet.verdict, quiet.rule), ('allow', ''), quiet.reason)
 
 
 setUpModule = W.deny_softened           # these pin what the guard cannot place and the dropped rules (world.deny_softened)
