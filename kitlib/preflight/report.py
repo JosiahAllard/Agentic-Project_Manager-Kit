@@ -118,3 +118,38 @@ def report(top, cfg, kit_root, base=None, fetch=False, lock_reader=lockline.read
                                in_main))
     out.append('lock      %s' % lockline.line_for(kit_root, lock_reader))
     return out
+
+
+# The short report (the default; --full prints `report` whole). A line is dropped only when its
+# label is one of QUIET and it carries none of PROBLEM; every other line, including any label added
+# later, is kept.
+QUIET = ('worktrees', 'dirty', 'docs', 'doc index', 'config', 'pointer', 'index', 'lock', 'daily',
+         'main checkout clean', 'next', 'traps', 'engines', 'ports', 'hook', 'leftovers')
+PROBLEM = ('FAIL', 'NOT CHECKED', 'UNKNOWN', 'WARN', 'DIFFERENT', 'RED', 'STALE', 'BROKEN', 'refused', 'unknown (')
+
+
+def _label(line):
+    head = line[:10].strip()
+    if line.startswith('main checkout clean'):
+        return 'main checkout clean'
+    return head
+
+
+def brief(lines, kit_root):
+    """The short report: `lines` (from `report`) without the readings that are fine and that a
+    builder does not use, then a `kit` line (the kit's tools folder) and the way to the rest. A
+    non-zero `dirty` count stays, with its file list."""
+    out = []
+    keep = True
+    for line in lines:
+        if line[:1] != ' ':
+            label = _label(line)
+            quiet = label in QUIET and not any(m in line for m in PROBLEM)
+            if label == 'dirty' and not line.startswith('dirty     0 '):
+                quiet = False
+            keep = not quiet
+        if keep:
+            out.append(line)
+    out.append('kit       %s' % (kit_root.replace(chr(92), '/').rstrip('/')))
+    out.append('          (only problems shown; preflight.py --full prints every check)')
+    return out

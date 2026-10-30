@@ -115,6 +115,8 @@ class Fixture(unittest.TestCase):
 
     def run_preflight(self, *argv, reader=free_reader, where=None):
         argv = list(argv) if where is False else ['-C', where or self.root] + list(argv)
+        if '--full' not in argv and not getattr(self, 'short', False):
+            argv.append('--full')
         buf, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
             try:
@@ -1230,3 +1232,41 @@ class TheLockLine(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TheShortReport(unittest.TestCase):
+    LINES = ['repo      /r', 'branch    kit/x @ abc1234', 'base      main @ abc1234 | origin/main @ abc1234 (equal)',
+             'dirty     0 file(s)', 'worktrees 2', '            /r  abc [main]', 'leftovers none under w',
+             'docs      DOC BUDGET OK (HEAD)', 'main checkout clean: no stray untracked or uncommitted files',
+             'daily     GREEN abc', 'config    /c', 'index     docs: docs/INDEX.md', 'next      python x',
+             '          python y', 'lock      cpu free (0/12)']
+
+    def test_fine_readings_are_left_out_and_the_kit_folder_is_named(self):
+        out = report.brief(self.LINES, 'Z:' + chr(92) + 'kit')
+        self.assertEqual([l.split()[0] for l in out[:3]], ['repo', 'branch', 'base'])
+        self.assertEqual([l for l in out if l.startswith(('worktrees', 'dirty', 'docs', 'lock', 'next', '            '))], [])
+        self.assertIn('kit       Z:/kit', out)
+        self.assertLess(len(out), len(self.LINES))
+
+    def test_a_problem_line_and_its_continuation_are_kept(self):
+        lines = self.LINES[:3] + ['docs      DOC BUDGET FAILED x', 'dirty     2 file(s)', '            M a', '            M b',
+                                  'daily     RED abc', 'config    BROKEN - x', 'worktrees 1', '            /r  abc [main]']
+        out = report.brief(lines, '/k')
+        for kept in ('docs      DOC BUDGET FAILED x', 'dirty     2 file(s)', '            M a', 'daily     RED abc',
+                     'config    BROKEN - x'):
+            self.assertIn(kept, out)
+        self.assertNotIn('worktrees 1', out)
+        self.assertNotIn('            /r  abc [main]', out)
+
+
+class TheDefaultIsShort(Fixture):
+    def test_default_omits_what_full_prints_and_exit_code_is_the_same(self):
+        self.short = True
+        code, short = self.run_preflight()
+        self.short = False
+        code_full, full = self.run_preflight('--full')
+        self.assertEqual(code, code_full)
+        self.assertFalse(any(l.startswith('worktrees') for l in short.splitlines()))
+        self.assertTrue(any(l.startswith('worktrees') for l in full.splitlines()))
+        self.assertIn('kit       ', short)
+        self.assertLess(len(short), len(full))
