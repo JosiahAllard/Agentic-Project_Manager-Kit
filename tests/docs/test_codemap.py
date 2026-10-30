@@ -120,5 +120,49 @@ class Run(unittest.TestCase):
         self.assertTrue(got[0].startswith('codemap: cannot list the files of'), got)
 
 
+class Symbol(unittest.TestCase):
+    SRC = ('import os\n\n\nclass Box:\n    """A box."""\n\n    def open(self):\n        return 1\n\n'
+           '    def close(self):\n        return 2\n\n\ndef main():\n    return Box()\n')
+
+    def setUp(self):
+        self.repo = TempRepo()
+        self.addCleanup(self.repo.cleanup)
+        self.repo.write('tools/a.py', self.SRC)
+        self.repo.write('tools/b.py', 'def main():\n    pass\n\n\nclass Other:\n    def close(self):\n        pass\n')
+        self.repo.commit('a', 'tools/a.py', 'tools/b.py')
+
+    def sym(self, name, path=None):
+        got = []
+        return codemap.run(self.repo.root, got.append, symbol=name, path=path), got
+
+    def test_a_function_prints_its_exact_span(self):
+        self.assertEqual(self.sym('main', 'tools/a.py'),
+                         (0, ['tools/a.py:14-15  def main', '   14  def main():', '   15      return Box()']))
+
+    def test_a_class_prints_through_its_last_method_line(self):
+        rc, got = self.sym('Box')
+        self.assertEqual((rc, got[0], got[1], got[-1]),
+                         (0, 'tools/a.py:4-11  class Box', '    4  class Box:', '   11          return 2'))
+        self.assertEqual(len(got), 1 + 8)
+
+    def test_class_dot_method_picks_one_method(self):
+        self.assertEqual(self.sym('Box.close'),
+                         (0, ['tools/a.py:10-11  def Box.close', '   10      def close(self):',
+                              '   11          return 2']))
+
+    def test_an_ambiguous_name_lists_file_and_line_and_exits_1(self):
+        rc, got = self.sym('main')
+        self.assertEqual(rc, 1)
+        self.assertEqual(got[1:], ['tools/a.py:14  def main', 'tools/b.py:1  def main'])
+        self.assertEqual(self.sym('close')[0], 1)
+
+    def test_a_path_resolves_an_ambiguous_name(self):
+        rc, got = self.sym('main', 'tools/b.py')
+        self.assertEqual((rc, got[0]), (0, 'tools/b.py:1-2  def main'))
+
+    def test_a_missing_symbol_says_so_and_exits_1(self):
+        self.assertEqual(self.sym('nope'), (1, ['codemap: symbol nope not found']))
+
+
 if __name__ == '__main__':
     unittest.main()
