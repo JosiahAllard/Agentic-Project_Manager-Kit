@@ -99,10 +99,16 @@ class Planner(StoreCase):
     def test_block_carries_the_reason(self):
         self.seed(rec('FOO'))
         change = self.write(args('block', id='FOO', on=['live-client'], owner_ask=None,
-                                 ruling=None, reason=WHY))
+                                 ruling=None, reason=WHY, until=None))
         self.assertEqual(change.subject, 'backlog: block FOO on live-client: %s' % WHY)
         self.assertTrue(self.get('FOO').body.rstrip('\n').endswith(
             'Blocked on live-client (%s): %s' % (TODAY, WHY)))
+
+    def test_block_carries_the_until(self):
+        self.seed(rec('FOO'))
+        self.write(args('block', id='FOO', on=['live-client'], owner_ask=None, ruling=None,
+                        reason=None, until='todo:T-7 done'))
+        self.assertEqual(self.get('FOO').all('until'), ['live-client todo:T-7 done'])
 
     def test_unblock_clears_the_named_blocker_with_its_reason(self):
         self.seed(rec('FOO', state='blocked', blocked_on=['item:BAR', 'live-client']), rec('BAR'))
