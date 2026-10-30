@@ -113,16 +113,16 @@ class Deep(Base):
         self.refused("--model 'opus;rm'", model='opus;rm')
 
     def test_full_account_is_refused_unless_forced(self):
-        self.full('1', 93)
-        e = self.refused('Account 1 is at 93% of its seven_day window')
+        self.full('1', 96)
+        e = self.refused('Account 1 is at 96% of its seven_day window')
         self.assertIn('--force', str(e))
         out = self.deep(force=True)
-        self.assertIn('--force: starting on account 1 anyway; it is at 93% of its seven_day window', out)
+        self.assertIn('--force: starting on account 1 anyway; it is at 96% of its seven_day window', out)
         self.assertIn('Would open a new window running:', out)
 
     def test_five_hour_window_counts_too(self):
-        self.full('2', 90, days=0.1, window_='five')
-        self.refused('Account 2 is at 90% of its five_hour window', account='2')
+        self.full('2', 95, days=0.1, window_='five')
+        self.refused('Account 2 is at 95% of its five_hour window', account='2')
 
     def test_a_window_past_its_reset_is_fresh(self):
         self.full('1', 99, days=-1)
@@ -135,7 +135,7 @@ class Deep(Base):
         out = self.deep(account='auto')
         self.assertIn('auto picked account 2', out)
         self.assertIn(window.q(self.h.accounts['2'][0]), out)
-        self.full('2', 91, days=5)
+        self.full('2', 96, days=5)
         e = self.refused('Account 1 is at 95%', account='auto')
         self.assertIn('auto picked account 1', e.lines)               # the soonest reset, when every one is full
 
@@ -262,8 +262,8 @@ class Consultant(Base):
             self.refused(msg, **kw)
 
     def test_full_account_is_refused_unless_forced(self):
-        self.full('1', 93)
-        self.refused('Account 1 is at 93% of its seven_day window')
+        self.full('1', 96)
+        self.refused('Account 1 is at 96% of its seven_day window')
         out = self.cons(force=True)
         self.assertIn('--force: starting on account 1 anyway', out)
         self.assertIn('Would open', out)
@@ -300,8 +300,8 @@ class Consultant(Base):
 
     def test_replace_alone_still_refuses_a_full_account(self):
         self.live()
-        self.full('1', 90)
-        self.refused('Account 1 is at 90% of its seven_day window', replace=True)
+        self.full('1', 95)
+        self.refused('Account 1 is at 95% of its seven_day window', replace=True)
         out = self.cons(replace=True, force=True)
         self.assertIn('--force: starting on account 1 anyway', out)
         self.assertIn("--replace: a session named 'consultant-myrepo' is already running", out)
