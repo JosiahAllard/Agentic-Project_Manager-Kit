@@ -58,7 +58,7 @@ and, only in an entry carry() moved (a re-add drops it):
                   landing checks it again (docs/gate.md "Carrying a verdict forward").
 
 Errors (all VerdictError): BadEntry for a malformed entry or branch name given, nothing read or
-written; SelfReview (a BadEntry) when add() is given a High-risk verdict the coordinator queueing
+written; SelfReview (a BadEntry) when add() is given a Medium or High-risk verdict the coordinator queueing
 it reviewed itself (self_review_why), nothing read or written, or, with "landing".
 self_review_max_lines given, a self-read of a branch over that many changed lines or one whose
 size cannot be told (self_review_size_why), nothing written; ModelMismatch (a BadEntry) when
@@ -130,7 +130,7 @@ class BadEntry(VerdictError):
 
 
 class SelfReview(BadEntry):
-    """A High-risk verdict whose reviewer is the coordinator queueing it (self_review_why): its
+    """A Medium or High-risk verdict whose reviewer is the coordinator queueing it (self_review_why): its
     text ends with the Instead: line (SELF_REVIEW_INSTEAD). Nothing was read or written."""
 
 
@@ -226,18 +226,19 @@ def self_reader(entry):
 
 
 def self_review_why(entry):
-    """Why add() refuses `entry` as a self-review, or None. Refused: a High-risk verdict whose
-    reviewer is the coordinator queueing it (self_reader). A Low or Medium one is not: a
-    coordinator may read a small branch itself (skill branch-review, step 3), up to
+    """Why add() refuses `entry` as a self-review, or None. Refused: a Medium or High-risk
+    verdict whose reviewer is the coordinator queueing it (self_reader). A Low one is not: a
+    coordinator may read a small Low branch itself (skill branch-review, step 3), up to
     "landing".self_review_max_lines when that is set (self_review_size_why). `entry` is well
     formed (check). Pure."""
-    if entry['risk'] != 'High':
+    if entry['risk'] not in ('Medium', 'High'):
         return None
     who = self_reader(entry)
     if not who:
         return None
-    return ('a High-risk verdict needs a reviewer other than the coordinator queueing it, and %s '
-            '(skill branch-review, step 3); nothing was queued\n%s' % (who, SELF_REVIEW_INSTEAD))
+    return ('a %s-risk verdict needs a reviewer other than the coordinator queueing it, and %s '
+            '(skill branch-review, step 3); nothing was queued\n%s'
+            % (entry['risk'], who, SELF_REVIEW_INSTEAD))
 
 
 def diff_lines(cwd, rng):
@@ -567,7 +568,7 @@ def add(common_dir, entry, now=None, self_review_max_lines=None, main=None, main
         seen=None):
     """Queue `entry` (the GIVEN_KEYS; nothing else) for its branch, replacing an entry already
     queued for it: `(path, stored entry)`. The tip must be `refs/heads/<branch>` in the repository
-    whose common dir is `common_dir`, else TipMismatch. A High-risk self-review is SelfReview
+    whose common dir is `common_dir`, else TipMismatch. A Medium or High-risk self-review is SelfReview
     (self_review_why); so is a self-read of a branch over `self_review_max_lines` changed lines, or
     one whose size cannot be told, when that cap ("landing".self_review_max_lines) is given
     (self_review_size_why; `main`: main as fetched, a commit, or None with `main_why`). `seen`:

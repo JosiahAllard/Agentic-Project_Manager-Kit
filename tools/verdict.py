@@ -4,11 +4,11 @@
                  --reviewer-id ID --author A --range BASE..TIP --session S [--record ID ...] [-C DIR]
       queue B at SHA (the coordinator, after reading the review; never the reviewer). SHA must be
       B's head now. A re-add replaces B's entry. V: LAND | "LAND WITH FOLLOW-UP"; R: Low |
-      Medium | High. Prints `QUEUED <branch> <tip>`. A High-risk verdict whose reviewer is the
+      Medium | High. Prints `QUEUED <branch> <tip>`. A Medium or High-risk verdict whose reviewer is the
       calling coordinator (--reviewer-id is --session, or --reviewer names the coordinator role)
       prints `REFUSED: ...` and an `Instead:` line naming a dispatched analyst (exit 2, nothing
       written; verdicts.self_review_why). With "landing".self_review_max_lines set in the -C
-      checkout's .kit.json, a verdict of any risk the calling coordinator reviewed itself is
+      checkout's .kit.json, a Low verdict the calling coordinator reviewed itself is
       refused the same way when it changes more lines than that (the larger of --range and the
       tip's diff from main as last fetched), or its size cannot be told
       (verdicts.self_review_size_why); a .kit.json that cannot be read is NOT DONE (exit 1).
