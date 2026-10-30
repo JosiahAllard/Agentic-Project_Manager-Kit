@@ -321,7 +321,7 @@ class LocalAcceptance(fixtures.GateRepoCase):
                       self.repo.git('show', '-s', '--format=%B', result['tip']))
         self.assertIn('Closes: PROBE', self.repo.git('show', '-s', '--format=%B', result['tip']))
         self.assertEqual(self.repo.head(), self.main)
-        self.assertTrue(any(d.get('kind') == 'engine-test' for d in self.store.history_records(1)))
+        self.assertTrue(any(d.get('kind') == 'test' for d in self.store.history_records(1)))
         self.assertEqual(W.handoff(self.task, result['tip'], analyst)['tip'], result['tip'])
         checkout.write_text('value.txt', 'later uncommitted edit\n', root=self.task.worker)
         with self.assertRaisesRegex(W.Stopped, 'dirty'):

@@ -44,6 +44,22 @@ class HistoryExpect(StoreCase):
         self.assertEqual(e("kit", "engine-test", "branch"), 720)
         self.assertEqual(e("kit", "engine-test", "other"), 400)
 
+    def test_lines_under_a_kinds_retired_name_count_as_that_kind(self):
+        """A history line written before a kind's rename (its old name now an alias in the kinds
+        table) counts toward the kind's median under either name. Red before: the lines split by
+        the name as written, and three runs under each name were each one short."""
+        import json
+        with open(self.kinds_path, encoding="utf-8") as f:
+            doc = json.load(f)
+        doc["aliases"] = {"old-test": {"to": "engine-test", "why": "renamed"}}
+        with open(self.kinds_path, "w", encoding="utf-8") as f:
+            json.dump(doc, f)
+        self.store = self.make_store(history_min_runs=4)
+        self.many(400, n=2, kind="old-test")
+        self.many(600, n=2)
+        self.assertEqual(self.store.history_expect("kit", "engine-test"), 500)
+        self.assertEqual(self.store.history_expect("kit", "old-test"), 500)
+
     def test_a_thin_mode_has_none_whatever_the_others_hold(self):
         self.many(700, **LAND)
         self.many(400, n=20)

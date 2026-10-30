@@ -113,17 +113,21 @@ def _cores(peaks, booked, agent_cap):
     return max(1, min(agent_cap, int(math.ceil(percentile(peaks, 0.9)))))
 
 
-def propose(table, history, medium_cores, min_runs=3, agent_cap=None):
+def propose(table, history, medium_cores, min_runs=3, agent_cap=None, aliases=None):
     """`(new table, notes)`: `table` is the kinds file's "kinds" object; `history` the lock's
     history lines; notes one line per kind saying what changed or why it was kept. agent_cap
     (the layout's) proposes a whole number of cores per kind; without it the old
-    medium/heavy rule."""
+    medium/heavy rule. aliases: the kinds file's "aliases" object ({retired name: {to, why}});
+    a history line of a retired name counts as a run of the kind it names now."""
     out, notes = copy.deepcopy(table), []
+    renamed = {a: e['to'] for a, e in (aliases or {}).items()
+               if isinstance(e, dict) and isinstance(e.get('to'), str)}
     for kind in sorted(table):
         entry = out[kind]
         if not isinstance(entry, dict):
             continue                # a note in the table, not a kind
-        runs = [d for d in history if d.get('kind') == kind and d.get('how') == 'done'
+        runs = [d for d in history if renamed.get(d.get('kind'), d.get('kind')) == kind
+                and d.get('how') == 'done'
                 and _num(d, 'held_s') is not None]
         samples, skipped = [], {}
         for d in runs:

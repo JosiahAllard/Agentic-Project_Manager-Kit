@@ -24,7 +24,7 @@ class KindsTest(unittest.TestCase):
 
     def test_one_file_one_reader(self):
         self.assertEqual(kinds.KINDS_FILE, policy.KINDS_FILE)
-        self.assertIn('engine-test', kinds.load())
+        self.assertIn('test', kinds.load())
         self.assertFalse(hasattr(kinds, 'json'), 'kinds.py still carries its own JSON reader')
 
     def test_load_reads_through_the_config_reader(self):
@@ -70,6 +70,39 @@ class Aliases(KindsTest):
     def test_a_kind_that_is_not_text_comes_back_unchanged(self):
         for odd in (['x'], {'x': 1}, None, 3):
             self.assertEqual(kinds.resolve(odd, {'a': {}}), odd)
+
+    def test_canonical_reads_a_retired_name_as_the_kind_it_names(self):
+        path = self.write({'kinds': {'a': {'cpu': 1}}, 'aliases': {'x': {'to': 'a', 'why': 'w'}}})
+        self.assertEqual(kinds.aliases(path), {'x': 'a'})
+        self.assertEqual([kinds.canonical(k, path) for k in ('x', 'a', 'other', None)],
+                         ['a', 'a', 'other', None])
+        self.assertEqual(kinds.canonical('x', table_aliases={}), 'x')
+
+    def test_an_aliases_object_that_does_not_read_compares_names_as_written(self):
+        path = self.write({'kinds': {'a': {'cpu': 1}}, 'aliases': {'x': {'to': 'nope', 'why': 'w'}}})
+        self.assertEqual(kinds.aliases(path), {})
+        self.assertEqual(kinds.canonical('x', path), 'x')
+        with self.assertRaises(kinds.KindsError):
+            kinds.resolve('x', {'a': {}}, path)          # booking still fails closed
+
+
+class LiveTable(unittest.TestCase):
+    """The kit's own kinds.json: generic names, the retired ones as aliases."""
+
+    def test_the_generic_names_are_kinds_and_the_retired_ones_aliases(self):
+        table = kinds.load()
+        for k in ('test', 'app-run'):
+            self.assertIn(k, table)
+        for old in ('engine-test', 'engine-run'):
+            self.assertNotIn(old, table)
+        self.assertEqual(kinds.aliases(), {'engine-test': 'test', 'engine-run': 'app-run'})
+        self.assertEqual(kinds.resolve('engine-test', table), 'test')
+        self.assertEqual(kinds.resolve('engine-run', table), 'app-run')
+
+    def test_a_renamed_kind_keeps_its_size(self):
+        table = kinds.load()
+        for k in ('test', 'app-run'):
+            self.assertEqual(table[k], {'cpu': 'medium', 'gpu': 0, 'share': False, 'warn_min': 30})
 
 
 class GpuValues(KindsTest):
