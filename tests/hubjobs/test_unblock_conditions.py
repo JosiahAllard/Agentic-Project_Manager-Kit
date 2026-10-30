@@ -153,6 +153,20 @@ class Pass(Case):
             self.assertEqual((r.get('state'), r.all('blocked_on')), ('blocked', [member]), rid)
         self.assertNotIn('OWN', [w[0] for w in self.writes], 'owner + path: skipped, met or not')
 
+    def test_a_hold_cleared_after_the_read_is_no_write_and_no_push(self):
+        stale = U.open_snapshot(self.repo.root)
+        recordwrite.unblock(self.repo.root, 'FOO')
+        recordwrite.unblock(self.repo.root, 'QUX', on='live-client',
+                            reason='the flag came early, cleared by hand')
+        tip, ctx = self.tip(), Ctx()
+        job = U.UnblockJob(lambda: ([('kit', self.repo.root)], []),
+                           lambda: U.Readers(self.hub, self.plugins, lambda repo, rid: None),
+                           write=self.write, snapshot=lambda root: stale)
+        out = job(ctx)
+        self.assertEqual(sorted(w[0] for w in self.writes), ['FOO', 'QUX'], 'both were tried')
+        self.assertIsInstance(out, jobs.Skip)
+        self.assertEqual((self.tip(), ctx.events), (tip, []))
+
     def test_an_owner_question_answered_clears_the_owner(self):
         self.doc('questions', 'Q-4', 'filed')
         ctx = Ctx()
