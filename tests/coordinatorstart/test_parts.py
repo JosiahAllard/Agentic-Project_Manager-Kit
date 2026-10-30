@@ -20,8 +20,8 @@ CLASSIFY = (
 NEXT = (
     "BACKLOG empty | 3 records | 2 pullable\n\n"
     "NEXT (1 offered, session k)\n"
-    "  1  ALPHA-ONE  p2  open  alpha  do it\n"
-    "  passed over ALPHA-TWO (rank 2): collides\n"
+    "  1  EX-ONE  p2  open  alpha  do it\n"
+    "  passed over EX-TWO (rank 2): collides\n"
     "  blockers, most first:\n"
     "    blocks 1: x\n")
 
@@ -77,7 +77,7 @@ class CommandPartsTest(unittest.TestCase):
 
         def run(args, timeout):
             seen.append((args[2:], timeout))
-            return "question Q-1 [r] to=pm from=k t\nto-do T-2 [r] to=k from=pm t\n"
+            return "question EX-1 [r] to=pm from=k t\nto-do EX-2 [r] to=k from=pm t\n"
         out = parts.hub_pending("k", run)
         self.assertEqual(seen, [(["pending", "--for", "k"], parts.PART_TIMEOUT)])
         self.assertEqual(out[0], "hub pending for k: 2")
@@ -88,7 +88,7 @@ class CommandPartsTest(unittest.TestCase):
     def test_next_keeps_the_offer_and_drops_what_it_passed_over(self):
         out = parts.backlog_next("R", "k", lambda a, timeout: NEXT)
         self.assertEqual(out[0], "backlog next:")
-        self.assertTrue(any("ALPHA-ONE" in l for l in out))
+        self.assertTrue(any("EX-ONE" in l for l in out))
         self.assertFalse(any("passed over" in l or "blockers" in l for l in out))
 
     def test_next_asks_the_pm_data_worktree_when_the_repo_holds_no_record(self):
@@ -99,7 +99,7 @@ class CommandPartsTest(unittest.TestCase):
             return NEXT if asked[-1] == "PM" else "BACKLOG empty | 0 records | 0 pullable\n"
         out = parts.backlog_next("R", "k", run, store=lambda: "PM")
         self.assertEqual(asked, ["R", "PM"])
-        self.assertTrue(any("ALPHA-ONE" in l for l in out))
+        self.assertTrue(any("EX-ONE" in l for l in out))
 
     def test_worktrees_keeps_the_class_lines_and_the_stale_rows_not_the_live_rows(self):
         text = "\n".join(parts.worktrees("R", lambda a, timeout: CLASSIFY))
@@ -176,7 +176,7 @@ class ContextPartsTest(unittest.TestCase):
         self.assertLess(time.monotonic() - t0, 3)
         self.assertIn("  | the tail", text)
         self.assertIn("could not read hub pending: no answer within 0 s", text)
-        self.assertIn("ALPHA-ONE", text)
+        self.assertIn("EX-ONE", text)
         self.assertIn("kit/one", text)
 
     def test_no_sessions_entry_gives_a_line_per_command_part_and_the_note_search_still_runs(self):
