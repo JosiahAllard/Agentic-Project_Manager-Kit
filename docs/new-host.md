@@ -120,6 +120,12 @@ The package exports `ADAPTER`, a `kitlib.host.HostAdapter`:
   launcher's settings. `deliver` must end within `push.STOP_S`, the hub's close join. `tools/hub.py serve` asks for it with `getattr`; without it the hub serves
   with no push notifications (docs/action-hub.md "Push notifications"; Claude:
   `hosts/claude/adapter/peer.py` `HubPush`).
+- `agent_models()` (optional): the subagent model reader `tools/verdict.py add` checks
+  `--reviewer-model` with, a function from a reviewer id to the sorted models that subagent's
+  transcripts show: `[]` for a subagent id with no transcript found (`add` queues with a NOTE),
+  `None` for an id that is not a subagent's (a session name, not looked up). `verdict.py` asks
+  for it with `getattr`; without it no reviewer model is checked (Codex; docs/gate.md "Strict
+  paths"; Claude: `hosts/claude/adapter/agent_models.py` `models`).
 - The renderer's optional `vendored(root)`: `{path: bytes}` of kit files the host's plugin ships a
   copy of, read from the kit checkout `root` and drift-checked with the rest. A plugin root that is
   not the whole kit cannot reach the kit's `boot/` from a plugin cache, so it would ship
