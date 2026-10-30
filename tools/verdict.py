@@ -12,10 +12,10 @@
       refused the same way when it changes more lines than that (the larger of --range and the
       tip's diff from main as last fetched), or its size cannot be told
       (verdicts.self_review_size_why); a .kit.json that cannot be read is NOT DONE (exit 1).
-      Each --reviewer-id that is a subagent id of the host (Claude: hosts.claude.adapter.
-      agent_models) has its transcript read for the models it ran on: one that is not
-      --reviewer-model (`claude-haiku-5-5` for `opus`) prints `REFUSED: ...` and an `Instead:`
-      line naming the model it ran on (exit 2, nothing written; verdicts.model_mismatch_why); an
+      Each --reviewer-id that is a subagent id of the host (its ADAPTER's optional
+      agent_models(); Claude: hosts.claude.adapter.agent_models) has its transcript read for the
+      models it ran on: one that is not --reviewer-model (`claude-haiku-5-5` for `opus`) prints
+      `REFUSED: ...` and an `Instead:` line (exit 2, nothing written; verdicts.model_mismatch_why); an
       id with no transcript prints `NOTE: --reviewer-model <m> is not checked: ...` before QUEUED.
       A session name, a self-review and a host with no reader (Codex) are not looked up.
   verdict.py carry --branch B [-C DIR]
@@ -45,7 +45,6 @@ entry add finds malformed or a self-review it refuses; nothing written); 3 tip m
 there is no such branch; nothing written).
 """
 import argparse
-import importlib
 import os
 import sys
 
@@ -59,7 +58,6 @@ from kitlib.git import refs, repo                                  # noqa: E402
 from kitlib.host import registry                                    # noqa: E402
 
 DONE, NOT_DONE, USAGE, TIP_MISMATCH = 0, 1, 2, 3
-READER = 'agent_models'     # the transcript reader's module in a host's adapter package
 
 
 class Parser(argparse.ArgumentParser):
@@ -118,14 +116,14 @@ def line(e):
 
 
 def transcript_reader(environ=None):
-    """The selected host's subagent model reader, `<adapter>.agent_models.models` (id -> sorted
-    models, [] for an agent id with no transcript, None for an id that is not one), or None when
-    that host has none (Codex) or hosts.json cannot be read."""
+    """The selected host's subagent model reader, from its ADAPTER's optional `agent_models()`
+    (docs/new-host.md; id -> sorted models, [] for an agent id with no transcript, None for an id
+    that is not one), or None when that host has none (Codex) or hosts.json cannot be read."""
     try:
-        pkg = _host.adapter_module(environ=environ)
-        return importlib.import_module('%s.%s' % (pkg.__name__, READER)).models
+        make = getattr(_host.adapter_module(environ=environ).ADAPTER, 'agent_models', None)
     except (ImportError, AttributeError, registry.RegistryError):
         return None
+    return make() if make is not None else None
 
 
 def main_as_fetched(root):

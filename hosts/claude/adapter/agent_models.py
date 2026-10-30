@@ -1,5 +1,6 @@
 """CLAUDE-SPECIFIC: the models a subagent ran on, read from its transcript (tools/verdict.py add
-checks a verdict's --reviewer-model with them: kitlib.gate.verdicts.model_mismatch_why).
+checks a verdict's --reviewer-model with them through ADAPTER.agent_models(), hosts.claude.adapter.
+host: kitlib.gate.verdicts.model_mismatch_why).
 
 Claude Code writes each subagent's transcript to
 `<config folder>/projects/<project>/<parent session id>/subagents/agent-<agent id>.jsonl`, one

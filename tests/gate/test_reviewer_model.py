@@ -10,7 +10,7 @@ from unittest import mock
 from hosts.claude.adapter import agent_models as AM
 from kitlib.gate import verdicts as V
 from tests.gate.fixtures import GateRepoCase
-from tests.gate.test_verdict_cli import VerdictCli
+from tests.gate import test_verdict_cli as VC
 from tests.home import temp_home
 
 RID = 'a13560c0143b859e7'           # the shape of every Claude subagent id
@@ -27,12 +27,12 @@ def records(*models):
 
 
 class ReviewerModel(GateRepoCase):
-    # VerdictCli's helpers, without running its tests a second time
-    run_tool = VerdictCli.run_tool
-    add_args = VerdictCli.add_args
+    # VerdictCli's helpers; the module is imported, not the class, so its tests run once
+    run_tool = VC.VerdictCli.run_tool
+    add_args = VC.VerdictCli.add_args
 
     def setUp(self):
-        VerdictCli.setUp(self)
+        VC.VerdictCli.setUp(self)
         self.home = temp_home(self, prefix='kit-reviewer-model-')
         env = mock.patch.dict(os.environ, {'CLAUDE_CONFIG_DIR': os.path.join(self.home, '.claude')})
         env.start()
@@ -114,10 +114,15 @@ class ReviewerModel(GateRepoCase):
         self.assert_queued(self.add())
         self.plant(RID, 'claude-haiku-5-5', folder='.claude')         # CLAUDE_CONFIG_DIR
         self.assertEqual(AM.models(RID), ['claude-haiku-5-5', 'claude-opus-5-5'])
+        fresh = ('\nInstead: the review ran on more than one model (claude-haiku-5-5, '
+                 'claude-opus-5-5), which no --reviewer-model can name: dispatch a fresh analyst '
+                 'with model %s, the model the verdict needs (opus for a branch land.py '
+                 '--check-strict calls STRICT; skill branch-review)')
         out = self.assert_refused()
         self.assertIn('but the reviewer %s ran on claude-haiku-5-5 and claude-opus-5-5' % RID, out)
-        self.assertIn('Instead: queue it with --reviewer-model naming the model the review ran on '
-                      '(claude-haiku-5-5, claude-opus-5-5)', out)
+        self.assertIn(fresh % 'opus', out)
+        out = self.assert_refused(**{'--reviewer-model': 'haiku'})   # no model is accepted
+        self.assertIn(fresh % 'haiku', out)
 
     def test_one_of_two_reviewers_on_another_model_is_refused(self):
         self.plant(RID, 'claude-opus-5-5')
@@ -125,6 +130,10 @@ class ReviewerModel(GateRepoCase):
         out = self.assert_refused(**{'--reviewer-id': '%s/%s' % (RID, RID2)})
         self.assertIn('but the reviewer %s ran on claude-sonnet-5-5 (its transcript)' % RID2, out)
         self.assertNotIn('reviewer %s ran' % RID, out)
+        self.assertIn('Instead: the review ran on more than one model (claude-opus-5-5, '
+                      'claude-sonnet-5-5), which no --reviewer-model can name: dispatch a fresh '
+                      'analyst with model opus', out)
+        self.assert_refused(**{'--reviewer-id': '%s/%s' % (RID, RID2), '--reviewer-model': 'sonnet'})
 
     def test_a_host_with_no_reader_checks_nothing(self):
         self.plant(RID, 'claude-haiku-5-5')

@@ -332,7 +332,9 @@ def model_mismatch_why(entry, seen):
     says, or None. `seen` is seen_models(): a model seen matches when it is reviewer_model (case
     and outer space aside) or names the same tier model of hosts.json (land.named_model:
     `claude-haiku-5-5` names haiku). Refused when any model seen for any id does not match; an id
-    with none seen (no transcript) is not checked. `entry` is well formed (check)."""
+    with none seen (no transcript) is not checked. The Instead: line names the one model seen, or,
+    when the review ran on more than one, asks for a fresh review on reviewer_model: no one
+    reviewer_model could name it. `entry` is well formed (check)."""
     from kitlib.gate import land          # land imports this module: a late import
     strong, weak, _ = land.tier_models()
     strong, weak = strong or set(), weak or set()
@@ -346,19 +348,23 @@ def model_mismatch_why(entry, seen):
            if models and not all(same(m) for m in models)]
     if not off:
         return None
-    ran = sorted(set(m for _, models in off for m in models))
     said = '; '.join('the reviewer %s ran on %s' % (rid, ' and '.join(models))
                      for rid, models in off)
-    if len(ran) == 1:
-        use = 'queue it with --reviewer-model %s, the model it ran on' % (
-            land.named_model(ran[0], strong, weak) or ran[0])
-    else:
-        use = 'queue it with --reviewer-model naming the model the review ran on (%s)' % ', '.join(ran)
     tier = ' or '.join(sorted(strong - weak)) or 'a strong-tier model'
-    return ('--reviewer-model %s, but %s (its transcript): an agent dispatched with no model '
-            'override runs on its role\'s default tier; nothing was queued\nInstead: %s; a branch '
-            'land.py --check-strict calls STRICT needs a review on %s: dispatch a fresh analyst '
-            'with model %s (skill branch-review)' % (typed, said, use, tier, tier))
+    head = ('--reviewer-model %s, but %s (its transcript): an agent dispatched with no model '
+            'override runs on its role\'s default tier; nothing was queued\nInstead: '
+            % (typed, said))
+    every = sorted(set(m for models in seen.values() for m in models))
+    if len(every) > 1:
+        # the review ran on more than one model: no one --reviewer-model can name it
+        return head + ('the review ran on more than one model (%s), which no --reviewer-model can '
+                       'name: dispatch a fresh analyst with model %s, the model the verdict needs '
+                       '(%s for a branch land.py --check-strict calls STRICT; skill branch-review)'
+                       % (', '.join(every), typed, tier))
+    use = 'queue it with --reviewer-model %s, the model it ran on' % (
+        land.named_model(every[0], strong, weak) or every[0])
+    return head + ('%s; a branch land.py --check-strict calls STRICT needs a review on %s: '
+                   'dispatch a fresh analyst with model %s (skill branch-review)' % (use, tier, tier))
 
 
 def check(entry, stored=True):
