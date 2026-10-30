@@ -17,6 +17,8 @@ from kitlib.machinesetup.common import Plan
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 NATIVE = '6.8.0-45-generic\n'
 WSL = '5.15.153.1-microsoft-standard-WSL2\n'
+OPENRC = frozenset({'/run/openrc', '/etc/local.d'})
+CRON = frozenset({'/etc/cron.d'})
 
 
 class Box(object):
@@ -27,6 +29,7 @@ class Box(object):
         self.where, self.has_systemd, self.sudo = None, True, None
         self.tools = {'git': '/usr/bin/git', 'tmux': '/usr/bin/tmux'}
         self.tier_name, self.all_users, self.tier_error = 'S2', [], None
+        self.init_name, self.paths, self.cg2, self.accounts = 'init', set(), True, {}
         for k, v in kw.items():
             setattr(self, k, v)
         self.probed = 0
@@ -63,6 +66,18 @@ class Box(object):
 
     def sudo_user(self):
         return self.sudo
+
+    def init(self):
+        return self.init_name
+
+    def exists(self, path):
+        return path in self.paths
+
+    def cgroup2(self):
+        return self.cg2
+
+    def account(self, uid):
+        return self.accounts.get(uid, (uid, '/srv/%s' % self.name(uid)))
 
 
 def survey(box):
@@ -180,10 +195,36 @@ class Survey(unittest.TestCase):
         self.assertIn('never claims strong containment', got[0])
         self.assertEqual(got[1:], ['containment: W1 (fake)'])
 
-    def test_no_systemd_offers_no_root_step(self):
+    def test_no_systemd_and_no_boot_hook_route_offers_no_root_step(self):
         got = notes(survey(Box(has_systemd=False, tier_name='W2')))
         self.assertEqual(got[0], 'containment: W2 (fake)')
-        self.assertIn('no systemd on this box: no root step is offered yet', got[1])
+        self.assertIn('no OpenRC local.d and no /etc/cron.d', got[1])
+        self.assertIn('stays at the lower tier', got[1])
+        self.assertNotIn('--delegation', ' '.join(got))
+        for box, want in ((Box(has_systemd=False, cg2=False), 'no cgroup v2'),
+                          (Box(has_systemd=False, init_name='runit', paths=CRON), 'runit')):
+            with self.subTest(want):
+                got = notes(survey(box))
+                self.assertIn(want, got[1])
+                self.assertNotIn('--delegation', ' '.join(got))
+
+    def test_no_systemd_offers_the_boot_hook_and_names_the_kit_s_tmux_server(self):
+        for paths, route in ((OPENRC, 'OpenRC local.d'), (CRON, 'cron @reboot')):
+            with self.subTest(route):
+                got = notes(survey(Box(has_systemd=False, tier_name='W1', paths=paths)))
+                self.assertEqual(got[0], 'containment: W1 (fake)')
+                self.assertIn('sudo python3 %s --delegation --apply'
+                              % os.path.join(KIT, 'tools', 'machine_setup.py'), got[1])
+                self.assertIn(route, got[1])
+                self.assertIn('may be declined', got[1])
+                self.assertIn('tmux -L pm-kit', got[1])
+                self.assertNotIn('sign out', got[1])
+
+    def test_a_boot_hook_already_set_up_says_where_to_start_work(self):
+        got = notes(survey(Box(has_systemd=False, tier_name='W1',
+                               paths=OPENRC | {'/etc/pm-kit/cgroup-boot'})))
+        self.assertIn('the boot hook is set up', got[1])
+        self.assertIn('tmux -L pm-kit', got[1])
         self.assertNotIn('--delegation', ' '.join(got))
 
     def test_missing_git_and_tmux_are_named(self):

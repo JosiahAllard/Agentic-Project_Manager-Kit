@@ -13,7 +13,10 @@ docs/machine-setup.md "Linux"), and the front door tools/kit.py asks.
                         user per box); with no MARKER, another user's kit state a warning; a
                         container a warning, never a refusal; no git or tmux a named note; and the
                         containment tier probed (kitlib.platform.linux.contain.probe), with the
-                        delegation step offered below S1 (kitlib.machinesetup.delegation).
+                        delegation step offered below S1 (kitlib.machinesetup.delegation): the
+                        systemd drop-in, or off systemd the boot hook (OpenRC local.d, else cron
+                        @reboot) whose group holds the kit's tmux server (`tmux -L pm-kit`), or why
+                        neither can be set up here (delegation.boot_route).
 
 The MARKER is written only by the delegation step, as root. Without it the second-user check is a
 warning: it reads only what this user can see (another user's home that cannot be read is
@@ -23,6 +26,7 @@ import os
 import shutil
 
 OSRELEASE = '/proc/sys/kernel/osrelease'
+INIT_COMM = '/proc/1/comm'
 CONTAINER_FILES = ('/.dockerenv', '/run/.containerenv')
 MARKER = '/etc/pm-kit/kit-user'
 USER_POINTER = ('.config', 'pm-kit', 'pointer')     # kitlib.platform.linux.paths.USER_POINTER
@@ -119,6 +123,31 @@ class Box(object):
         """Whether systemd is the init system (sd_booted's test)."""
         return os.path.isdir('/run/systemd/system')
 
+    def init(self):
+        """The name of PID 1 (/proc/1/comm: systemd, init, runit, s6-svscan...), or None."""
+        try:
+            with open(INIT_COMM) as f:
+                return f.read().strip() or None
+        except OSError:
+            return None
+
+    def exists(self, path):
+        return os.path.lexists(path)
+
+    def cgroup2(self):
+        """Whether /sys/fs/cgroup is a cgroup v2 mount."""
+        from kitlib.platform.linux import contain
+        return contain.cgroup2()
+
+    def account(self, uid):
+        """(gid, home) of uid in the password database, or None."""
+        try:
+            import pwd
+            p = pwd.getpwuid(uid)
+        except (ImportError, KeyError):
+            return None
+        return p.pw_gid, p.pw_dir
+
     def tier(self):
         """The containment tier this user gets (contain.probe, run afresh)."""
         from kitlib.platform.linux import contain
@@ -211,8 +240,19 @@ def tier_note(plan, ctx, box):
     if box.container():
         return
     if not box.systemd():
-        plan.note(SECTION, 'no systemd on this box: no root step is offered yet, so heavy runs go ahead '
-                           'at this tier, shown as such')
+        from . import delegation
+        route, why = delegation.boot_route(box)
+        if route is None:
+            plan.note(SECTION, 'no root step is offered: %s' % why)
+        elif box.exists(delegation.SCRIPT):
+            plan.note(SECTION, 'the boot hook is set up (%s): containment is strong only for work '
+                               'started from the kit\'s tmux server, so start work there: %s'
+                      % (delegation.SCRIPT, delegation.ATTACH))
+        else:
+            plan.note(SECTION, 'the root step that gives strong containment here, a boot hook (%s), is '
+                               'offered and may be declined: %s, then start work from the kit\'s tmux '
+                               'server (%s)' % (delegation.ROUTES[route], delegation_command(ctx.kit),
+                                                delegation.ATTACH))
         return
     plan.note(SECTION, 'the root step that gives strong containment (S1) is offered and may be declined: '
                        '%s, then sign out and in again' % delegation_command(ctx.kit))

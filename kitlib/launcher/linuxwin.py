@@ -13,7 +13,12 @@ server (or the terminal) plus these exports. Every value is single-quoted, a ' w
 `open_window` runs it as `/bin/bash -c <script>`: in a new detached tmux session by default,
 `tmux new-session -d -s <tmux name> /bin/bash -c <script>` (the arguments passed as a list, so
 tmux 3.0 or later runs them without a shell), or, when launcher.terminal is set, as that command
-with `/bin/bash -c <script>` appended. The tmux name is the session name with anything but
+with `/bin/bash -c <script>` appended. On a box with no systemd whose boot hook started the kit's
+tmux server (`tmux -L pm-kit`) in its cgroup (anchored: that server's pid is under
+contain.BASE), the session opens in that server instead, so the session is contained: `tmux -L
+pm-kit new-session -d -e K=V ... -s <tmux name> ...`, the caller's PASS_ENV variables passed with
+-e (tmux 3.2 or later), since that server was started with HOME and PATH alone; attach with `tmux
+-L pm-kit attach -t <tmux name>`. The tmux name is the session name with anything but
 A-Za-z0-9_- made _; a name tmux already has is refused (LaunchError) and nothing is started or
 ended. The launcher never ends a tmux session or a terminal: stop (kitlib.launcher.stop) ends
 the claude process and this shell, each by pid and creation time, and tmux closes the pane when
@@ -24,6 +29,7 @@ its shell has gone.
 claude command has `--remote-control '<name>' ` or ` -n '<name>' `, the name quoted exactly, so
 `pm` never matches `pm-session`.
 """
+import os
 import re
 import subprocess
 
@@ -35,6 +41,10 @@ from kitlib.proc import spawn
 SHELL = '/bin/bash'
 SHELL_NAME = 'bash'         # the shell's process name (its comm)
 TMUX = 'tmux'
+ANCHOR = 'pm-kit'           # the kit's tmux server (tmux -L pm-kit), which the boot hook starts
+# the caller's variables a window in the kit's server gets (that server has HOME and PATH alone)
+PASS_ENV = ('PATH', 'LANG', 'LANGUAGE', 'LC_ALL', 'LC_CTYPE', 'USER', 'LOGNAME', 'SHELL',
+            'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'TZ')
 ROLE_ENV = sessionmark.ENV
 NAME_ENV = 'PM_KIT_SESSION_NAME'
 # the Windows window's variables (window.ENV_STEMS, PERSIST_ENV, CONFIG_ENV), in bash
@@ -100,15 +110,64 @@ def argv(text):
     return [SHELL, '-c', text]
 
 
-def tmux_argv(name, text):
-    return [TMUX, 'new-session', '-d', '-s', tmux_name(name)] + argv(text)
+def anchor_socket():
+    """The path of the kit's tmux server's socket (`tmux -L pm-kit`), None off POSIX."""
+    if not hasattr(os, 'getuid'):
+        return None
+    return os.path.join(os.environ.get('TMUX_TMPDIR') or '/tmp', 'tmux-%d' % os.getuid(), ANCHOR)
 
 
-def opened_in(name, terminal=None):
-    """Where the window opened, for the launcher's "Started ..." line."""
+def anchored(run=None):
+    """True when the kit's tmux server runs and runs in the boot hook's cgroup (its pid's cgroup
+    is under contain.BASE), so a window opened there is contained; False otherwise (no hook, a
+    systemd box, the server not started, or one started from elsewhere)."""
+    sock = anchor_socket()
+    if not sock or not os.path.exists(sock):
+        return False
+    run = run or spawn.run
+    try:
+        r = run([TMUX, '-L', ANCHOR, 'display-message', '-p', '#{pid}'], capture_output=True,
+                text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if r.returncode != 0:
+        return False
+    try:
+        pid = int((r.stdout or '').strip())
+    except ValueError:
+        return False
+    from kitlib.platform.linux import contain
+    try:
+        cg = contain.cgroup_of(pid)
+    except OSError:
+        return False
+    return bool(cg) and cg.startswith(contain.BASE + '/')
+
+
+def tmux_argv(name, text, in_kit=False, env=None):
+    """The tmux command that opens the window: in the kit's server when `in_kit`, with the
+    caller's PASS_ENV variables (`-e`, tmux 3.2 or later; that server was started at boot with
+    HOME and PATH alone), else in the default server."""
+    if not in_kit:
+        return [TMUX, 'new-session', '-d', '-s', tmux_name(name)] + argv(text)
+    env = os.environ if env is None else env
+    out = [TMUX, '-L', ANCHOR, 'new-session', '-d']
+    for k in PASS_ENV:
+        if env.get(k):
+            out += ['-e', '%s=%s' % (k, env[k])]
+    return out + ['-s', tmux_name(name)] + argv(text)
+
+
+def opened_in(name, terminal=None, in_kit=None):
+    """Where the window opened, for the launcher's "Started ..." line. in_kit None: asked of the
+    kit's tmux server now."""
     if terminal:
         return 'a new terminal window (%s)' % terminal[0]
     t = tmux_name(name)
+    if in_kit is None:
+        in_kit = anchored()
+    if in_kit:
+        return "tmux session '%s' on the kit's server (tmux -L %s attach -t '%s')" % (t, ANCHOR, t)
     return "tmux session '%s' (tmux attach -t '%s')" % (t, t)
 
 
@@ -129,7 +188,7 @@ def open_window(text, name, terminal=None, run=None, popen=None):
         raise ValueError('a tmux window needs the session name')
     run = run or spawn.run
     try:
-        r = run(tmux_argv(name, text), capture_output=True, text=True, timeout=60)
+        r = run(tmux_argv(name, text, anchored(run)), capture_output=True, text=True, timeout=60)
     except OSError as e:
         raise RuntimeError('opening the window failed: tmux could not start (%s); install tmux or '
                            'set launcher.terminal' % e)

@@ -27,6 +27,16 @@ jobs nested in it, as on Windows. A top-level J is the scope `<prefix>-job-<pid>
 (prefix: KIT_SCOPE_PREFIX, default pmkit); a nested J is a directory the owner makes in its own
 job's cgroup (the scope is delegated, so the owner may), removed by close once it is empty.
 
+No systemd (delegated_group): the boot hook (kitlib.machinesetup.delegation) makes BASE, /pm-kit,
+gives it to the kit user and starts the kit's tmux server (`tmux -L pm-kit`) in its leaf
+/pm-kit/anchor. A process under BASE (in that server, or in a job made there) makes each
+top-level J as a folder BASE/<prefix>-job-<pid>-<n>-<hex>.scope, the way a nested job is made: the
+stub's move is allowed because BASE, their common ancestor, is the user's. The probe tries BASE
+(a trial job there) before a systemd scope; close removes J once it is empty, leftovers() moves to
+a BASE/<prefix>-leftovers-... folder, and each probe first sweeps BASE of the folders whose maker
+has gone and which hold nothing (no systemd collects them). A process outside BASE is told to
+start from the kit's tmux server, and gets the lower tier.
+
 Short jobs (Job(short=True): a git call, where a scope of its own, about 85 ms, would cost more
 than the command): outside any kit job, each is a nested job in this process's carrier, one
 top-level job scope made at the first short job whose command, the holder (`sh -c 'read _'`),
@@ -103,6 +113,7 @@ import secrets
 import select
 import shutil
 import signal
+import stat as statmod
 import subprocess
 import sys
 import threading
@@ -131,7 +142,13 @@ KILL_PASSES = 8
 CONTROLLERS = ('cpuset', 'cpu', 'memory', 'pids')
 LEAF, WATCH_LEAF = 'main', 'w'
 TOP = re.compile(r'[A-Za-z0-9_.-]+-job-\d+-\d+-[0-9a-f]+\.scope\Z')
+TOP_PID = re.compile(r'[A-Za-z0-9_.-]+-job-(\d+)-\d+-[0-9a-f]+\.scope\Z')   # TOP, its maker's pid
+LEFT = re.compile(r'[A-Za-z0-9_.-]+-leftovers-(\d+)-\d+-[0-9a-f]+\Z')
 NESTED = re.compile(r'j-\d+-\d+-[0-9a-f]+\Z')
+BASE = '/pm-kit'                  # the boot hook's cgroup (kitlib.machinesetup.delegation)
+SYSTEMD_DIR = '/run/systemd/system'
+HOOKS = ('/etc/local.d/pm-kit-cgroup.start', '/etc/cron.d/pm-kit')
+GROUP_CONTROLLERS = ('cpuset', 'memory', 'pids')
 _PREFIX_OK = re.compile(r'[A-Za-z0-9_.-]{1,40}\Z')
 _count = itertools.count(1)
 
@@ -530,6 +547,66 @@ def parent_job(own=None):
     return parent
 
 
+def delegated_group(own=None):
+    """(BASE, None) when this process may make its jobs in the boot hook's cgroup: it is this
+    user's folder, holding the controllers, and this process runs under it (in the anchor, where
+    the kit's tmux server runs, or in a job there), so a move needs only this user's write on
+    BASE/cgroup.procs. Else (None, why not), or (None, None) when there is no such route to name
+    (no cgroup v2, or no group on a systemd box). `own`: this process's cgroup (a test's)."""
+    if not cgroup2():
+        return None, None
+    d = cg_dir(BASE)
+    try:
+        st = os.lstat(d)
+    except FileNotFoundError:
+        if os.path.isdir(SYSTEMD_DIR):
+            return None, None
+        return None, ('the boot hook did not run (no %s; it is %s or %s, which '
+                      '`machine_setup.py --delegation` sets up)' % (d, HOOKS[0], HOOKS[1]))
+    except OSError as e:
+        return None, 'the kit\'s cgroup %s cannot be read (%s)' % (BASE, e)
+    if not statmod.S_ISDIR(st.st_mode):
+        return None, 'the kit\'s cgroup %s is a link or a file, not a folder' % d
+    me = os.getuid()
+    if st.st_uid != me:
+        return None, ('the kit\'s cgroup %s is owned by uid %d, not this user (uid %d)'
+                      % (BASE, st.st_uid, me))
+    try:
+        cg = cgroup_of('self') if own is None else own
+    except OSError as e:
+        return None, 'this process\'s cgroup cannot be read (%s)' % e
+    if not cg or not cg.startswith(BASE + '/'):
+        return None, ('this process runs outside %s (in %s): start work from the kit\'s tmux '
+                      'server (tmux -L pm-kit)' % (BASE, cg))
+    if not os.access(d + '/cgroup.procs', os.W_OK):
+        return None, 'the kit\'s cgroup %s: its cgroup.procs is not writable by this user' % BASE
+    try:
+        ctl = set(_read(d + '/cgroup.subtree_control').split())
+    except OSError as e:
+        return None, 'the kit\'s cgroup %s: its controllers cannot be read (%s)' % (BASE, e)
+    lack = [c for c in GROUP_CONTROLLERS if c not in ctl]
+    if lack:
+        return None, 'the kit\'s cgroup %s lacks the controllers %s' % (BASE, ', '.join(lack))
+    return BASE, None
+
+
+def sweep(base):
+    """Removes the job and leftovers folders in `base` whose maker (the pid in the name) has gone
+    and which hold no process: systemd collects its scopes, and in the boot hook's group this
+    does. A folder still in use, or not named as a kit job's, is never touched."""
+    try:
+        names = os.listdir(cg_dir(base))
+    except OSError:
+        return
+    for n in names:
+        m = TOP_PID.match(n) or LEFT.match(n)
+        if m is None or os.path.exists('%s/%s' % (PROC, m.group(1))):
+            continue
+        cg = base + '/' + n
+        if not populated(cg):
+            rmtree_cgroup(cg)
+
+
 def cgroup2():
     """True when /sys/fs/cgroup is a cgroup2 mount (mountinfo, not a guess)."""
     try:
@@ -771,11 +848,12 @@ def _nspid(pid):
 class Tier:
     """What probe() found: `name` S1, S2, W1 or W2, `lacks` what it does not give, `why` the
     reason there is no scope (W1, W2), `w1` why W1 is not used (W2), `parent` the job cgroup a
-    nested owner runs in. `text` is the line a status shows."""
+    nested owner runs in, `base` the boot hook's cgroup its top-level jobs are made in (no
+    systemd). `text` is the line a status shows."""
 
-    def __init__(self, name, lacks=(), why=None, w1=None, parent=None):
+    def __init__(self, name, lacks=(), why=None, w1=None, parent=None, base=None):
         self.name, self.lacks, self.why, self.w1 = name, tuple(lacks), why, w1
-        self.parent = parent
+        self.parent, self.base = parent, base
 
     @property
     def scoped(self):
@@ -784,6 +862,8 @@ class Tier:
     @property
     def text(self):
         parts = [self.name]
+        if self.base:
+            parts.append('jobs in the kit\'s cgroup %s' % self.base)
         if self.why:
             parts.append('no cgroup scope: %s' % self.why)
         if self.lacks:
@@ -833,10 +913,18 @@ def _probe():
             return tier
         # a scope of its own would take its jobs out of the job it runs in
         return _unscoped('it runs in kit job %s, which cannot hold a job' % parent)
+    # no systemd: the boot hook's group, when this process runs under it (its tmux server)
+    base, gwhy = delegated_group()
+    if base is not None:
+        sweep(base)
+        name, lacks, why = trial(base)
+        if name:
+            return Tier(name, lacks, base=base)
+        gwhy = why
     name, lacks, why = trial()
     if name:
         return Tier(name, lacks)
-    return _unscoped(why)
+    return _unscoped(gwhy or why)
 
 
 def _unscoped(why):
@@ -863,28 +951,33 @@ def nested_tier(parent):
     return Tier('S2', [S2_LACK] + lacks, parent=parent)
 
 
-def trial():
+def trial(base=None):
     """(tier name or None, lacks, why not) from a trial job: ScopeJob's own start on `sleep`,
     pinned to one cpu, read back and killed. The exit codes of systemd-run and of the trial are
-    never what decides."""
+    never what decides. `base`: the boot hook's cgroup (delegated_group), where the job is a
+    folder this process makes, with no systemd-run."""
     if not cgroup2():
         return None, (), 'no cgroup v2 mount at %s' % CGROOT
-    if _tool(SYSTEMD_RUN) is None:
-        return None, (), 'no systemd-run'
-    if bus_env(os.environ) is None:
-        return None, (), ('no user systemd bus (no XDG_RUNTIME_DIR, no /run/user/%d/bus)'
-                          % os.getuid())
+    if base is None:
+        if _tool(SYSTEMD_RUN) is None:
+            return None, (), 'no systemd-run'
+        if bus_env(os.environ) is None:
+            return None, (), ('no user systemd bus (no XDG_RUNTIME_DIR, no /run/user/%d/bus)'
+                              % os.getuid())
     try:
         want = max(os.sched_getaffinity(0))
     except (OSError, ValueError):
         return None, (), 'this process\'s affinity cannot be read'
-    job = ScopeJob(1 << want, True, tier=Tier('S1'))
+    job = ScopeJob(1 << want, True, tier=Tier('S1', base=base))
+    what = 'scope' if base is None else 'job'
     p = None
     try:
         try:
             p = job.start(['sleep', '30'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                           stderr=subprocess.DEVNULL)
         except OSError as e:
+            if base is not None:
+                return None, (), 'a trial job in %s could not be made (%s)' % (base, e)
             lack = ('' if no_expand(_tool(SYSTEMD_RUN)) else
                     '; its systemd-run --help names no --expand-environment')
             return None, (), 'a trial scope could not be made (%s)%s' % (e, lack)
@@ -905,18 +998,19 @@ def trial():
         except subprocess.TimeoutExpired:
             pass
         died = p.returncode == -signal.SIGKILL
-        gone = _wait_gone(d, GONE_SECONDS)
+        # systemd removes its scope; the group's job folder is emptied, and close removes it
+        gone = _wait_gone(d, GONE_SECONDS) if base is None else wait_empty(job.cg, GONE_SECONDS)
         if not (wrote and died and gone):
-            return None, (), ('the trial scope was not ended by its cgroup.kill (written %s, '
-                              'the command %s, the scope %s)'
-                              % (wrote, 'killed' if died else 'exit %r' % p.returncode,
-                                 'gone' if gone else 'still there'))
+            return None, (), ('the trial %s was not ended by its cgroup.kill (written %s, '
+                              'the command %s, the %s %s)'
+                              % (what, wrote, 'killed' if died else 'exit %r' % p.returncode,
+                                 what, 'gone' if gone else 'still there'))
     finally:
         job.close()
         if p is not None and p.poll() is None:
             p.kill()
             p.wait()
-        if job.cg is not None and os.path.isdir(cg_dir(job.cg)):
+        if base is None and job.cg is not None and os.path.isdir(cg_dir(job.cg)):
             _call([_tool(SYSTEMCTL) or SYSTEMCTL, '--user', 'stop', job.unit + '.scope'])
     lacks = [] if peak is not None else [PEAK_LACK]
     if not pinned:
@@ -1369,10 +1463,13 @@ def _popen(argv, kw, env, fds):
 class ScopeJob(Job):
     """S1 and S2: the job is a cgroup, J (the module docstring has its layout)."""
 
+    base = None                                  # set from the tier in __init__
+
     def __init__(self, mask=None, kill_on_close=True, tier=None, short=False):
         Job.__init__(self, mask, kill_on_close, tier, short)
         self.cg = self.unit = self.name = None
         self.parent = self.tier.parent
+        self.base = self.tier.base               # top-level: a folder in the boot hook's group
         self.carried = None                      # the carrier this job is in
         self.cpuset = self.tier.name == 'S1'     # the pin is the cgroup's, not affinity
 
@@ -1380,7 +1477,8 @@ class ScopeJob(Job):
         """A short job outside any kit job goes in this process's carrier; when the carrier
         cannot take it (none can be made, the move is refused or not seen), the stub is ended
         before go and the job gets a scope of its own, so the command runs once."""
-        via = carrier(self.tier) if self.short and self.parent is None else None
+        via = (carrier(self.tier) if self.short and self.parent is None and self.base is None
+               else None)
         if via is None:
             return self._begin_in(cmd, env, kw, None)
         self.parent, self.carried = via.cg, via
@@ -1432,7 +1530,15 @@ class ScopeJob(Job):
         made, p = None, None
         try:
             unset = []
-            if self.parent is None:
+            if self.parent is None and self.base is not None:
+                # the boot hook's group: a folder this process makes, as a nested job's, named
+                # as a top-level job's (no systemd to name or collect it; sweep removes it)
+                self.unit = '%s-job-%s' % (prefix(), _tag())
+                self.name = self.unit + '.scope'
+                made = self.base + '/' + self.name
+                self._make_nested(made)
+                argv, join, penv = [], made, env
+            elif self.parent is None:
                 self.unit = '%s-job-%s' % (prefix(), _tag())
                 self.name = self.unit + '.scope'
                 run = _tool(SYSTEMD_RUN)
@@ -1552,7 +1658,7 @@ class ScopeJob(Job):
             return self._pin_affinity(self.pids(), mask)
         text = _jobmod().cpu.mask_text(mask) if mask is not None else ''
         d = cg_dir(self.cg)
-        if self.parent is None:
+        if self.parent is None and self.base is None:
             _call([_tool(SYSTEMCTL) or SYSTEMCTL, '--user', 'set-property', '--runtime',
                    self.name, 'AllowedCPUs=' + text])
         else:
@@ -1633,8 +1739,9 @@ class ScopeJob(Job):
         is refused. Raises JobError, writing nothing, when J is not a cgroup this job made."""
         if self.cg is None:
             return False
-        if not owned(self.cg, self.name) or (self.parent is not None and
-                                             self.cg != self.parent + '/' + self.name):
+        top = self.parent if self.parent is not None else self.base
+        if not owned(self.cg, self.name) or (top is not None and
+                                             self.cg != top + '/' + self.name):
             raise _error('refused to kill %r: not the cgroup this job made' % self.cg)
         try:
             _write(cg_dir(self.cg) + '/cgroup.kill', '1')
@@ -1659,7 +1766,7 @@ class ScopeJob(Job):
                 if p != self.wd and self.contains(p) == 'in']
         if not pids:
             return []
-        if self.parent is None:
+        if self.parent is None and self.base is None:
             unit = '%s-leftovers-%s.scope' % (prefix(), _tag())
             _call([_tool(BUSCTL) or BUSCTL, '--user', 'call', 'org.freedesktop.systemd1',
                    '/org/freedesktop/systemd1', 'org.freedesktop.systemd1.Manager',
@@ -1668,7 +1775,10 @@ class ScopeJob(Job):
                                                                'inactive-or-failed', '0'])
             dest = None
         else:
-            dest = self.parent + '/j-' + _tag()
+            # nested: a sibling job folder; in the boot hook's group: a leftovers folder there,
+            # which sweep removes once it is empty and this process has gone
+            dest = (self.parent + '/j-' + _tag() if self.parent is not None
+                    else self.base + '/%s-leftovers-%s' % (prefix(), _tag()))
             try:
                 os.mkdir(cg_dir(dest))
                 for p in pids:
@@ -1705,7 +1815,7 @@ class ScopeJob(Job):
         self._k = None
         _close(self._g)
         self._g = None
-        if self.parent is not None and self.cg is not None:
+        if (self.parent is not None or self.base is not None) and self.cg is not None:
             if wait_empty(self.cg, GONE_SECONDS if killed else TIDY_SECONDS):
                 rmtree_cgroup(self.cg)
 
