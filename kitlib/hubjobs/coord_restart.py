@@ -6,6 +6,9 @@ resets first among those under the limit, else its last account (docs/launcher.m
                                      the whole restart decision, pure: no file, process or clock
                                      is read
   backlog_wake(offered, baseline)    a Wake when the offer holds a record id the baseline does not
+  owner_wake(key, items, since)      a Wake when an owner answer or a decided approval for the key is
+                                     newer than `since` (owner_since: the stopped session's start,
+                                     else its stop); owner_items reads them from Sources.pending
   offered_ids(settings, key, entry)  the record ids `backlog.py next --all` offers the entry's
                                      coordinator (BacklogUnread when the store cannot be read)
   last_account(entry, record)        the account a coordinator last ran on, or None
@@ -44,7 +47,9 @@ is not woken for them again. The offer is read only for an entry held on a delib
 autostart and pace_hold (DOWN_RUNS, the cap, the backoff) pass, through kitlib.backlog
 (opener.open_store with no fetch, plan.offer_for), from the store the repo's .kit.json names, else
 the PM data worktree's (store.pm_data_live_store). A store that cannot be read wakes nothing and is
-a note, not a failure. A wake start passes `--prompt` with the reason, the new ids and the
+a note, not a failure. An owner wake (an answered or filed question it
+asked, class ones included, or a decided approval of its repo, newer than the stopped session's
+start) is read first, on the same terms, and needs no baseline. A wake start passes `--prompt` with the reason, the new ids and the
 entry's state note path.
 
 The account: accounts.restart_pick, the signed-in account with a reading no older than
@@ -63,8 +68,8 @@ BOOT_S or more, the boot is only kept: that hub start is not a boot's. A bad sta
 no boot kept and nothing is written. after-reboot logs to after-reboot.log itself.
 
 State kept across hub restarts, in <launcher.state_dir>/coord-restart.json:
-{key: {seen_at, account, starts, held}}: the last time a session of the stem was seen running, the
-account it ran on, the epoch seconds of the job's own starts, and the wake baseline of the
+{key: {seen_at, started_at, account, starts, held}}: the last time a session of the stem was seen
+running, when it started (its process's creation time), the account it ran on, the epoch seconds of the job's own starts, and the wake baseline of the
 deliberate stop it is held on (dropped once it is seen running); and BOOT_KEY: {boot_at}, the
 boot (epoch seconds) after-reboot last ran for. The down count and what was pushed are in memory
 only, so a hub restart waits DOWN_RUNS runs again.
@@ -112,11 +117,17 @@ _FIRST = ('restarted', 'restarted-unchecked', 'gave-up', 'over-limit', 'not-sign
 WAKE_IDS_SHOWN = 5             # record ids a wake's reason names before "+N more"
 
 AccountState = collections.namedtuple('AccountState', 'signed_in usage')
-Wake = collections.namedtuple('Wake', 'reason ids')     # why a deliberate stop is started again
+# why a deliberate stop is started again; `then`: what the start's prompt says to do first
+Wake = collections.namedtuple('Wake', 'reason ids then', defaults=('run backlog next',))
+OWNER_KINDS = ('question', 'approval')    # the pending items that are an answer or a decision
 
 
 class BacklogUnread(Exception):
     """The entry's backlog store could not be read: no wake, and a note."""
+
+
+class OwnerUnread(Exception):
+    """The hub's pending items could not be read: no owner wake, and a note."""
 
 
 class Decision(object):
@@ -187,8 +198,40 @@ def backlog_wake(offered, baseline):
     return Wake('its repo has new startable records: %s' % shown_ids(new), new)
 
 
-# owner_wake: an owner answer or approval for the repo as a reason (an open hub question) is not
-# built. It would be one more predicate returning a Wake or None, passed to wake_of.
+def item_epoch(item):
+    """The epoch seconds of a pending item's `at` (an ISO stamp), or None when absent or bad; a
+    stamp with no zone is local time."""
+    try:
+        return datetime.datetime.fromisoformat(item.get('at') or '').timestamp()
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def owner_since(record, last_stop):
+    """The time an owner answer or decision must be newer than to wake the entry: the start of
+    the session that stopped (`started_at` in its record, from the process's creation time), else
+    the deliberate stop's time less the stop log's whole-second stamp. So an answer that came in
+    while it wound down counts, and one it was already running to see does not wake it again."""
+    started = (record or {}).get('started_at')
+    if isinstance(started, (int, float)) and not isinstance(started, bool):
+        return started
+    return last_stop - STAMP_S
+
+
+def owner_wake(key, items, since):
+    """A Wake when `items` (the pending items for `key`: question and approval ones) holds an
+    answer or a decision whose `at` is newer than `since`, else None."""
+    fresh = [i for i in items if (item_epoch(i) or -math.inf) > since]
+    asked = sorted(str(i.get('id')) for i in fresh if i.get('kind') == 'question')
+    decided = sorted(str(i.get('id')) for i in fresh if i.get('kind') == 'approval')
+    parts = []
+    if asked:
+        parts.append('an owner answer is pending for it: %s' % shown_ids(asked))
+    if decided:
+        parts.append('an approval it asked for is decided: %s' % shown_ids(decided))
+    if not parts:
+        return None
+    return Wake('; '.join(parts), asked + decided, 'run hub pending --for %s' % key)
 
 
 def wake_of(*wakes):
@@ -200,7 +243,7 @@ def wake_prompt(wake, state=None):
     """The first message of a wake start: why, and what to do first. `state`: the entry's state
     note path when sessions.json names one (as launcher.start's default prompt names it)."""
     note = 'your state note' if not state else 'your state note (%s)' % state
-    return 'Started by the hub: %s. Read %s, then run backlog next.' % (wake.reason, note)
+    return 'Started by the hub: %s. Read %s, then %s.' % (wake.reason, note, wake.then)
 
 
 def pace_hold(record, down_runs, now):
@@ -408,6 +451,28 @@ def offered_ids(settings, key, entry):
     return ids
 
 
+def owner_items(pending, key):
+    """The pending items of hub session key `key` that are an owner answer or a decided approval
+    (`pending`: Sources.pending, kitlib.hubsite.api Api.pending: read only, nothing marked handed
+    or seen). OwnerUnread when the hub gives no such read or its store cannot be read."""
+    from kitlib.hubsite.store import HubError
+    if pending is None:
+        raise OwnerUnread('the hub gives the job no pending read')
+    try:
+        items = pending(key)
+    except HubError as e:
+        raise OwnerUnread('the hub store could not be read (%s)' % e.code)
+    return [i for i in items if i.get('kind') in OWNER_KINDS and i.get('from') == key]
+
+
+def row_created(row):
+    """A process row's Created (ISO, kitlib.pmstart.list_processes) as epoch seconds, or None."""
+    try:
+        return datetime.datetime.fromisoformat(row.get('Created') or '').timestamp()
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
 def run_child(argv, cwd):
     """(exit code, output lines) of one windowless child, waited for up to START_TIMEOUT_S
     (subprocess.TimeoutExpired past it)."""
@@ -428,7 +493,9 @@ def make(sources):
         s.state_dir()
     except LaunchError:
         return None                     # no launcher state on this machine: nothing to restart
-    return jobs.Job(NAME, EVERY_S, RestartJob(s), first_s=FIRST_S)
+    # sources.pending is read at each run: the hub sets it once its Api is built
+    job = RestartJob(s, pending=lambda key, entry: owner_items(getattr(sources, 'pending', None), key))
+    return jobs.Job(NAME, EVERY_S, job, first_s=FIRST_S)
 
 
 class RestartJob(object):
@@ -437,11 +504,14 @@ class RestartJob(object):
     run_child), `clock` epoch seconds, `kit` the kit checkout whose tools/launch.py runs,
     `uptime()` seconds since boot (default uptime_s), `detached(argv, cwd)` the after-reboot
     start (default spawn_detached), `backlog(key, entry)` the ids the coordinator is offered
-    (default offered_ids; BacklogUnread when unread)."""
+    (default offered_ids; BacklogUnread when unread), `pending(key, entry)` the entry's pending
+    owner answers and decided approvals (default none; make gives the hub's; OwnerUnread when
+    unread)."""
 
     def __init__(self, settings, procs=None, child=None, clock=None, kit=None, uptime=None, detached=None,
-                 backlog=None):
+                 backlog=None, pending=None):
         self.settings = settings
+        self.pending = pending or (lambda key, entry: [])
         self.backlog = backlog or (lambda key, entry: offered_ids(settings, key, entry))
         self.procs = procs or pmstart.list_processes
         self.child = child or run_child
@@ -474,9 +544,15 @@ class RestartJob(object):
             raise
         booted = self._after_reboot(records, now)     # first: a bad sessions.json must not stop it
         sessions = state.read_sessions(self.settings)
-        live = {lookup.rc_name(p.get('CommandLine')) for p in lookup.launched(self.procs())}
+        rows = lookup.launched(self.procs())
+        live = {lookup.rc_name(p.get('CommandLine')) for p in rows}
         live.discard(None)
-        changed = self._note_sightings(sessions, live, records, now)
+        created = {}
+        for p in rows:
+            n, t = lookup.rc_name(p.get('CommandLine')), row_created(p)
+            if t is not None:
+                created[n] = t if n not in created else min(created[n], t)
+        changed = self._note_sightings(sessions, live, records, now, created)
         down = {k: e for k, e in pmstart.down_entries(sessions, live)
                 if not k.startswith('_') and e.get('agent') and e.get('stem')}
         for key in list(self._down):
@@ -520,6 +596,7 @@ class RestartJob(object):
             key, d, entry = started
             rec = records.setdefault(key, {})
             rec['starts'] = recent_starts(rec, now) + [now]
+            rec['started_at'] = now     # the new session starts now; a sighting replaces it with its Created
             self._write_records(records)    # before the start: a crash mid-start still counts
             changed = False
             self._start(key, d, entry)
@@ -572,17 +649,29 @@ class RestartJob(object):
         `last_stop` whose autostart and pace_hold pass (a held entry reads nothing). The first
         such run after that stop keeps the offer as its baseline and wakes nothing; a later run
         wakes on an id outside it (backlog_wake). A store that cannot be read is a note, never a
-        failure, and leaves the baseline as it was."""
+        failure, and leaves the baseline as it was. An owner answer or decided approval comes
+        first: the cheaper read, and it needs no baseline (owner_wake)."""
+        unread = []
+        try:
+            items = self.pending(key, entry)
+        except OwnerUnread as e:
+            items = []
+            unread.append('%s: owner answers not read, so not woken for them: %s' % (key, e))
+        owner = owner_wake(key, items, owner_since(records.get(key), last_stop))
+        if owner is not None:
+            return owner, None, False
         try:
             offered = self.backlog(key, entry)
         except BacklogUnread as e:
-            return None, '%s: backlog not read, so not woken: %s' % (key, e), False
+            unread.append('%s: backlog not read, so not woken: %s' % (key, e))
+            return None, '; '.join(unread), False
         rec = records.setdefault(key, {})
         held = rec.get('held')
+        note = '; '.join(unread) or None
         if not isinstance(held, dict) or held.get('stop_at') != last_stop:
             rec['held'] = {'stop_at': last_stop, 'ids': sorted(offered)}
-            return None, None, True
-        return wake_of(backlog_wake(offered, held.get('ids'))), None, False
+            return None, note, True
+        return wake_of(backlog_wake(offered, held.get('ids'))), note, False
 
     def _start(self, key, d, entry):
         prompt = wake_prompt(d.wake, entry.get('state')) if d.wake else None
@@ -615,9 +704,10 @@ class RestartJob(object):
             self._told[key] = word
         ctx.event(word, detail)
 
-    def _note_sightings(self, sessions, live, records, now):
-        """Record seen_at and the account for every coordinator entry with a live session of its
-        stem; True when anything changed."""
+    def _note_sightings(self, sessions, live, records, now, created=None):
+        """Record seen_at, the account and started_at (the earliest creation time of the stem's
+        live processes, `created` {name: epoch}, and the stored value: the minimum, reset only by a start) for every
+        coordinator entry with a live session of its stem; True when anything changed."""
         changed = False
         for key, entry in state.entries(sessions):
             stem = entry.get('stem')
@@ -628,6 +718,12 @@ class RestartJob(object):
                 continue
             rec = records.setdefault(key, {})
             rec['seen_at'] = now
+            starts = [t for t in ((created or {}).get(n) for n in mine) if t is not None]
+            old = rec.get('started_at')
+            if isinstance(old, (int, float)) and not isinstance(old, bool):
+                starts.append(old)      # an earlier session of the stem exiting must not move it forward
+            if starts:
+                rec['started_at'] = min(starts)
             rec.pop('held', None)       # running again: the stop it was held on is over
             acct = name_account(mine[-1])
             if acct is not None:

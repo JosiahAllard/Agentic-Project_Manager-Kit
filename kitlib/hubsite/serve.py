@@ -397,6 +397,10 @@ class Sources(object):
                    none; [] or None: none
       home         the home folder machine_sources read the machine config under (None: the
                    user's), for a job that reads it again
+      pending      callable(for_key) -> the pending items for a session key (Api.pending: each
+                   with kind, id, from, at). Set by build() once the Api exists, before the
+                   jobs are made; None before. Read only: unlike GET pending it sets no handed/seen
+                   marks (the routing's own clean-up of marks for items gone is not one).
     """
 
     def __init__(self, tokens=None, static_dir=STATIC_DIR, pm_data=None, notices=None, repos=None,
@@ -405,6 +409,7 @@ class Sources(object):
                  findings=None, skills=None, jobs=None, home=None):
         self.jobs = list(jobs or [])
         self.home = home
+        self.pending = None
         self.findings = findings
         self.lock = lock
         self.push = push
@@ -1281,6 +1286,7 @@ def build(settings, sources, log=None):
                                      log=functools.partial(_push_line, log))
             notes.append('push notifications on: the asking session and the PM hear of an answer '
                          'or a done to-do')
+        sources.pending = api.pending
         timed = _make_jobs(sources, pusher, notes, log)
         if timed is not None:
             api.jobs_status = timed.status   # GET health `jobs` (Api.jobs_seen)

@@ -285,6 +285,28 @@ class WiredTest(ServeCase):
         self.assertFalse(any(t.name == 'hub-job-demo' for t in threading.enumerate()),
                          'the close ended the job thread')
 
+    def test_a_maker_gets_the_apis_read_only_pending_in_sources(self):
+        seen = []
+
+        def maker(sources):
+            seen.append(sources.pending)
+            return None
+        hub = self.build(jobs=[maker])
+        self.assertEqual(seen, [hub.api.pending])     # set before the jobs are made
+        qid = 'Q-' + '901'
+        hub.api.store.put('questions', qid, {
+            'title': 't', 'status': 'answered', 'repo': 'kit', 'from': 'kit', 'class': 'go',
+            'options': [{'label': 'first', 'description': 'b'}, {'label': 'second', 'description': 'c'}],
+            'asked_at': '2026-10-01T00:00:00Z',
+            'answer': {'choice': 1, 'label': 'second', 'at': '2026-10-01T01:00:00Z'}})
+        api = hub.api
+        api._session_keys = lambda: {'kit'}           # not the launcher's sessions.json
+        marks = lambda: (dict(api._handed), dict(api._heard), dict(api._seen))
+        before = marks()
+        got = seen[0]('kit')
+        self.assertEqual([(i['kind'], i['id']) for i in got], [('question', qid)])
+        self.assertEqual(marks(), before)             # no handed/heard/seen marks (_routed's own pops aside)
+
     def test_no_jobs_is_null_in_health_and_a_maker_that_raises_is_a_note(self):
         def broken(sources):
             raise RuntimeError('no')

@@ -996,5 +996,229 @@ class WakeJob(JobBase):
         self.assertNotIn('--prompt', self.calls[0])               # a plain restart keeps today's argv
 
 
+def item(kind, doc_id, at, sender='kit', **more):
+    return dict({'kind': kind, 'id': doc_id, 'from': sender, 'at': iso(at), 'route': sender}, **more)
+
+
+class OwnerParts(unittest.TestCase):
+    def test_owner_wake_names_answers_and_decisions_newer_than_since(self):
+        w = C.owner_wake('kit', [item('question', 'EX-Q2', NOW + 5), item('approval', 'EX-A3', NOW + 9),
+                                 item('question', 'EX-Q1', NOW - 5)], NOW)
+        self.assertEqual(w.ids, ['EX-Q2', 'EX-A3'])
+        self.assertEqual(w.reason, 'an owner answer is pending for it: EX-Q2; '
+                                   'an approval it asked for is decided: EX-A3')
+        self.assertEqual(w.then, 'run hub pending --for kit')
+
+    def test_nothing_newer_or_a_bad_stamp_wakes_nothing(self):
+        self.assertIsNone(C.owner_wake('kit', [item('question', 'EX-Q1', NOW - 5)], NOW))
+        self.assertIsNone(C.owner_wake('kit', [{'kind': 'question', 'id': 'EX-Q1', 'at': 'x'}], NOW))
+        self.assertIsNone(C.owner_wake('kit', [], NOW))
+
+    def test_since_is_the_session_start_else_the_stop_less_a_stamp(self):
+        self.assertEqual(C.owner_since({'started_at': NOW - 50}, NOW), NOW - 50)
+        self.assertEqual(C.owner_since({}, NOW), NOW - C.STAMP_S)
+        self.assertEqual(C.owner_since({'started_at': True}, NOW), NOW - C.STAMP_S)
+
+    def test_a_records_wake_prompt_is_unchanged(self):
+        w = C.backlog_wake({'EX-B'}, [])
+        self.assertEqual(C.wake_prompt(w, 'x.md'), 'Started by the hub: its repo has new startable '
+                         'records: EX-B. Read your state note (x.md), then run backlog next.')
+
+    def test_owner_items_keeps_answers_and_approvals_for_the_key(self):
+        got = C.owner_items(lambda key: [item('question', 'EX-Q1', NOW), item('approval', 'EX-A1', NOW),
+                                         item('todo', 'EX-T1', NOW), item('question', 'EX-Q2', NOW, 'pm')],
+                            'kit')
+        self.assertEqual([i['id'] for i in got], ['EX-Q1', 'EX-A1'])
+
+    def test_owner_items_unread(self):
+        from kitlib.hubsite.store import HubError
+
+        def closed(key):
+            raise HubError('store', 'closed')
+        with self.assertRaises(C.OwnerUnread):
+            C.owner_items(closed, 'kit')
+        with self.assertRaises(C.OwnerUnread):
+            C.owner_items(None, 'kit')
+
+
+class OwnerJob(JobBase):
+    """The job with its pending read replaced: `self.items`, or an exception; processes carry a
+    Created time, `self.created` (None: none)."""
+
+    def setUp(self):
+        self.items = []
+        self.pend_reads = []
+        self.offer = set()
+        self.reads = []
+        self.created = NOW - 3600
+        super().setUp()
+
+    def new_job(self):
+        return C.RestartJob(self.settings, procs=self.procs, child=self.child, clock=lambda: self.now,
+                            kit=self.tmp, uptime=lambda: self.uptime, detached=self.detached,
+                            backlog=self.backlog, pending=self.pending)
+
+    def procs(self):
+        rows = [proc(n) for n in self.live]
+        if self.created is not None:
+            for r in rows:
+                r['Created'] = iso(self.created)
+        return rows
+
+    def backlog(self, key, entry):
+        self.reads.append(key)
+        return set(self.offer)
+
+    def pending(self, key, entry):
+        self.pend_reads.append(key)
+        if isinstance(self.items, Exception):
+            raise self.items
+        return list(self.items)
+
+    stop = WakeJob.stop
+    held_run = WakeJob.held_run
+
+    def down(self, runs=2):
+        for _ in range(runs):
+            self.now += 300
+            result = self.run_job()
+        return result
+
+    def test_an_answer_that_came_in_while_it_wound_down_wakes_it(self):
+        self.held_run()                                           # last seen NOW, stopped NOW + 60
+        self.items = [item('question', 'EX-Q7', NOW + 30)]          # between the sighting and the stop
+        note = self.down()
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0][-2:], ['--prompt', 'Started by the hub: an owner answer is '
+                         'pending for it: EX-Q7. Read your state note (x.md), then run hub pending '
+                         '--for kit.'])
+        self.assertIn('(woken: an owner answer is pending for it: EX-Q7)', note)
+        self.assertEqual(self.reads, [])                          # the cheaper read decided
+        self.assertEqual(self.ctx.events, [('restarted-unchecked', 'kit:a1')])
+
+    def test_a_decided_approval_and_a_class_question_wake_it(self):
+        self.held_run()
+        self.items = [item('approval', 'EX-A4', NOW + 100),
+                      item('question', 'EX-Q8', NOW + 100, **{'class': 'c'})]
+        self.down()
+        self.assertEqual(len(self.calls), 1)
+        self.assertIn('an owner answer is pending for it: EX-Q8; an approval it asked for is decided: EX-A4',
+                      self.calls[0][-1])
+
+    def test_an_answer_older_than_the_session_start_does_not_wake_it(self):
+        self.held_run()
+        self.items = [item('question', 'EX-Q1', NOW - 7200)]        # pending before it started
+        self.down(3)
+        self.assertEqual(self.calls, [])
+        self.assertTrue(self.reads)                               # the records flow still ran
+
+    def test_without_a_start_time_the_stop_is_the_threshold(self):
+        self.created = None
+        self.held_run()
+        self.assertNotIn('started_at', self.records()['kit'])
+        self.items = [item('question', 'EX-Q1', NOW + 30)]          # before the stop at NOW + 60
+        self.down()
+        self.assertEqual(self.calls, [])
+        self.items.append(item('question', 'EX-Q2', NOW + 90))
+        self.down(1)
+        self.assertEqual(len(self.calls), 1)
+        self.assertIn('EX-Q2', self.calls[0][-1])
+        self.assertNotIn('EX-Q1', self.calls[0][-1])
+
+    def test_started_at_is_the_process_creation_time(self):
+        self.live = ['kit-coord-a1']
+        self.run_job()
+        self.assertEqual(self.records()['kit']['started_at'], NOW - 3600)
+
+    def test_the_pending_read_waits_for_the_cheap_holds(self):
+        self.held_run()
+        self.items = [item('question', 'EX-Q7', NOW + 30)]
+        self.now += 300
+        self.run_job()                                            # down 1 of 2
+        self.assertEqual(self.pend_reads, [])
+        rec = self.records()
+        rec['kit']['starts'] = [self.now - 60]                    # in its backoff
+        self.write(C.STATE_FILE, rec)
+        self.now += 300
+        self.run_job()
+        self.assertEqual((self.pend_reads, self.calls), ([], []))
+
+    def test_a_crash_and_autostart_off_read_nothing(self):
+        self.live = ['kit-coord-a1']
+        self.run_job()
+        self.live = []
+        self.items = [item('question', 'EX-Q7', NOW + 30)]
+        self.down()                                               # no stop.log line: a crash
+        self.assertEqual(self.pend_reads, [])
+        self.assertNotIn('--prompt', self.calls[0])
+        self.sessions['kit'] = dict(ENTRY, autostart=False)
+        self.write('sessions.json', self.sessions)
+        self.stop()
+        self.down(3)
+        self.assertEqual(self.pend_reads, [])
+
+    def test_a_woken_coordinator_that_stops_again_is_not_woken_for_the_same_answer(self):
+        self.held_run()
+        self.items = [item('question', 'EX-Q7', NOW + 30)]
+        self.down()
+        self.assertEqual(len(self.calls), 1)
+        self.live = ['kit-coord-a1']
+        self.created = self.now + 10                              # the new session starts after EX-Q7
+        self.run_job()
+        self.live = []
+        self.stop()                                               # it found nothing to do, stops
+        for _ in range(4):
+            self.now += 3600
+            self.run_job()
+        self.assertEqual(len(self.calls), 1)
+
+    def test_a_woken_session_that_starts_and_stops_between_two_runs_is_not_woken_again(self):
+        self.held_run()
+        self.items = [item('question', 'EX-Q7', NOW + 30)]
+        self.down()
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.records()['kit']['started_at'], self.now)   # the start resets it
+        self.stop()                                               # up and down before the next run
+        for _ in range(4):
+            self.now += 3600
+            self.run_job()
+        self.assertEqual(len(self.calls), 1)
+
+    def test_started_at_keeps_the_earliest_of_the_stored_and_the_live_values(self):
+        self.live = ['kit-coord-a1']
+        self.run_job()
+        self.created = NOW - 100                                  # only a later session still runs
+        self.run_job()
+        self.assertEqual(self.records()['kit']['started_at'], NOW - 3600)
+        rows = [dict(proc('kit-coord-a1'), Created=iso(NOW - 50)),
+                dict(proc('kit-coord-a1'), Created=iso(NOW - 4000))]
+        self.procs = lambda: rows
+        self.job = self.new_job()
+        self.run_job()
+        self.assertEqual(self.records()['kit']['started_at'], NOW - 4000)   # the earliest row of a name
+
+    def test_pending_unread_is_a_note_and_the_records_wake_still_runs(self):
+        self.held_run()
+        self.items = C.OwnerUnread('the hub gives the job no pending read')
+        self.down(1)
+        self.offer = {'EX-A'}
+        self.now += 300
+        result = self.run_job()
+        self.assertIsInstance(result, jobs.Skip)
+        self.assertIn('kit: owner answers not read, so not woken for them', result.note)
+        self.assertEqual(self.records()['kit']['held']['ids'], ['EX-A'])   # the baseline was kept
+
+    def test_make_reads_sources_pending_at_run_time(self):
+        class Src(object):
+            home = None
+        src = Src()
+        with mock.patch('kitlib.launcher.settings.load', return_value=self.settings):
+            job = C.make(src)
+        with self.assertRaises(C.OwnerUnread):
+            job.run.pending('kit', ENTRY)                         # the hub has not set it yet
+        src.pending = lambda key: [item('question', 'EX-Q1', NOW), item('todo', 'EX-T1', NOW)]
+        self.assertEqual([i['id'] for i in job.run.pending('kit', ENTRY)], ['EX-Q1'])
+
+
 if __name__ == '__main__':
     unittest.main()
