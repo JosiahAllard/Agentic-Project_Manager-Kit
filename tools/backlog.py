@@ -53,6 +53,7 @@ from kitlib.backlog import store as smod                            # noqa: E402
 from kitlib.backlog.errors import Failure, IndexStale, Refusal, Usage  # noqa: E402
 from kitlib.backlog.opener import (FIELD_FLAGS, WRITES, open_store, planner,  # noqa: E402
                                    retarget_dry, uncite_dry)
+from kitlib.coordstate import log as coordlog                       # noqa: E402
 
 
 def say(line=''):
@@ -406,6 +407,7 @@ def do_write(args, ctx, store):
     # the row a plan found (a collision with a live pull, plan._collision_change) is audited too
     rows.extend(r for r in getattr(change, 'rows', ()) if r not in rows)
     audit_line(args.verb, getattr(args, 'id', None), rows, tip, args.session)
+    coordlog.note_backlog(args.verb, getattr(args, 'id', None), getattr(args, 'branch', None))
     return 0
 
 
