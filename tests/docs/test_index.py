@@ -641,9 +641,18 @@ class IndexLookupText(RepoCase):
     def test_find_miss_lists_the_known_keywords_and_exits_1(self):
         code, out = self.capture(find='no-such-topic')
         self.assertEqual(code, 1, out)
-        self.assertIn('Known keywords:', out)
-        self.assertIn('branch, decisions, flake, gate, rerun, security, start, test', out)
+        self.assertIn('Nearest keywords:', out)
+        self.assertNotIn('Known keywords', out)
         self.assertNotIn('tools/preflight.py', out)
+
+    def test_find_miss_prints_only_the_ten_nearest_keywords(self):
+        text = chr(10).join(['## Docs'] + ['- `d%d.md` | t | w | kw: gate%d' % (i, i) for i in range(15)] + ['- `z.md` | t | w | kw: zebra'])
+        near = index.nearest_keywords(text, 'gate')
+        self.assertEqual(len(near), 10)
+        self.assertNotIn('zebra', near)
+        out = []
+        self.assertEqual(index.print_find(text, 'gat3x', out.append), 1)
+        self.assertEqual(len(out[1].split(', ')), 10)
 
     def test_tools_prints_only_the_tools_section(self):
         code, out = self.capture(tools=True)
