@@ -64,6 +64,17 @@ The record (SCHEMA 1), every key always present:
                   a submitted landing's running records until the detached landing records
                   itself (kitlib.gate.submit restore), and a record written before the keys.
                   Added after the schema, like source
+  gate_once       a landing's final and error records: whether the base's config sets
+                  "landing".gate_once (Lander.gate_once); null for a branch gate, a running
+                  record, a landing that ended before it read the base's config, a record
+                  another writer finished (kitlib.gate.submit, finish_dead) and one written
+                  before the key. Added after the schema, like source
+  escalated       the same records: whether gate_once made the merged gate run --full
+                  (Lander.once_escalate); null where gate_once is
+
+The land ledger, `<result folder>/land-ledger.jsonl` (ledger_path): one JSON line per final or
+error land record Lander.run writes, with LEDGER_FIELDS, appended and never rewritten, so a
+retry that replaces the land record leaves the earlier outcome's line (append_ledger).
 
 wait() polls for the final record of a branch and kind at a tip. It writes one thing: a running
 record at that tip whose process has died (running_state 'dead') is finished `error`, "the
@@ -115,6 +126,9 @@ WHAT = {'land': 'landing', 'gate': 'gate'}
 SAFE = frozenset('abcdefghijklmnopqrstuvwxyz0123456789._-')
 DEVICES = frozenset(['con', 'prn', 'aux', 'nul'] + ['com%d' % i for i in range(10)]
                     + ['lpt%d' % i for i in range(10)])
+LEDGER = 'land-ledger.jsonl'
+LEDGER_FIELDS = ('branch', 'tip', 'run_id', 'started_at', 'finished_at', 'verdict', 'code',
+                 'summary', 'gate_once', 'escalated')
 VERDICTS = {G.OK: 'pass', G.FAILED: 'fail', G.USAGE: 'usage', G.STUCK: 'stuck',
             G.REFUSED: 'refused', G.BUSY: 'busy', G.LANDED_UNGATED: 'landed-ungated'}
 
@@ -224,7 +238,7 @@ def source_of(rec):
 
 def build(branch, tip, base, kind, code, log=None, summary=None, gate_ok_record=None,
           finished_at=None, run_id=None, started_at=None, verdict=None, cleanup=None,
-          source=None, pid=None, ctime=None):
+          source=None, pid=None, ctime=None, gate_once=None, escalated=None):
     """A record. `verdict` defaults to verdict_of(code); RUNNING and ERROR carry no code."""
     verdict = verdict or verdict_of(code)
     now = gate_ok.utc()
@@ -233,7 +247,8 @@ def build(branch, tip, base, kind, code, log=None, summary=None, gate_ok_record=
             'finished_at': None if verdict == RUNNING else (finished_at or now),
             'verdict': verdict, 'code': None if verdict in (RUNNING, ERROR) else code,
             'log': log, 'summary': summary or '', 'gate_ok_record': gate_ok_record,
-            'cleanup': cleanup, 'source': source, 'pid': pid, 'ctime': ctime}
+            'cleanup': cleanup, 'source': source, 'pid': pid, 'ctime': ctime,
+            'gate_once': gate_once, 'escalated': escalated}
 
 
 def own_process():
@@ -308,6 +323,34 @@ def write(root, record, when=None):
     return path
 
 
+def ledger_path(root):
+    """`<result folder>/land-ledger.jsonl`: the land ledger of the repository `root` is in.
+    ResultError when the result folder cannot be worked out."""
+    return os.path.join(result_dir(root), LEDGER)
+
+
+def append_ledger(root, record):
+    """Append `record`'s LEDGER_FIELDS to the land ledger as one JSON line, in one write call
+    (landings are serialized by the landing lock; one write keeps a line whole all the same).
+    `(path, None)`, or `(None, warning line)` when it could not be appended: nothing here raises,
+    so a ledger that cannot be written never changes the landing's outcome."""
+    try:
+        path = ledger_path(root)
+        data = (json.dumps(dict((k, record.get(k)) for k in LEDGER_FIELDS)) + '\n').encode('utf-8')
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, 'O_BINARY', 0))
+        try:
+            wrote = os.write(fd, data)
+        finally:
+            os.close(fd)
+        if wrote != len(data):
+            raise OSError('wrote %d of %d bytes' % (wrote, len(data)))
+    except Exception as e:      # noqa: BLE001 - the landing's outcome stands whatever happens here
+        return None, ('WARNING: the land ledger line could not be appended: %s: %s; the outcome '
+                      'stands' % (type(e).__name__, e))
+    return path, None
+
+
 def _summary(outcome):
     keys = ('LANDED ', 'NOT LANDED', 'CONFLICT ', 'STUCK:', 'REFUSED:', 'BUSY:', 'USAGE:',
             'NOT RUN:')
@@ -329,6 +372,7 @@ class Run(object):
         self.run_id = secrets.token_hex(8)
         self.started_at = gate_ok.utc()
         self.pid, self.ctime = own_process()
+        self.last = None
 
     @classmethod
     def maybe(cls, root, kind, branch, tip, base=None):
@@ -338,10 +382,12 @@ class Run(object):
         return cls(root, kind, branch, tip, base)
 
     def _write(self, when=None, **kw):
+        self.last = None    # the record this write built (written or not), for the land ledger
         try:
-            rec = build(self.branch, self.tip, kw.pop('base', self.base), self.kind,
-                        kw.pop('code', None), run_id=self.run_id, started_at=self.started_at,
-                        pid=self.pid, ctime=self.ctime, **kw)
+            rec = self.last = build(self.branch, self.tip, kw.pop('base', self.base), self.kind,
+                                    kw.pop('code', None), run_id=self.run_id,
+                                    started_at=self.started_at, pid=self.pid, ctime=self.ctime,
+                                    **kw)
             path = write(self.root, rec, when=when)
         except Exception as e:      # noqa: BLE001 - the run's outcome stands whatever happens here
             return None, 'WARNING: the result record could not be written: %s' % e
@@ -355,22 +401,26 @@ class Run(object):
         return self._write(when=when, verdict=RUNNING, log=log,
                            summary='%s %s at %s started' % (self.kind, self.branch, self.tip[:10]))
 
-    def finish(self, outcome, base=None, log=None, source=None, when=None):
+    def finish(self, outcome, base=None, log=None, source=None, when=None, gate_once=None,
+               escalated=None):
+        """`gate_once`, `escalated`: a landing's (Lander.run); None for a branch gate."""
         try:
             facts = outcome.facts
             kw = dict(code=outcome.code, base=base or facts.get('base') or self.base,
                       log=log or facts.get('log_dir'), summary=_summary(outcome),
                       gate_ok_record=facts.get('record'),
                       cleanup=(facts.get('cleanup') or {}).get(self.branch),
-                      source=source or facts.get('source'))
+                      source=source or facts.get('source'), gate_once=gate_once,
+                      escalated=escalated)
         except Exception as e:      # noqa: BLE001
+            self.last = None
             return None, 'WARNING: the result record could not be written: %s' % e
         return self._write(when=when, **kw)
 
-    def error(self, exc, log=None):
+    def error(self, exc, log=None, gate_once=None, escalated=None):
         """`log`: the run's log folder, when it was made before `exc` ended the run."""
         return self._write(verdict=ERROR, log=log, summary='the %s stopped: %s: %s' % (
-            self.kind, type(exc).__name__, exc))
+            self.kind, type(exc).__name__, exc), gate_once=gate_once, escalated=escalated)
 
 
 def read_path(path):

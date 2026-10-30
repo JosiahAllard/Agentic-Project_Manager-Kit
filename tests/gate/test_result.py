@@ -14,7 +14,7 @@ from unittest import mock
 
 from kitlib import gate as G
 from kitlib.fs import treelock
-from kitlib.gate import land, result, runner, steps
+from kitlib.gate import land, result, runner, steps, verdicts
 from kitlib.proc import process
 from kitlib.records import landing
 from tests import gitfixture, testutil
@@ -24,7 +24,7 @@ from tests.home import machine_config, result_drive, temp_home
 GATE_PY = os.path.join(steps.KIT_TOOLS, 'gate.py')
 FIELDS = ('schema', 'kind', 'branch', 'tip', 'base', 'run_id', 'started_at', 'finished_at',
           'verdict', 'code', 'log', 'summary', 'gate_ok_record', 'cleanup', 'source', 'pid',
-          'ctime')
+          'ctime', 'gate_once', 'escalated')
 UTC = r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$'
 
 
@@ -47,6 +47,17 @@ class FakeClock(object):
         stack.enter_context(mock.patch.object(time, 'monotonic', self.monotonic))
         stack.enter_context(mock.patch.object(time, 'sleep', self.sleep))
         return stack
+
+
+def ledger_lines(root):
+    """The land ledger's lines, each parsed; [] when there is no ledger."""
+    try:
+        with open(result.ledger_path(root), encoding='utf-8', newline='') as f:
+            text = f.read()
+    except FileNotFoundError:
+        return []
+    assert text.endswith('\n') and '\r' not in text, repr(text)
+    return [json.loads(l) for l in text.splitlines()]
 
 
 def block_dir(root):
@@ -120,6 +131,44 @@ class Records(unittest.TestCase):
         self.assertRegex(got['finished_at'], UTC)
         self.assertRegex(got['started_at'], UTC)
         self.assertEqual(result.read(self.repo.root, 'kit/none'), (None, 'none'))
+
+    def test_the_ledger_appends_one_line_per_record_and_never_rewrites_one(self):
+        a = result.build('kit/x', self.tip, None, 'land', G.FAILED, gate_once=True,
+                         escalated=True)
+        b = result.build('kit/x', self.tip, None, 'land', G.OK, gate_once=True, escalated=False)
+        self.assertEqual((a['gate_once'], a['escalated']), (True, True))
+        path, warning = result.append_ledger(self.repo.root, a)
+        self.assertIsNone(warning)
+        self.assertEqual(path, result.ledger_path(self.repo.root))
+        self.assertEqual(os.path.dirname(path), result.result_dir(self.repo.root))
+        with open(path, 'rb') as f:
+            first = f.read()
+        self.assertEqual(result.append_ledger(self.repo.root, b), (path, None))
+        with open(path, 'rb') as f:
+            self.assertTrue(f.read().startswith(first))        # appended, the first line kept
+        got = ledger_lines(self.repo.root)
+        self.assertEqual([list(l) for l in got], [list(result.LEDGER_FIELDS)] * 2)
+        self.assertEqual([(l['verdict'], l['code'], l['gate_once'], l['escalated']) for l in got],
+                         [('fail', G.FAILED, True, True), ('pass', G.OK, True, False)])
+        self.assertEqual([l['run_id'] for l in got], [a['run_id'], b['run_id']])
+        self.assertEqual(got[0]['tip'], self.tip)
+        self.assertEqual(result.read(self.repo.root, 'kit/x', 'land'), (None, 'none'))
+
+    def test_a_ledger_that_cannot_be_appended_is_a_warning(self):
+        block_dir(self.repo.root)
+        path, warning = result.append_ledger(
+            self.repo.root, result.build('kit/x', self.tip, None, 'land', G.OK))
+        self.assertIsNone(path)
+        self.assertTrue(warning.startswith('WARNING: the land ledger line could not be appended: '),
+                        warning)
+        self.assertTrue(result.append_ledger(self.repo.root, None)[1].startswith('WARNING: '))
+
+    def test_a_branch_gate_record_carries_null_gate_once_and_escalated(self):
+        run = result.Run(self.repo.root, 'gate', 'kit/x', self.tip)
+        run.start()
+        self.assertEqual((run.last['gate_once'], run.last['escalated']), (None, None))
+        got = result.read(self.repo.root, 'kit/x')[0]
+        self.assertEqual((got['gate_once'], got['escalated']), (None, None))
 
     def test_branches_differing_only_in_case_keep_their_own_records(self):
         result.write(self.repo.root, self.rec(branch='kit/Foo'))
@@ -688,6 +737,82 @@ class LandingWrites(fixtures.GateRepoCase):
         self.assertTrue(out.lines[-1].startswith('LANDED '), out.lines)    # still the last line
         self.assertTrue(os.path.isfile(out.result_record))
 
+    def test_a_landing_appends_its_outcome_to_the_ledger(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        out = self.lander('kit/feature', self.main, tip).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        rec = result.read(self.repo.root, 'kit/feature', 'land')[0]
+        self.assertEqual((rec['gate_once'], rec['escalated']), (False, False))
+        line, = ledger_lines(self.repo.root)
+        self.assertEqual(line, dict((k, rec[k]) for k in result.LEDGER_FIELDS))
+        self.assertEqual((line['branch'], line['tip'], line['verdict'], line['code']),
+                         ('kit/feature', tip, 'pass', G.OK))
+        self.assertRegex(line['finished_at'], UTC)
+
+    def test_a_red_landing_and_its_green_retry_each_leave_a_ledger_line(self):
+        wt, red = self.branch('feature', {'RED': 'x\n'})
+        out = self.lander('kit/feature', self.main, red).run()
+        self.assertEqual(out.code, G.FAILED, out.lines)
+        os.remove(os.path.join(wt, 'RED'))
+        green = self.repo.commit('fix', 'RED', cwd=wt)
+        os.remove(verdicts.entry_path(self.repo.common_dir(), 'kit/feature'))   # reviewed again
+        out = self.lander('kit/feature', self.main, green).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(result.read(self.repo.root, 'kit/feature', 'land')[0]['verdict'], 'pass')
+        got = ledger_lines(self.repo.root)      # the land record says pass; the ledger keeps both
+        self.assertEqual([(l['tip'], l['verdict'], l['code']) for l in got],
+                         [(red, 'fail', G.FAILED), (green, 'pass', G.OK)])
+        self.assertNotEqual(got[0]['run_id'], got[1]['run_id'])
+
+    def test_a_conflict_and_a_red_gate_differ_in_ledger_summary(self):
+        _, red = self.branch('red', {'RED': 'x\n'})
+        out = self.lander('kit/red', self.main, red).run()
+        self.assertEqual(out.code, G.FAILED, out.lines)
+        _, tip = self.branch('feature', {'README.md': 'branch\n'})
+        self.repo.write('README.md', 'main\n')
+        self.main = self.repo.commit('main edit', 'README.md')
+        self.repo.git('push', '-q', 'origin', 'main')
+        out = self.lander('kit/feature', self.main, tip).run()
+        self.assertEqual(out.code, G.FAILED, out.lines)
+        gate_red, conflict = ledger_lines(self.repo.root)
+        self.assertEqual([(l['branch'], l['verdict']) for l in (gate_red, conflict)],
+                         [('kit/red', 'fail'), ('kit/feature', 'fail')])
+        self.assertTrue(gate_red['summary'].startswith('NOT LANDED: the merge of kit/red was '
+                                                       'undone; '), gate_red['summary'])
+        self.assertTrue(conflict['summary'].startswith('CONFLICT kit/feature with main '),
+                        conflict['summary'])
+
+    def test_a_land_record_that_was_not_built_warns_and_appends_nothing(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        said = []
+        lander = self.lander('kit/feature', self.main, tip, say=said.append)
+        lander.ledger(result.Run(self.repo.root, 'land', 'kit/feature', tip))   # .last is None
+        self.assertEqual(said, ['WARNING: no land record was built, so no ledger line for '
+                                'kit/feature; the outcome stands'])
+        self.assertEqual(ledger_lines(self.repo.root), [])
+
+    def test_a_landing_refused_before_its_checks_appends_nothing(self):
+        self.branch('feature', {'a.py': 'x = 1\n'})
+        out = self.lander('kit/feature', self.main, 'c' * 40).run()    # wrong --expect-tip
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+        self.assertEqual(ledger_lines(self.repo.root), [])
+
+    def test_a_ledger_that_cannot_be_appended_leaves_the_landing_alone(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        blocker = os.path.join(self.tmp, 'not-a-folder')
+        with open(blocker, 'w') as f:
+            f.write('x\n')
+        said = []
+        with mock.patch.object(result, 'ledger_path',
+                               return_value=os.path.join(blocker, result.LEDGER)):
+            out = self.lander('kit/feature', self.main, tip, say=said.append).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertTrue(out.lines[-1].startswith('LANDED '), out.lines)
+        self.assertTrue(os.path.isfile(out.result_record))
+        self.assertEqual(result.read(self.repo.root, 'kit/feature', 'land')[0]['verdict'], 'pass')
+        self.assertTrue(any(l.startswith('WARNING: the land ledger line could not be appended')
+                            for l in said), said)
+
     def test_the_landing_log_folder_is_recorded(self):
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
         self.lander('kit/feature', self.main, tip).run()
@@ -754,6 +879,9 @@ class LandingWrites(fixtures.GateRepoCase):
             self.lander('kit/feature', self.main, tip, merged_gate=merged_gate).run()
         rec = result.read(self.repo.root, 'kit/feature', 'land')[0]
         self.assertEqual((rec['verdict'], rec['tip']), ('error', tip))
+        line, = ledger_lines(self.repo.root)
+        self.assertEqual((line['verdict'], line['code'], line['run_id']),
+                         ('error', None, rec['run_id']))
 
 
 def gate_py(*args, cwd=None):

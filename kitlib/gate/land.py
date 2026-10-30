@@ -546,6 +546,7 @@ class Lander(object):
         self.synced = False         # sync_main ran (the main checkout brought to the merge)
         self.cleanup = None         # its facts: {branch: kitlib.gate.cleanup entry, or None}
         self.fresh = fresh          # True: the merged gate reuses no branch-gate step
+        self.escalated = False      # once_escalate made the merged gate --full (gate_once)
         self.prior = None           # result records naming the tips, read before this landing
                                     # writes its own (_locked); None: reuse nothing
         self.tip_records = {}       # tip -> the gate-OK record tip_refusal landed it on (none for
@@ -1047,6 +1048,32 @@ class Lander(object):
         path and no gate config file, and once_escalate makes the merged gate --full."""
         return self.cfg.section('landing').get('gate_once') is True
 
+    def once_facts(self):
+        """{gate_once, escalated} for the land records (kitlib.gate.result build): gate_once()
+        and whether once_escalate escalated; both None when the base's config was never read (a
+        submitted landing that ended before it). Never raises."""
+        try:
+            if self.cfg is None:
+                return {'gate_once': None, 'escalated': None}
+            return {'gate_once': self.gate_once(), 'escalated': self.escalated}
+        except Exception:   # noqa: BLE001 - a record without them still records the outcome
+            return {'gate_once': None, 'escalated': None}
+
+    def ledger(self, rr):
+        """The land ledger line of the record `rr` (a result.Run) just built: appended; a line
+        that cannot be appended, or a record that was never built (rr.last None), is said as a
+        WARNING and the outcome stands. Never raises."""
+        try:
+            if rr.last is None:
+                self.say('WARNING: no land record was built, so no ledger line for %s; the '
+                         'outcome stands' % rr.branch)
+                return
+            _, warning = result.append_ledger(self.root, rr.last)
+            if warning:
+                self.say(warning)
+        except Exception:   # noqa: BLE001 - the outcome stands whatever happens here
+            pass
+
     def shared_refusal(self, shared, changed):
         """Why a record that is not --full does not land a landing diff `changed` under the base's
         "landing".shared_paths `shared`, or None: a changed path matching one of `shared`, or one
@@ -1274,7 +1301,7 @@ class Lander(object):
         if changed is not None and reuse.docs_only_change(self.cfg, self.cfg.section('gate'),
                                                            changed):
             return
-        self.full = True
+        self.full = self.escalated = True
         self.say('GATE ONCE: the base %s sets "landing".gate_once: the merged gate runs --full on '
                  'the merged tree' % self.expect_main[:10])
 
@@ -2127,7 +2154,9 @@ class Lander(object):
         refusal: a retry or a duplicate) writes no record, so it never replaces a real result; a
         submitted landing's records were written running before it started, so every outcome
         finishes them. The record lines are said as progress: the verdict stays the
-        outcome's last line. The machine-lock slot is released however _run ends.
+        outcome's last line. The machine-lock slot is released however _run ends. The final and
+        the `error` records carry gate_once and escalated (once_facts), and each is appended to
+        the land ledger as one line (ledger; result.append_ledger), a failed append a WARNING.
         facts['result_record']: the path (one branch), the list of paths (a batch), or None."""
         try:
             out = self._run()
@@ -2139,7 +2168,9 @@ class Lander(object):
                 pass
             for rr in self.result_runs:
                 try:
-                    self.say(rr.error(e, log=self.gate_logs or self.output_log)[1])
+                    self.say(rr.error(e, log=self.gate_logs or self.output_log,
+                                      **self.once_facts())[1])
+                    self.ledger(rr)
                 except Exception:   # noqa: BLE001 - never replace the exception being raised
                     pass
             raise
@@ -2152,10 +2183,13 @@ class Lander(object):
         if out.code == G.OK and out.facts.get('merge'):
             self.refresh_mirrors(out)
         paths = []
+        once = self.once_facts()
         for rr in self.result_runs:
             path, line = rr.finish(out, base=self.expect_main,
-                                   log=self.gate_logs or self.output_log, source=self.source())
+                                   log=self.gate_logs or self.output_log, source=self.source(),
+                                   **once)
             self.say(line)
+            self.ledger(rr)
             paths.append(path)
         out.facts['result_record'] = (paths[0] if len(self.branches) == 1 else paths) if paths else None
         return out
