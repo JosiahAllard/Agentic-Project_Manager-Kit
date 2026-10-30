@@ -2265,7 +2265,7 @@ def dev_drive_bound(event, ctx, cwd, rs, dev, target, role, what, rewrite=None, 
 
 def in_dropped(target, dropped, dev):
     """True when `target` is off the Dev Drive `dev` and lies in a root jail_view dropped for lying
-    off it. A dropped root that holds the Dev Drive (Z:/ around Z:/dev) opens nothing on it: a
+    off it. A dropped root that holds the Dev Drive (<drive>/ around <drive>/dev) opens nothing on it: a
     target there is judged by the other roots alone."""
     if not dropped or jail.on_drive(target, dev):
         return False
