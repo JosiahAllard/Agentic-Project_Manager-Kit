@@ -82,9 +82,14 @@ class Decide(unittest.TestCase):
         self.assertTrue(d.start)
 
     def test_an_account_over_the_limit_holds_and_says_over_limit(self):
-        d = decide(accounts={'1': C.AccountState(True, usage(95))})
+        d = decide(accounts={'1': C.AccountState(True, usage(96))})
         self.assertFalse(d.start)
         self.assertEqual((d.word, d.account), ('over-limit', '1'))
+
+    def test_the_limit_is_95_at_or_over_holds_and_94_starts(self):
+        self.assertTrue(decide(accounts={'1': C.AccountState(True, usage(94))}).start)
+        d = decide(accounts={'1': C.AccountState(True, usage(95))})
+        self.assertEqual((d.start, d.word), (False, 'over-limit'))
 
     def test_an_account_under_the_limit_starts_as_restarted(self):
         d = decide(accounts={'1': C.AccountState(True, usage(50))})
@@ -108,7 +113,7 @@ class Decide(unittest.TestCase):
         self.assertEqual((d.start, d.account, d.word), (True, '1', 'restarted'))   # stale but under: as before
         d = decide(accounts={'1': C.AccountState(True, usage(95)), '2': C.AccountState(True, stale)})
         self.assertEqual((d.start, d.account, d.word), (False, '1', 'over-limit'))
-        d = decide(accounts={'1': C.AccountState(False, None), '2': C.AccountState(True, usage(95))})
+        d = decide(accounts={'1': C.AccountState(False, None), '2': C.AccountState(True, usage(96))})
         self.assertEqual((d.start, d.account, d.word), (False, '1', 'not-signed-in'))
 
     def test_no_last_account_known_still_starts_on_a_fresh_account(self):
@@ -680,7 +685,7 @@ class WakeDecide(WakeFixture):
         self.assertIn('backoff', decide(record=dict(STOPPED, starts=[NOW - 300]), last_stop=NOW - 600,
                                         wake=WAKE).reason)
         d = decide(record=STOPPED, last_stop=NOW - 600, wake=WAKE,
-                   accounts={'1': C.AccountState(True, usage(95))})
+                   accounts={'1': C.AccountState(True, usage(96))})
         self.assertEqual((d.start, d.word), (False, 'over-limit'))
 
     def test_the_account_pick_applies_to_a_wake_start(self):
