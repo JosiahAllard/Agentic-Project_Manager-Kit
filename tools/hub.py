@@ -95,7 +95,9 @@ The verbs below ask the running server through kitlib.hubsite.client. Each takes
 the lines named here. A verb marked (owner) carries the owner's token, the others the agent's;
 the server alone decides what a role may do.
 
-  hub.py questions [--status S] [--repo R]          `Q-1 v2 open [repo] title` for each
+  hub.py questions [--status S] [--repo R]          `Q-1 v2 open [repo] title` for each; a
+                                                     done one ends ` (done by the hub: WHY)`
+                                                     or ` (done: WHY)`
   hub.py questions show Q-1                         one question: title, status, version, options
                                                      (the recommended marked), context, answer
                                                      and note; any status
@@ -1072,7 +1074,20 @@ def _hub(a):
 def _item(d, state=None, version=False):
     title = d.get('title') or d.get('text') or ''
     name = '%s v%s' % (d.get('id'), d.get('version')) if version else d.get('id')
-    return '%s %s [%s] %s' % (name, state or d.get('status') or '-', d.get('repo') or '-', title)
+    return '%s %s [%s] %s%s' % (name, state or d.get('status') or '-', d.get('repo') or '-', title,
+                                _done_note(d))
+
+
+def _done_note(d):
+    """` (done by the hub: <why>)` after a question the hub marked done once its asker had the
+    filed answer (done_by, docs/action-hub.md "Done by the hub"), ` (done: <why>)` after one its
+    asker or the PM marked done; nothing for any other document. The why on one line."""
+    by, why = d.get('done_by'), d.get('done_why')
+    why = ' '.join(why.split()) if isinstance(why, str) else ''
+    if isinstance(by, str) and by.strip():
+        who = 'the hub' if by == 'hub' else by.strip()
+        return ' (done by %s%s)' % (who, ': ' + why if why else '')
+    return ' (done: %s)' % why if why else ''
 
 
 def _list(a, collection, version=False):

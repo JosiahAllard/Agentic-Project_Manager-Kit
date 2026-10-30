@@ -242,7 +242,7 @@ def hub_site(load=None, make_client=_hub_client, stamp=None, now=None):
     key's own, without the value it refused (_without_values): key names, the rules, and the
     machine config's path when the settings name it; never a value written in the key. With a
     `stamp` (the checklist gives filed_stamp_file), the up server's lines carry the filed-answers
-    digest (filed_digest, one more ask) after the pending ones; with none, no digest."""
+    digest (filed_digest, two more asks) after the pending ones; with none, no digest."""
     try:
         site = (load or hub_settings)()      # looked up at the call, so a test can replace it
     except HubSettingsError as e:
@@ -291,6 +291,7 @@ def hub_site(load=None, make_client=_hub_client, stamp=None, now=None):
 
 FILED_STAMP_NAME = "pm-start-last.json"
 FILED_FALLBACK = datetime.timedelta(hours=24)
+HUB_DONE_BY = "hub"   # a question's done_by when the hub marked it done (kitlib.hubsite.api)
 
 
 def filed_stamp_file():
@@ -330,9 +331,11 @@ def filed_digest(hub, stamp, now=None):
     (docs/pm-start.md "Filed answers"): at most one line, and no push. `stamp` is the stamp file's
     path, or a function giving it (asked here, so a checklist whose hub is down reads no pm_watch
     config). The time since is the stamp's, or `now` less FILED_FALLBACK when the stamp is missing
-    or unreadable; the stamp is rewritten with `now` once the hub has answered, so a start whose
-    ask failed leaves it for the next start. One ask (GET /questions?status=filed&since=T): the
-    questions whose filed_at is at or after T are counted, and none is no line."""
+    or unreadable; the stamp is rewritten with `now` once the hub has answered both asks, so a
+    start whose ask failed leaves it for the next start. Two asks (GET /questions?status=filed and
+    status=done, each &since=T): the questions whose filed_at is at or after T are counted, of
+    the done ones only those the hub marked done once their asker had the answer (done_by `hub`,
+    kitlib.hubsite.push "Done by the hub"), which the line counts apart; none is no line."""
     now = now or datetime.datetime.now(datetime.timezone.utc)
     try:
         path = stamp() if callable(stamp) else stamp
@@ -340,24 +343,34 @@ def filed_digest(hub, stamp, now=None):
         return ["hub: answers filed since the last start not counted (%s)" % type(e).__name__]
     since = _read_stamp(path) or now - FILED_FALLBACK
     text = since.isoformat(timespec="seconds")
-    try:
-        items = hub.get("/questions", query={"status": "filed", "since": text},
-                        timeout=HUB_SITE_TIMEOUT_S).get("items")
-    except Exception as e:
-        return ["hub: answers filed since %s not asked (%s)" % (text, type(e).__name__)]
-    _write_stamp(path, now)
-    count = 0
-    for d in items if isinstance(items, list) else []:
+    got = {}
+    for status in ("filed", "done"):
         try:
-            at = datetime.datetime.fromisoformat((d or {}).get("filed_at"))
-        except (TypeError, ValueError, AttributeError):
-            continue
-        if at.tzinfo is not None and at >= since:
-            count += 1
-    if not count:
+            got[status] = hub.get("/questions", query={"status": status, "since": text},
+                                  timeout=HUB_SITE_TIMEOUT_S).get("items")
+        except Exception as e:
+            return ["hub: answers filed since %s not asked (%s)" % (text, type(e).__name__)]
+    _write_stamp(path, now)
+    count = {"filed": 0, "done": 0}
+    for status, items in got.items():
+        for d in items if isinstance(items, list) else []:
+            if status == "done" and (d or {}).get("done_by") != HUB_DONE_BY:
+                continue
+            try:
+                at = datetime.datetime.fromisoformat((d or {}).get("filed_at"))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if at.tzinfo is not None and at >= since:
+                count[status] += 1
+    total, done = count["filed"] + count["done"], count["done"]
+    if not total:
         return []
-    return ["hub: %d answer(s) filed into records since %s, for your information: python \"%s\" "
-            "questions --status filed --since %s" % (count, text, HUB_TOOL, text)]
+    line = ("hub: %d answer(s) filed into records since %s, for your information: python \"%s\" "
+            "questions --status filed --since %s" % (total, text, HUB_TOOL, text))
+    if done:
+        line += ("; %d of them marked done by the hub once their asker had them (done_by hub):"
+                 " python \"%s\" questions --status done --since %s" % (done, HUB_TOOL, text))
+    return [line]
 
 
 def read_heartbeat():

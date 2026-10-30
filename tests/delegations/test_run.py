@@ -21,6 +21,7 @@ from kitlib.delegations import run as drun
 from kitlib.delegations import schema
 from kitlib.hubsite import approvals as hubapprovals
 from kitlib.hubsite import client as hubclient
+from kitlib.hubsite import push as hubpush
 from kitlib.hubsite import serve as hubserve
 from kitlib.ledger import write as lwrite
 from tests import gitfixture
@@ -403,6 +404,19 @@ class HubTrigger(Fixture):
         self.q['record'] = {'repo': 'kit', 'id': 'EX-1'}
         self.deny('is filed in its record but not logged')
         self.deny('log it first: `hub.py questions log %s --if-version V`' % self.q['id'])
+
+    def test_a_filed_run_line_question_is_never_marked_done_by_the_hub(self):
+        # hub_order runs only a logged question: the hub's own done (kitlib.hubsite.push "Done by
+        # the hub") would leave a filed run line no asker can log any more
+        line = drun.run_line(schema.Operation(*operation()), {'name': 'alpha'})
+        self.assertEqual(line, self.LINE)
+        self.q.update(status='filed', filed_as='pulled', record={'repo': 'kit', 'id': 'EX-1'})
+        self.assertFalse(hubpush.auto_done_ok(self.q))
+        self.q['options'][0]['label'] = 'go ahead'      # the answer alone still carries it
+        self.assertFalse(hubpush.auto_done_ok(self.q))
+        self.q['answer']['label'] = 'go ahead'
+        self.assertTrue(hubpush.auto_done_ok(self.q), 'with no run line the hub marks it done')
+        self.deny('is filed in its record but not logged')
 
     def test_a_filed_question_once_logged_runs(self):
         self.q['record'] = {'repo': 'kit', 'id': 'EX-1'}

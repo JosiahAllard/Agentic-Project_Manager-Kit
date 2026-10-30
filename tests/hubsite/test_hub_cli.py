@@ -1393,6 +1393,22 @@ class WriteCase(VerbCase):
         self.assertEqual(doc['answer']['note'], 'as planned')
         self.assertIn('REFUSED: Q-9 is not a question', self.refused('questions', 'show', 'Q-9'))
 
+    def test_a_question_the_hub_marked_done_says_so_in_its_line_and_its_show(self):
+        self.ask()
+        self.ask('another')
+        self.ask('a third')
+        self.hub.store.update('questions', 'Q-1000', {
+            'status': 'done', 'done_by': 'hub', 'done_why': 'filed into kit:EX-1',
+            'done_at': '2026-10-24T00:00:00Z'})
+        self.hub.store.update('questions', 'Q-1001', {
+            'status': 'done', 'done_why': 'a one-off\n  go', 'done_at': '2026-10-24T00:00:00Z'})
+        self.assertEqual(self.ok('questions', '--status', 'all'), [
+            'Q-1000 v2 done [kit] which way (done by the hub: filed into kit:EX-1)',
+            'Q-1001 v2 done [kit] another (done: a one-off go)',
+            'Q-1002 v1 open [kit] a third'])
+        self.assertEqual(self.ok('questions', 'show', 'Q-1000')[0],
+                         'Q-1000 v2 done [kit] which way (done by the hub: filed into kit:EX-1)')
+
     def test_questions_show_marks_the_recommended_option_and_prints_context_and_other(self):
         self.ok('questions', 'add', '--title', 'which road', '--class', 'go', '--context-file',
                 self.file('context.md', 'why it matters'), '--option', 'up::go up',

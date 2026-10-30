@@ -49,6 +49,25 @@ Filed answers (`filed`, by the question's `filed_as`, kitlib.hubsite.api _filed_
 An answer that is a standing rule (`standing`) also goes to the PM, who logs it, whatever its
 filed_as; a `standing` change of an answer already pushed adds the PM to the push still owed.
 
+Done by the hub (docs/action-hub.md "Done by the hub"): a filed answer auto_done_ok passes (a
+known filed_as, no standing rule, no option or answer that is a delegation run line) is marked
+done by this worker once its asker has it, never in the filing's own write: status `done`,
+done_by `hub`, done_why `filed into <repo>:<id>`, done_at, via `hub-push`. The entry keeps the
+asker's key (`done`: its `from`, or the PM's when the PM asked) and the question's version when
+the push fired (`version`). The asker has it (`has_it`) when its own pick-up acknowledges it
+(handed_to names it), when its once push is written, or when it picked the answer up before the
+push fired; one that held an earlier answer and is not sent this one gets no done. An asker the push is not sent to
+(the record's coordinator or the PM's freed ping stands in for it) is a `silent` recipient:
+never sent, left out of `undelivered`, acknowledged as any other and dropped at GIVE_UP_S with
+no gave-up line, so its pending item, and a stopped coordinator's wake on it, stay until it
+reads it. Only once every recipient is done with the entry is the done written: so the `filed`
+push and the `freed` ping are never cut short. The write is pinned to `version`: a new answer,
+a promote, an asker's own log or done or any other write since wins, and the question stays as it
+is (logged here). A standing rule, an unbound answer, a classed one and one whose filing failed
+are never marked done here. A question the hub marked done takes a new answer and a promote
+(kitlib.hubsite.api): a new answer forgets the old hand-over there, so it is a first answer here
+(_first), and a promote of the same answer is the `standing` event.
+
 An approval's phase is read at the worker's clock: 'decided' while it is decided and pending,
 'expiring' from EXPIRING_S after decided_at while it is still approved, None once it is not
 pending (consumed, expired, a denial past its window). Every round re-reads the phases of the
@@ -109,10 +128,10 @@ drops them, and the job pushes again when it fails again.
 
 Files, in `folder` (the launcher's state_dir):
   push-outbox.json         {"<kind>:<id>": {kind, id, event, fingerprint, status, repo, from,
-                           first_at, recipients: {key: {attempt, next_at, last, once}}}} (a
-                           question's also filed_as, record, record_repo, freed, asker_pm,
-                           coordinator and
-                           standing when they apply: its guidance), times in
+                           first_at, recipients: {key: {attempt, next_at, last, once,
+                           silent}}}} (a question's also filed_as, record, record_repo, freed,
+                           asker_pm, coordinator and standing when they apply: its guidance;
+                           done, version and has_it: "Done by the hub"), times in
                            epoch seconds, replaced whole after each round that changed it. At
                            start an entry whose item changed since is fired afresh; one whose
                            item is gone is dropped; nothing else already pending is sent again.
@@ -154,7 +173,7 @@ import threading
 import time
 
 from kitlib import pmwatch
-from kitlib.hubsite.api import AGENT_FROM, OWNER_FROM
+from kitlib.hubsite.api import AGENT_FROM, HUB_DONE_BY, OWNER_FROM
 from kitlib.hubsite import store
 from kitlib.hubsite.store import HubError
 
@@ -180,6 +199,11 @@ EXPIRING_S = 20 * 3600                      # after decided_at: an approved one'
 WATCHER_STALE_S = 300                       # a heartbeat older than this: the watcher is down
                                             # (kitlib.pmstart BEAT_STALE, the same rule)
 WATCHER_POLL_S = 30                         # between heartbeat reads on the thread
+DONE_BY = HUB_DONE_BY                       # a question's done_by when this worker marked it done
+DONE_VIA = 'hub-push'                       # the `via` of that write
+# a delegation run line (kitlib.delegations.run run_line, `D-nnn` its schema.ID): not imported,
+# kitlib.delegations imports this package
+RUN_LINE = re.compile(r'run D-[0-9]{3,}(?: |\Z)')
 _FIELD = re.compile(r'[^A-Za-z0-9._:-]')
 
 Sent = collections.namedtuple('Sent', 'state name session ambiguous')
@@ -232,6 +256,22 @@ def question_phase(doc):
     return status
 
 
+def auto_done_ok(doc):
+    """True when question doc is one the hub marks done itself once its asker has the answer
+    (module docstring "Done by the hub"): filed into its record with a known `filed_as`, not a
+    standing rule (the PM logs it), and with no option and no answer that is a delegation run
+    line (kitlib.delegations.run hub_order runs only a logged question)."""
+    if doc.get('status') != 'filed' or doc.get('filed_as') not in FILED_AS:
+        return False
+    if not isinstance(doc.get('record'), dict) or doc.get('standing') is not None:
+        return False
+    options = doc.get('options') if isinstance(doc.get('options'), list) else []
+    labels = [o.get('label') for o in options if isinstance(o, dict)]
+    answer = doc.get('answer') if isinstance(doc.get('answer'), dict) else {}
+    labels.append(answer.get('label'))
+    return not any(isinstance(t, str) and RUN_LINE.match(t.strip()) for t in labels)
+
+
 def fingerprint(kind, doc, now=None):
     """What a push is about: a question's phase (question_phase) and answer, and the time it
     was made a standing rule when it is one, a to-do's status and done_at, an approval's status,
@@ -266,9 +306,13 @@ def trigger(kind, doc, old, now=None):
         phase = question_phase(doc)
         if phase not in ('answered', 'filed'):
             return None
+        fp = fingerprint(kind, doc)
         if (isinstance(doc.get('standing'), dict) and old is not None
-                and list(old[:3]) == fingerprint(kind, doc)[:3]):
-            return 'standing'           # the same answer, made a standing rule since
+                and (list(old[:3]) == fp[:3]
+                     or (old[0] == 'done' and list(old[1:3]) == fp[1:3]))):
+            # the same answer, made a standing rule since (from `done` too: the promote of one
+            # the hub marked done, api _promote, puts it back to filed)
+            return 'standing'
         return phase
     if kind in ('story', 'skill_edit'):
         return 'submitted' if status == 'submitted' else None
@@ -602,7 +646,8 @@ class PushWorker(object):
 
     def _summarize(self):
         owed = sum(1 for e in self._outbox.values()
-                   if any(st.get('last') != WRITTEN for st in e['recipients'].values()))
+                   if any(st.get('last') != WRITTEN and not st.get('silent')
+                          for st in e['recipients'].values()))
         self._status = {'state': 'up' if self._last in (None, WRITTEN) else 'down',
                         'last': self._last, 'undelivered': owed}
 
@@ -753,6 +798,11 @@ class PushWorker(object):
                 entry['fingerprint'] = fp
                 entry['standing'] = True
                 entry['status'] = doc.get('status')
+                for k in ('done', 'has_it', 'version'):
+                    entry.pop(k, None)          # a standing rule is the PM's to log
+                for r, st in list(entry['recipients'].items()):
+                    if st.get('silent'):
+                        del entry['recipients'][r]
                 st = entry['recipients'].get(PM_KEY)
                 if st is None:
                     entry['recipients'][PM_KEY] = {'attempt': 0, 'next_at': now, 'last': None,
@@ -799,9 +849,13 @@ class PushWorker(object):
                 st = recipients.setdefault(PM_KEY, {'attempt': 0, 'next_at': now, 'last': None,
                                                     'once': False})
                 st['once'] = False
+            elif auto_done_ok(doc):
+                self._done_flags(doc, sender, mine, held, first, recipients, flags, now)
             flags['record'] = '%s:%s' % (record.get('repo') or '', record.get('id') or '')
             flags['record_repo'] = record.get('repo') or ''
         if not recipients:
+            if flags.get('has_it'):
+                self._hub_done(dict(flags, id=doc_id, fingerprint=fp))
             self._drop(key)             # its asker picked it up already: no push
             return
         entry = {'kind': 'question', 'id': doc_id, 'event': event, 'fingerprint': fp,
@@ -813,6 +867,48 @@ class PushWorker(object):
             entry['standing'] = True
         self._outbox[key] = entry
         self._dirty = True
+
+    @staticmethod
+    def _done_flags(doc, sender, mine, held, first, recipients, flags, now):
+        """The flags of a filed answer the hub marks done once its asker has it (module
+        docstring "Done by the hub"): `done` the asker's key (the PM's when the PM asked),
+        `version` the question's version now (the done write is pinned to it), `has_it` when
+        the asker picked this answer up before the push fired; an asker the push is not sent to
+        becomes a `silent` recipient, never sent, that only its own pick-up acknowledges. One
+        that held the answer before this one (a re-answer) and is not sent it gets no done: no
+        pick-up can be told from the old one."""
+        asker = sender if mine else PM_KEY
+        if mine and held == sender:
+            if not first:
+                return
+            flags['has_it'] = True
+        elif asker not in recipients:
+            recipients[asker] = {'attempt': 0, 'next_at': now, 'last': None, 'once': False,
+                                 'silent': True}
+        flags['done'] = asker
+        flags['version'] = _doc_version(doc)
+
+    def _hub_done(self, entry):
+        """Mark question entry['id'] done for its asker (module docstring "Done by the hub"),
+        pinned to entry['version'], the version auto_done_ok judged when the push fired: a new
+        answer, a promote or any other write since wins, and nothing is written (logged)."""
+        doc_id, version = entry['id'], entry.get('version')
+        if type(version) is not int:
+            return
+        try:
+            self.store.update('questions', doc_id, {
+                'status': 'done', 'done_by': DONE_BY,
+                'done_why': 'filed into %s' % entry.get('record'),
+                'done_at': self.store.clock(), 'via': DONE_VIA}, if_version=version)
+        except HubError as e:
+            self.log('push: %s not marked done: %s' % (field(doc_id), e.code))
+
+    def _finish(self, key, entry):
+        """Drop an entry every recipient is done with; first mark its question done when the
+        asker has the answer (`has_it`)."""
+        if entry.get('done') and entry.get('has_it'):
+            self._hub_done(entry)
+        self._drop(key)
 
     def _live_session(self, doc, asker):
         """The first key with a live session (the delivery object's `resolve`, None for none)
@@ -923,10 +1019,19 @@ class PushWorker(object):
             doc = self.store.get(_coll(entry['kind']), entry['id'])
             for r in list(entry['recipients']):
                 if self._acked(entry, r, doc):
+                    if r == entry.get('done') and self._picked(entry, r):
+                        entry['has_it'] = True      # the asker picked this answer up
                     del entry['recipients'][r]
                     self._dirty = True
             if not entry['recipients']:
-                self._drop(key)
+                self._finish(key, entry)
+
+    def _picked(self, entry, recipient):
+        """True when `recipient`, a session that is not `once`, picked entry's item up
+        (handed_to names it). Any other acknowledgement (a newer answer, a log) is a write the
+        done's version pin loses to."""
+        return (recipient != PM_KEY and not entry['recipients'][recipient].get('once')
+                and self._handed(entry['kind'], entry['id']) == recipient)
 
     def _send_due(self):
         now = self.clock()
@@ -934,14 +1039,15 @@ class PushWorker(object):
         for key, entry in sorted(self._outbox.items(), key=lambda kv: (kv[1]['first_at'] or now, kv[0])):
             for r, st in list(entry['recipients'].items()):
                 if entry['first_at'] is not None and now - entry['first_at'] >= GIVE_UP_S:
-                    self._note(entry, r, None, st['attempt'], GAVE_UP)
+                    if not st.get('silent'):    # never sent: nothing was undelivered
+                        self._note(entry, r, None, st['attempt'], GAVE_UP)
                     del entry['recipients'][r]
                     self._dirty = True
                     continue
-                if st['next_at'] <= now:
+                if st['next_at'] <= now and not st.get('silent'):
                     due.setdefault(r, []).append(key)
             if not entry['recipients']:
-                self._drop(key)
+                self._finish(key, entry)
         for r, keys in due.items():
             if self._stop.is_set():
                 return
@@ -978,9 +1084,11 @@ class PushWorker(object):
             if sent.ambiguous:
                 self._note(entry, recipient, sent.name, st['attempt'], AMBIGUOUS)
             if state == WRITTEN and st.get('once'):
+                if recipient == entry.get('done'):
+                    entry['has_it'] = True      # the PM that asked: told once (_done_flags)
                 del entry['recipients'][recipient]
             if not entry['recipients']:
-                self._drop(key)
+                self._finish(key, entry)
         for key in rest:                # the "+N more" line told of them: due at the next slot
             st = self._outbox[key]['recipients'][recipient]
             st['next_at'] = now + schedule(st['attempt'] + 1)
@@ -1042,6 +1150,12 @@ class PushWorker(object):
                 f.write(json.dumps(line, sort_keys=True) + '\n')
         except OSError as e:
             self.log('push: could not write %s: %s' % (UNDELIVERED, e))
+
+
+def _doc_version(doc):
+    """A document's version as the store counts it (kitlib.hubsite.store _version)."""
+    v = doc.get('version', 0)
+    return v if type(v) is int else 0
 
 
 def _coll(kind):
