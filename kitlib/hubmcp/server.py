@@ -289,6 +289,18 @@ TOOLS = {
                                                         "(default: the checkout's HEAD)."},
               "reason": {"type": "string"}},
              ["checkout", "title", "files"]), "POST", "/approvals", AGENT),
+    "hub_handoff_ready": (
+        "Records that this session checkpointed and stands down (POST /handoffs), beside its "
+        "ready reply to the PM (skill session-handoff): the same kind and state note path. The "
+        "hub stamps the time; GET /handoffs gives each session's newest record.",
+        _obj({"kind": _one_of(hubapi.HANDOFF_KINDS, "The ready reply's word: handoff (ready to "
+                                                    "hand off), restart or stop."),
+              "state_path": {"type": "string", "description": "The absolute path of the state "
+                                                              "note, as in the ready reply."},
+              "from": {"type": "string", "description": "Your launcher session key (pm for the "
+                                                        "PM). The hub refuses any other value "
+                                                        "(invalid)."}},
+             ["kind", "state_path", "from"]), "POST", "/handoffs", AGENT),
 }
 assert not set(TOOLS) & set(OWNER_ONLY)
 # a POST below no {id} that can still replace a document: publishing over a page

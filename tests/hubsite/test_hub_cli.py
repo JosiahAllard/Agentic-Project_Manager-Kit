@@ -104,7 +104,7 @@ class UsageCase(CliCase):
         self.assertEqual((code, out), (2, ''))
         self.assertIn('USAGE: give a verb: serve, status, setup, open, unpair, stop, restart, '
                       'questions, answer, todos, stories, to-pm, inbox, pages, approvals, '
-                      'skill-edit, pending, wait or validate\n', err)
+                      'handoffs, skill-edit, pending, wait or validate\n', err)
         self.assertEqual(sorted(HUB.VERBS), sorted(HUB.VERB_NAMES))     # every verb it has
         self.assertEqual(self.run_cli('launch')[0], 2)
         self.assertEqual(self.run_cli('serve', '--bind', '0.0.0.0')[0], 2)
@@ -1643,6 +1643,26 @@ class WriteCase(VerbCase):
         self.assertEqual([(m['id'], m['read'], m['text']) for m in got['items']],
                          [('M-001', False, 'the answer')])
 
+    def test_a_hand_off_is_recorded_and_each_sessions_newest_listed(self):
+        state = os.path.join(self.home, 'state-pm.md')
+        self.assertEqual(self.ok('handoffs'), [])
+        self.assertEqual(self.ok('handoffs', 'add', '--kind', 'handoff', '--state', state,
+                                 '--from', 'pm'), ['RECORDED C-001'])
+        self.assertEqual(self.ok('handoffs', 'add', '--kind', 'stop', '--state', state,
+                                 '--from', 'pm'), ['RECORDED C-002'])
+        got = self.ok('handoffs')
+        self.assertEqual(len(got), 1, got)
+        self.assertTrue(got[0].startswith('C-002 stop from=pm at='), got)
+        self.assertTrue(got[0].endswith(' ' + state), got)
+        self.assertEqual(self.ok('handoffs', '--from', 'kit-9'), [])
+        code, out, err = self.run_cli('handoffs', 'add', '--kind', 'stop', '--state', state,
+                                      '--from', 'kit-9', '--port', self.port)
+        self.assertEqual((code, out), (1, ''))
+        self.assertIn('not a session the hub knows', err)
+        code, out, err = self.run_cli('handoffs', 'add', '--kind', 'pause', '--state', state,
+                                      '--from', 'pm')
+        self.assertEqual((code, out), (2, ''))
+
     def test_a_page_is_published_listed_and_shown(self):
         html = '<h1>Plan</h1>\n<p>café &amp; more</p>\n'
         page = self.file('plan.html', html)
@@ -2001,7 +2021,9 @@ class ArgumentCase(CliCase):
              ('to-pm', 'send'), ('to-pm', 'reply', 'P-001', 'text'), ('inbox',),
              ('inbox', 'add', '--text', 't'), ('inbox', 'read', 'M-001'), ('pages',),
              ('pages', 'show', 'plan'), ('approvals',),
-             ('approvals', 'show', 'A-001'), ('skill-edit',), ('skill-edit', 'show', 'E-001'),
+             ('approvals', 'show', 'A-001'), ('handoffs',),
+             ('handoffs', 'add', '--kind', 'stop', '--state', 'C:/s.md', '--from', 'pm'),
+             ('skill-edit',), ('skill-edit', 'show', 'E-001'),
              ('skill-edit', 'fail', 'E-001', '--why', 'w', '--if-version', '1'),
              ('pending',), ('wait', '--timeout', '0'))
 
@@ -2186,6 +2208,9 @@ class ArgumentCase(CliCase):
                     (('to-pm', 'reply', 'P-001', 'text'), ('POST', '/to_pm/P-001/reply', 'agent')),
                     (('inbox', 'add', '--text', 't'), ('POST', '/inbox', 'agent')),
                     (('inbox', 'read', 'M-001'), ('POST', '/inbox/M-001/read', 'owner')),
+                    (('handoffs', 'add', '--kind', 'stop', '--state', 'C:/s.md', '--from',
+                      'pm'), ('POST', '/handoffs', 'agent')),
+                    (('handoffs', '--from', 'pm'), ('GET', '/handoffs?from=pm', 'agent')),
                     (('questions', 'add', '--title', 't'), ('POST', '/questions', 'agent')),
                     (('questions', 'log', 'Q-001', '--if-version', '3'),
                      ('POST', '/questions/Q-001/log', 'agent')),
