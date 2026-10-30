@@ -394,6 +394,8 @@ Left open: two submissions of one branch started at the same instant can both pa
 
 A later submission prunes payload and log files older than 14 days (`submit.KEEP_S`), keeping every run a land record still has running, whatever its age; a file it cannot delete stays (`submit.prune`). A pruned run's final record can name a log that is gone.
 
+A submission taken (exit 0) is also noted in the session's coordinator event log when one is on, after its lines are printed; that changes nothing the submission says or exits with (docs/coord-state.md "Who appends").
+
 ### Batch
 
 `land.py A B --expect-tip TA --expect-tip TB` lands A and B as one landing: each passes the locked checks, they merge in the order given (`Merge A: <summary>`, then `Merge B: <summary>` on top), the merged tree is gated once against the base (log slug `A+B`), and the last merge is pushed. A conflict on any branch aborts it and drops the earlier merges; a red gate drops them all. Main never held them: they were only in the landing tree. A branch whose tip is already inside another tip of the batch is refused: land the containing branch alone. Each branch gets its own result record (`facts['result_record']` is then a list). The verdict line names the branches joined by `, `. At most `"landing".batch_max` branches (default 3). A batch holding a branch that changes a strict path is REFUSED (Strict paths). Each branch needs its own verdict queued at its tip; the first, in the order given, without one is REFUSED by name (Landing, step 4). Submitted, the batch names one `--reviewed-by` per branch in the same order (Submitting a landing).
