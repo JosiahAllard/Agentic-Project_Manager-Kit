@@ -152,7 +152,9 @@ def parser():
     r = sub.add_parser("run", allow_abbrev=False, help="run a heavy command under the lock",
                        usage="machine_lock.py run --kind K --repo R --slug S [options] -- "
                              "<command...>")
-    r.add_argument("--kind", required=True, help="a kind of the kinds table: its size")
+    r.add_argument("--kind", required=True, help="a kind of the kinds table, or of the \"kinds\" "
+                   "section of the .kit.json in the main checkout of the current directory's "
+                   "repository: its size")
     r.add_argument("--repo", required=True)
     r.add_argument("--slug", required=True)
     r.add_argument("--cores", type=int, metavar="N", help="fewer cpu slots than the kind's "
@@ -355,7 +357,7 @@ def cmd_run(a, cmd, store, argv):
     return run_command(cmd, a.kind, a.repo, a.slug, cores=a.cores, hold=a.hold,
                        gpu_share=a.gpu_share, wait_s=a.wait_s, no_wait=a.no_wait,
                        on_release_cmd=a.on_release, within=a.within, resource=a.resource,
-                       route=router, **common)
+                       route=router, checkout=os.getcwd(), **common)
 
 
 def job_out(data):
@@ -467,7 +469,7 @@ def cmd_hold(a, store):
         spec.update(owner="owner", scope=a.hold_cmd)
         if a.hold_cmd == "slots":
             spec["slots"] = {"cpu": a.cpu, "gpu": a.gpu}
-    r = api.hold_create(who, spec, store)
+    r = api.hold_create(who, spec, store, checkout=os.getcwd())
     code = api_result(r, lambda res: "made: " + st.hold_line(res["hold"]))
     if r["ok"]:
         for n in r["result"]["notes"]:
