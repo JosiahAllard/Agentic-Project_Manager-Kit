@@ -5,11 +5,13 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from kitlib import coordinatorstart
 from kitlib.coordinatorstart import parts
 
 NAME = "alpha-coordinator-a2-n6"
+ENTRY_ALPHA = {"repo": "alpha", "agent": True, "stem": "alpha-coordinator", "name": NAME}
 CLASSIFY = (
     "classify  3 worktree(s) besides the main checkout\n"
     "A landed       0  tip in the base\n"
@@ -63,6 +65,32 @@ class StateNoteTest(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertIn("state note: none found for " + NAME, out[0])
 
+    def test_a_note_is_never_read_whole(self):
+        with tempfile.TemporaryDirectory() as t:
+            p = note(t, "x-coordinator", NAME, "first\n" + ("pad line\n" * 5000) + "last\n")
+            reads = []
+            real_open = open
+
+            def spy(path, mode="r", *a, **kw):
+                f = real_open(path, mode, *a, **kw)
+                if os.path.abspath(str(path)) == os.path.abspath(p):
+                    orig = f.read
+                    f.read = lambda n=-1: (reads.append(n), orig(n))[1]
+                return f
+            with mock.patch("builtins.open", spy):
+                out = parts.state_note({"AGENT_TEMP": t}, NAME, [])
+        self.assertEqual(out[-1], "  | last")
+        self.assertNotIn("first", "\n".join(out))
+        self.assertTrue(reads and all(0 <= n <= parts.TAIL_BYTES for n in reads))
+        self.assertNotIn(-1, reads)                        # read() with no bound would be the whole file
+
+    def test_the_none_found_line_shows_the_home_form_not_a_user_folder(self):
+        with tempfile.TemporaryDirectory() as t:
+            with mock.patch("os.path.expanduser", lambda p: t if p == "~" else p):
+                out = parts.state_note({"AGENT_TEMP": os.path.join(t, "agent")}, NAME, [])
+        self.assertIn("under ~/agent/*-coordinator", out[0])
+        self.assertNotIn(t.replace("\\", "/"), out[0])
+
     def test_a_long_note_is_read_from_its_end_and_capped(self):
         with tempfile.TemporaryDirectory() as t:
             note(t, "x-coordinator", NAME, ("y" * 190 + "\n") * 60)
@@ -86,20 +114,34 @@ class CommandPartsTest(unittest.TestCase):
             parts.hub_pending(None, run)
 
     def test_next_keeps_the_offer_and_drops_what_it_passed_over(self):
-        out = parts.backlog_next("R", "k", lambda a, timeout: NEXT)
-        self.assertEqual(out[0], "backlog next:")
+        out = parts.backlog_next("R", "k", lambda a, timeout: NEXT, where=lambda r: r)
+        self.assertEqual(out[0], "backlog next (local copy, not fetched):")
         self.assertTrue(any("EX-ONE" in l for l in out))
         self.assertFalse(any("passed over" in l or "blockers" in l for l in out))
 
-    def test_next_asks_the_pm_data_worktree_when_the_repo_holds_no_record(self):
-        asked = []
+    def test_next_never_fetches_and_reads_the_store_root(self):
+        seen = []
 
         def run(args, timeout):
-            asked.append(args[args.index("-C") + 1])
-            return NEXT if asked[-1] == "PM" else "BACKLOG empty | 0 records | 0 pullable\n"
-        out = parts.backlog_next("R", "k", run, store=lambda: "PM")
-        self.assertEqual(asked, ["R", "PM"])
-        self.assertTrue(any("EX-ONE" in l for l in out))
+            seen.append(args)
+            return NEXT
+        parts.backlog_next("R", "k", run, where=lambda r: "PM")
+        self.assertEqual(len(seen), 1)
+        self.assertIn("--no-fetch", seen[0])
+        self.assertLess(seen[0].index("--no-fetch"), seen[0].index("next"))   # a global option, before the verb
+        self.assertEqual(seen[0][seen[0].index("-C") + 1], "PM")
+
+    def test_store_root_is_the_pm_data_worktree_only_when_it_names_the_store(self):
+        def root(repo_named, pm):
+            cfg = mock.Mock()
+            cfg.written.return_value = repo_named
+            with mock.patch("kitlib.config.load", return_value=cfg), \
+                    mock.patch("kitlib.backlog.store.pm_data_live_store", return_value=pm):
+                return parts.store_root("R")
+        self.assertEqual(root(None, ("PM", "kit/backlog", None)), "PM")
+        self.assertEqual(root("ref", ("PM", "kit/backlog", None)), "R")      # the repo names its own store
+        self.assertEqual(root(None, ("PM", None, None)), "R")                 # the PM tree names none
+        self.assertEqual(root(None, (None, None, "not found")), "R")
 
     def test_worktrees_keeps_the_class_lines_and_the_stale_rows_not_the_live_rows(self):
         text = "\n".join(parts.worktrees("R", lambda a, timeout: CLASSIFY))
@@ -109,19 +151,48 @@ class CommandPartsTest(unittest.TestCase):
         self.assertNotIn("kit/two", text)
         self.assertNotIn("classify  3", text)
 
+    def test_the_production_defaults_run_classify_read_only_and_parse_its_exit_one(self):
+        # _start_parts with the default runner: hub and next must exit 0, classify may exit 1 and is read
+        argvs = []
+
+        def fake_exec(args, timeout):
+            argvs.append(args)
+            tool = os.path.basename(args[1])
+            return (1, CLASSIFY, "") if tool == "worktree_remove.py" else (0, NEXT if tool == "backlog.py" else "", "")
+        box = {"s": {"kitc": ENTRY_ALPHA}, "e": (ENTRY_ALPHA, None)}
+        with mock.patch.object(parts, "_exec", fake_exec), tempfile.TemporaryDirectory() as t, \
+                mock.patch.object(parts, "store_root", lambda r: r), \
+                mock.patch.object(parts.backlog_next, "__defaults__", (None, lambda r: r)):
+            lines = coordinatorstart._start_parts({"repos_root": "D:/src"}, box, lambda: ENTRY_ALPHA,
+                                                  {"AGENT_TEMP": t}, coordinatorstart._run, None, "H", 5)
+        text = "\n".join(lines)
+        self.assertIn("C half-done", text)                 # exit 1 with output was parsed
+        self.assertNotIn("could not read worktrees", text)
+        classify = [a for a in argvs if os.path.basename(a[1]) == "worktree_remove.py"][0]
+        self.assertIn("--classify", classify)
+        self.assertNotIn("--apply", classify)              # read-only
+        nxt = [a for a in argvs if os.path.basename(a[1]) == "backlog.py"][0]
+        self.assertIn("--no-fetch", nxt)
+
     def test_classify_exit_one_with_output_is_read_but_exit_one_without_is_an_error(self):
-        class R:
-            def __init__(self, rc, out):
-                self.returncode, self.stdout, self.stderr = rc, out, "boom"
-        orig = parts.gitcmd.subprocess_run
-        try:
-            parts.gitcmd.subprocess_run = lambda a, **kw: R(1, CLASSIFY)
+        with mock.patch.object(parts, "_exec", lambda a, t: (1, CLASSIFY, "boom")):
             self.assertIn("C half-done", parts.run_loose(["x"]))
-            parts.gitcmd.subprocess_run = lambda a, **kw: R(1, "")
             with self.assertRaises(RuntimeError):
-                parts.run_loose(["x"])
-        finally:
-            parts.gitcmd.subprocess_run = orig
+                parts.run_strict(["x"])                    # a command that must exit 0
+        with mock.patch.object(parts, "_exec", lambda a, t: (1, "", "boom")):
+            with self.assertRaises(RuntimeError):
+                parts.run_loose(["x", "y"])
+
+    def test_a_timeout_ends_the_whole_process_tree(self):
+        proc = mock.Mock(pid=77)
+        proc.communicate.side_effect = [parts.subprocess.TimeoutExpired("x", 1), ("", "")]
+        killed = []
+        with mock.patch.object(parts.spawn, "popen", return_value=proc), \
+                mock.patch("kitlib.proc.process.proc_ctime", return_value=123), \
+                mock.patch("kitlib.proc.process.kill_tree", lambda pid, ct: killed.append((pid, ct))):
+            with self.assertRaises(parts.subprocess.TimeoutExpired):
+                parts._exec(["x"], 1)
+        self.assertEqual(killed, [(77, 123)])
 
 
 class RunAllTest(unittest.TestCase):

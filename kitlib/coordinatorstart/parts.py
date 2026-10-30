@@ -15,7 +15,8 @@ import threading
 import time
 
 from kitlib import kitroot
-from kitlib.git import cmd as gitcmd
+from kitlib.config import user as kuser
+from kitlib.proc import spawn
 
 PART_TIMEOUT = 5      # seconds for one subprocess part
 DEADLINE = 9          # seconds for all parts together
@@ -27,13 +28,63 @@ NEXT_LINES = 8
 FOLDER_SUFFIX = "-coordinator"
 
 
+def _kill_tree(proc):
+    """End `proc` and every process it started (a timed-out part must leave nothing behind when
+    the hook exits); the child alone when its tree cannot be read."""
+    try:
+        from kitlib.proc import process
+        ctime = process.proc_ctime(proc.pid)
+        if ctime is not None:
+            process.kill_tree(proc.pid, ctime)
+    except Exception:
+        pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def _exec(args, timeout):
+    """(exit code, stdout, stderr). On a timeout the child and its descendants are ended, then
+    subprocess.TimeoutExpired is raised."""
+    proc = spawn.popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        try:
+            proc.communicate(timeout=1)
+        except Exception:
+            pass
+        raise
+    return proc.returncode, out, err
+
+
+def _failed(args, rc, err):
+    return RuntimeError("%s exit %d: %s" % (os.path.basename(args[1] if len(args) > 1 else args[0]), rc,
+                                            err.strip()[:200]))
+
+
+def run_strict(args, timeout=PART_TIMEOUT):
+    """stdout of a command that must exit 0."""
+    rc, out, err = _exec(args, timeout)
+    if rc != 0:
+        raise _failed(args, rc, err)
+    return out
+
+
 def run_loose(args, timeout=PART_TIMEOUT):
     """stdout whatever the exit code (worktree_remove --classify exits 1 when it finds a tree to
     act on); a failure with no stdout raises."""
-    r = gitcmd.subprocess_run(args, capture_output=True, text=True, timeout=timeout)
-    if r.returncode != 0 and not r.stdout.strip():
-        raise RuntimeError("%s exit %d: %s" % (os.path.basename(args[0]), r.returncode, r.stderr.strip()[:200]))
-    return r.stdout
+    rc, out, err = _exec(args, timeout)
+    if rc != 0 and not out.strip():
+        raise _failed(args, rc, err)
+    return out
+
+
+def shown(path):
+    """`path` as messages name it: ~/<path> under the home folder (kitlib.config.user), else whole."""
+    return kuser._shown(path, os.path.expanduser("~")).replace("\\", "/")
 
 
 def capped(lines, cap=CAP):
@@ -58,7 +109,7 @@ def _tail(path, n=TAIL_LINES):
         f.seek(0, os.SEEK_END)
         size = f.tell()
         f.seek(max(0, size - TAIL_BYTES))
-        data = f.read()
+        data = f.read(TAIL_BYTES)
     lines = data.decode("utf-8", "replace").splitlines()
     return [l for l in lines if l.strip()][-n:]
 
@@ -81,9 +132,8 @@ def state_note(env, name, slugs):
         if hits:
             note, guessed = max(hits, key=os.path.getmtime), True
     if note is None:
-        return ["state note: none found for %s under %s/*%s" % (name or "this session", temp.replace("\\", "/"),
-                                                              FOLDER_SUFFIX)]
-    head = "state note%s: %s" % (" (newest, guessed)" if guessed else "", note.replace("\\", "/"))
+        return ["state note: none found for %s under %s/*%s" % (name or "this session", shown(temp), FOLDER_SUFFIX)]
+    head = "state note%s: %s" % (" (newest, guessed)" if guessed else "", shown(note))
     return capped([head + " (last %d lines)" % TAIL_LINES] + ["  | " + l for l in _tail(note)])
 
 
@@ -96,33 +146,30 @@ def hub_pending(key, run, kit=None):
                   + ["  " + l for l in rows])
 
 
-def pm_data_path():
-    """The PM data worktree of the machine config, or None: where a repo whose store is the PM data
-    branch keeps its records (its own checkout then reads an empty default store)."""
-    from kitlib import pmdata
-    cfg = pmdata.machine_settings()
-    return cfg.get("path") if cfg else None
+def store_root(repo):
+    """Where `repo`'s records are read: the repo itself when its .kit.json names a "backlog" store
+    (or no PM data worktree names one), else the PM data worktree that does (the repo's own checkout
+    reads an empty default store then)."""
+    from kitlib.backlog import store
+    from kitlib.config import load as load_config
+    if load_config(repo).written("backlog", "store") is not None:
+        return repo
+    pm_root, named, _ = store.pm_data_live_store(repo)
+    return pm_root if pm_root and named is not None else repo
 
 
-def backlog_next(repo, session, run, kit=None, store=pm_data_path):
-    """The offer, `passed over` and blockers left out. A repo checkout that holds no record at all
-    (`BACKLOG empty | 0 records`) is asked again in the PM data worktree (`store()`), where the
-    kit's own records are."""
-    def ask(where):
-        return run([sys.executable, kitroot.tool("backlog", kit), "-C", where, "--session", session or "kit",
-                    "next"], timeout=PART_TIMEOUT)
-    out = ask(repo)
-    if out.startswith("BACKLOG empty | 0 records"):
-        where = store()
-        if where:
-            out = ask(where)
+def backlog_next(repo, session, run, kit=None, where=store_root):
+    """The offer from the local copy of the store (--no-fetch: the hook writes nothing), `passed
+    over` and blockers left out."""
+    out = run([sys.executable, kitroot.tool("backlog", kit), "-C", where(repo), "--session", session or "kit",
+               "--no-fetch", "next"], timeout=PART_TIMEOUT)
     lines = []
     for l in out.splitlines():
         if l.startswith("  passed over") or l.startswith("  blockers"):
             break     # the offer, not what it skipped
         if l.strip():
             lines.append(l)
-    return capped(["backlog next:"] + ["  " + l for l in lines[:NEXT_LINES]])
+    return capped(["backlog next (local copy, not fetched):"] + ["  " + l for l in lines[:NEXT_LINES]])
 
 
 def worktrees(repo, run, kit=None):

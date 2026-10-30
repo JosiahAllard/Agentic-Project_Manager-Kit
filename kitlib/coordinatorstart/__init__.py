@@ -5,7 +5,7 @@ comes from the "coordinator_start" key of the machine config and is emitted only
 environment variable PM_KIT_ROLE is "coordinator". After the standing lines come the optional ENG
 filing and pricing-pass lines (each switched on in the config), then the live checks (cap,
 machine state, other coordinators, the ledger line, the hub key: the session's sessions.json
-key, which it posts hub questions --from and reads pending --for once at start (answers come by
+key, which it posts hub questions --from (its pending list is printed in the start context; answers come by
 push), or "unknown" when no entry is found), run as in kitlib.pmstart: each is a pure function over fakeable inputs
 (process list, file reads, a subprocess runner, now, the machine config), and a failed one is one
 "could not check X: reason" line. No check reads the rulings ledger: with the split ledger
@@ -155,13 +155,13 @@ def find_entry(sessions, cwd, name=None, root=None):
 
 def hub_key(sessions, entry):
     """[the `hub key: <key>` line]: the sessions.json key of `entry` (find_entry's pick, the same
-    object), the key this coordinator posts hub questions --from and reads pending --for once at
+    object), the key this coordinator posts hub questions --from; its pending list is printed at
     start; it runs no background wait, as the hub pushes its answers and done to-dos
     (docs/action-hub.md "For the PM"). LookupError when no key holds it."""
     for k, v in sessions.items():
         if v is entry and not str(k).startswith("_"):
-            return ["hub key: %s (hub.py questions add --from %s --record REPO:ID|--class C; read "
-                    "hub.py pending --for %s once at start; answers come by push)" % (k, k, k)]
+            return ["hub key: %s (hub.py questions add --from %s --record REPO:ID|--class C; its "
+                    "pending list is in this start context; answers come by push)" % (k, k)]
     raise LookupError("no sessions.json key holds this session's entry")
 
 
@@ -312,6 +312,7 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
                     name = own_name(procs_once(), env, pid)
                 except Exception:
                     name = None
+                box["name"] = name
                 box["s"] = json.loads(read(sf))
                 box["e"] = find_entry(box["s"], cwd, name, cfg.get("repos_root"))
                 if box["e"][1]:
@@ -375,6 +376,8 @@ def _start_parts(cfg, box, entry_once, env, run, run_loose, kit, deadline):
         key = next((k for k, v in box["s"].items() if v is entry and not str(k).startswith("_")), None)
     if run_loose is None:
         run_loose = parts.run_loose if run is _run else run
+    if run is _run:
+        run = parts.run_strict          # the parts' runner ends a timed-out command's whole process tree
 
     def need():
         if entry is None:
@@ -384,7 +387,7 @@ def _start_parts(cfg, box, entry_once, env, run, run_loose, kit, deadline):
     slugs = [s for s in (ledger_name(entry.get("repo")) if entry else None, key,
                          str(entry.get("stem") or "")[:-len(parts.FOLDER_SUFFIX)]
                          if entry and str(entry.get("stem") or "").endswith(parts.FOLDER_SUFFIX) else None) if s]
-    jobs = [("state note", lambda: parts.state_note(env, env.get(NAME_VAR), slugs)),
+    jobs = [("state note", lambda: parts.state_note(env, env.get(NAME_VAR) or box.get("name"), slugs)),
             ("hub pending", lambda: parts.hub_pending(key, run, kit)),
             ("backlog next", lambda: parts.backlog_next(need(), key, run, kit)),
             ("worktrees", lambda: parts.worktrees(need(), run_loose, kit))]
