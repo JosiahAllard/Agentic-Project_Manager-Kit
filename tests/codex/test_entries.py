@@ -17,6 +17,15 @@ SHELL = ROOT / 'hosts' / 'codex' / 'shell'
 HOOK = 'boot/hook.py'                   # the plugin's copy of the kit's one hook entry
 
 
+def _session(line):
+    """A real-log line's session, None for a line that does not parse (readers skip those)."""
+    try:
+        row = json.loads(line)
+    except ValueError:
+        return None
+    return row.get('session') if isinstance(row, dict) else None
+
+
 class Entries(unittest.TestCase):
     def setUp(self):
         scratch = tempfile.TemporaryDirectory(prefix='codex-cache-')
@@ -28,9 +37,14 @@ class Entries(unittest.TestCase):
         self.home.mkdir()
         # The home fence marker stays in the child's environment: without it the child is unfenced
         # and reads the machine's real PM-repo pointer, so a deny appends to the real refusal log.
+        # The old reason for dropping it still holds (kitlib/config/user.py _refused, the
+        # UNPROVEN_MESSAGE raise): where the system will not name the profile folder the fence
+        # refuses even a temp home. That only makes a child's home lookup raise HomeFenced, which
+        # refusal_log.record swallows (no line); the pointer is also left unnamed below, so both
+        # cases write nothing. No CI workflow in the repo runs this file.
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith('MACHINE_LOCK_')
-                    and k not in ('PM_KIT_ROLE', 'PM_KIT_RELEASE_ID')}
+                    and k not in ('PM_KIT_ROLE', 'PM_KIT_RELEASE_ID', 'KIT_PM_REPO_FENCE')}
         self.env.update(PM_KIT_ROOT=str(ROOT), HOME=str(self.home), USERPROFILE=str(self.home),
                         GIT_CEILING_DIRECTORIES=str(self.base), PYTHONDONTWRITEBYTECODE='1')
 
@@ -67,8 +81,7 @@ class Entries(unittest.TestCase):
             if not os.path.exists(real):
                 return 0
             with open(real, encoding='utf-8') as fh:
-                rows = [json.loads(line) for line in fh if line.strip()]
-            return sum(1 for r in rows if r['session'] == probe)
+                return sum(1 for line in fh if _session(line) == probe)
         before = mine()
         denied = self.tool('Bash', {'command': 'find $USERPROFILE -name x', 'shell': 'bash.exe'})
         for text in (denied, '{bad'):
