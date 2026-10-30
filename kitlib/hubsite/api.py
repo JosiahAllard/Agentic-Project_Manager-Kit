@@ -131,8 +131,8 @@ kind, state_path}, all required. from is a session key checked as a question's i
 session key, read now, or `pm`); kind is one of HANDOFF_KINDS (handoff, restart, stop: the word
 of the reply); state_path is the absolute path of the state note, on one line. The hub sets `at`.
 GET handoffs (ANY) gives the newest record of each session (newest_handoffs: the highest id per
-`from`), sorted by key, or with `from=<key>` that key's alone; over the tunnel the state path is
-cut as a finding's is. Every record is kept; none is pending or pushed, no route changes or
+`from`), sorted by key, or with `from=<key>` that key's alone; over the tunnel only, the state
+path is cut to `.../<its file name>` (ntpath.basename). Every record is kept; none is pending or pushed, no route changes or
 deletes one, and GET snapshot leaves them out.
 
 Skill edits (docs/action-hub.md "skill_edits/E-NNN"). The owner writes a new text for one kit
@@ -383,6 +383,7 @@ import collections
 import datetime
 import json
 import math
+import ntpath
 import os
 import re
 import time
@@ -2117,14 +2118,15 @@ def newest_handoffs(docs):
 
 def handoffs_list(api, req):
     """The newest record of each session, sorted by session key; with `from=<key>` that key's
-    alone (none: an empty list). Over the tunnel the state path is cut as _unpathed cuts it."""
+    alone (none: an empty list). Over the tunnel only, the state path is cut to
+    `.../<its file name>`."""
     newest = newest_handoffs(api.store.docs('handoffs'))
     who = _q(req, 'from')
     items = [newest[k] for k in sorted(newest) if not who or k == who]
     if _remote(req):
         for d in items:
             if isinstance(d.get('state_path'), str):
-                d['state_path'] = _unpathed(d['state_path'])
+                d['state_path'] = '.../' + ntpath.basename(d['state_path'])
     return {'items': items}
 
 

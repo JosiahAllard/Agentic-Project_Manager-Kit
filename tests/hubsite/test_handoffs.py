@@ -147,6 +147,11 @@ class ReadTest(Case):
         self.assertEqual(obj['items'][0]['state_path'], '.../state-kit-1.md')
         obj = self.call('GET', '/handoffs', OWNER)[1]
         self.assertEqual(obj['items'][0]['state_path'], STATE)
+        # a path the finding regex stops short in (a backtick) is still cut to its file name
+        self.post(who='kit-2', path=r'Z:\Agent`Temp\a b\state-kit-2.md')
+        items = self.call('GET', '/handoffs', AGENT, via=api.TUNNEL_VIA)[1]['items']
+        self.assertEqual([d['state_path'] for d in items],
+                         ['.../state-kit-1.md', '.../state-kit-2.md'])
 
     def test_a_record_is_never_pending_and_the_snapshot_leaves_them_out(self):
         self.post()

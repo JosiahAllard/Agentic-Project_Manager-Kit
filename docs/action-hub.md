@@ -1293,7 +1293,7 @@ Routes, below `/api/v1`: POST `/handoffs` (agent) adds one record: all three fie
 other is refused (`invalid`, naming the field: an unknown kind, a blank, relative or multi-line path, a key
 the hub does not know). GET `/handoffs` (any role) gives `{items}`, the newest record of each session
 (the highest id per `from`), sorted by key, or with `from=<key>` that key's alone (an unknown key: none).
-Over the tunnel the state path is cut to `.../<file name>`, as a finding's paths are. Every record is
+Over the tunnel only, the state path is cut to `.../<its file name>`; every other caller gets it whole. Every record is
 kept; none is pending or pushed, no route changes or deletes one, and `GET /api/v1/snapshot` leaves them
 out. `hub.py handoffs [--from KEY]` prints `C-1 <kind> from=<key> at=<time> <path>` per session.
 
