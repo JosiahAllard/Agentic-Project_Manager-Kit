@@ -58,7 +58,7 @@ A repo moves to a ref or branch store at go-live (docs/go-live.md): land or port
 
 ## Hub filing
 
-The Action Hub files a story at once, unpriced, through `add` with a `review:` mark, which a coordinator clears after reading (docs/backlog.md "Records"). Its backlog writes go through `kitlib/hubsite/recordwrite.py` with the role check passed (`role_checked`).
+The Action Hub files a story at once, unpriced, through `add` with a `review:` mark, which a coordinator clears after reading (docs/backlog.md "Records"). Its backlog writes go through `kitlib/hubsite/recordwrite.py` with the role check passed (`role_checked`). Its timed job `unblock-conditions` writes there too: a hold whose `until` condition is met is unblocked from that one member in one store commit under `Session: hub-condition`, reason `condition met: <condition>` (`recordwrite.condition_met`; docs/backlog.md "block --until"). Like the owner's hub writes, it adds no audit log line, and the audit check counts it as by design.
 
 ## Hub store-commits job
 

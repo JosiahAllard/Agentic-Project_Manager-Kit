@@ -7,6 +7,7 @@ import collections
 import datetime
 import re
 
+from . import conditions as condmod
 from . import scope as scopemod
 from .errors import Usage
 
@@ -248,6 +249,32 @@ def _answer(v, rules=None):
     return shape if when.tzinfo is None else None
 
 
+def _until(v, rules):
+    """`<member> <condition>`: the end condition of one `blocked_on` member, written by `block
+    --on M --until C` (kitlib/backlog/conditions.py says which conditions a program checks; any
+    other text is kept as free text). The member is one word, in the closed set and not `-`; one
+    line per member, and only a member the record is blocked on (_cross_field)."""
+    member, cond = condmod.split(v)
+    if not member or not cond.strip():
+        return '`%s` is not an until line - `<member> <condition>`' % v
+    if member == '-':
+        return '`-` is not a blocker, so nothing ends on `%s`' % cond
+    return blocked_on_error(member, rules)
+
+
+def until_lines(rec):
+    """[(member, condition)] of the record's `until` lines, in order."""
+    return [condmod.split(v) for v in rec.all('until')]
+
+
+def prune_until(pairs):
+    """`pairs` without the `until` lines of a member that is not in their `blocked_on`: a write
+    that clears a blocker (unblock, an answer, a close's dependents, set) drops its condition
+    with it."""
+    members = set(values(pairs, 'blocked_on'))
+    return [(k, v) for k, v in pairs if k != 'until' or condmod.split(v)[0] in members]
+
+
 def answered(rec):
     """{question id: at} of the record's `answer:` lines (a malformed line is left out)."""
     out = {}
@@ -271,6 +298,7 @@ FIELDS = collections.OrderedDict([
     ('pulled_at', (AT_MOST_ONE, _date)),
     ('pulled_by', (AT_MOST_ONE, _free)),
     ('blocked_on', (ONE_PLUS, None)),            # the closed set, under its own check name
+    ('until', (ANY, _until)),
     ('hold_ruling', (AT_MOST_ONE, _ruling)),
     ('q', (AT_MOST_ONE, _question)),
     ('parked_at', (AT_MOST_ONE, _date)),
@@ -497,6 +525,23 @@ def _cross_field(rec):
                 add(Finding(SCHEMA, path, n, '`answer` holds one line per question, and %s has '
                             'more than one; a re-answer replaces its line' % qid))
             seen_q.add(qid)
+    seen_member = set()
+    for n, key, value in rec.entries:
+        if key != 'until':
+            continue
+        member, cond = condmod.split(value)
+        if not member or not cond.strip():
+            continue                    # the shape is _until's finding
+        if member not in blockers:
+            add(Finding(SCHEMA, path, n, '`until: %s` ends `%s`, and the record is not blocked on '
+                        'it; `unblock` drops its line' % (value, member)))
+        if member in seen_member:
+            add(Finding(SCHEMA, path, n, '`until` holds one line per member, and `%s` has more '
+                        'than one; a re-block with `--until` replaces its line' % member))
+        seen_member.add(member)
+        why = condmod.owner_error(member, cond)
+        if why:
+            add(Finding(SCHEMA, path, n, '`until: %s`: %s' % (value, why)))
     if scopemod.NONE in scopes and len(scopes) > 1:
         add(Finding(SCHEMA, path, rec.line_of('scope'), '`scope: none` touches no tracked file, '
                     'so it cannot sit beside other members'))

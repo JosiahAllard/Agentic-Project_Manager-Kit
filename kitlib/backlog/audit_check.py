@@ -22,7 +22,7 @@ Findings: UNAUDITED (an AUDITED change no line covers), UNKNOWN (a store commit 
 SUBJECTS entry reads), UNMAPPED (a line inside the window whose role is MISSING or not in
 roles.ROLES; every repository's lines). Not findings: a change by a session in BY_DESIGN, whose
 writes add no line by design (the landing's close, the Action Hub's writes, the daily full run's
-pricing; docs/backlog.md
+pricing, the hub's unblock of a met `until` condition; docs/backlog.md
 "Audit log", Known limit), is counted.
 
 UNVERIFIED (docs/backlog.md "Audit log"): each `answer:` line a change
@@ -59,9 +59,10 @@ from .errors import Failure, Refusal
 OK, FINDINGS, NOT_CHECKED = 0, 1, 2
 
 # The sessions whose store writes add no line by design: kitlib.backlog.at_landing.SESSION,
-# kitlib.hubsite.recordwrite.SESSION and kitlib.dailyfull.file.SLUG (tests/backlog/test_audit.py
-# holds them equal).
-BY_DESIGN = ('gate-land', 'owner-hub', 'daily-full')
+# kitlib.hubsite.recordwrite.SESSION, kitlib.dailyfull.file.SLUG and
+# kitlib.hubsite.recordwrite.CONDITION_SESSION (the hub's unblock of a met `until` condition;
+# tests/backlog/test_audit.py holds them equal).
+BY_DESIGN = ('gate-land', 'owner-hub', 'daily-full', 'hub-condition')
 
 # The one writer of an `answer:` line (kitlib.hubsite.recordwrite.SESSION), the commit subject
 # that may carry one it left uncommitted (store.catch_up), and the hub question statuses that hold

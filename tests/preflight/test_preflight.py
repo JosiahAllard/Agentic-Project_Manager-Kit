@@ -264,7 +264,7 @@ class TheReadings(Fixture):
         wt = self.repo.worktree('y', 'x/y')
         out = self.run_preflight()[1]
         self.assertEqual(self.line(out, 'worktrees '), 'worktrees 2')
-        self.assertIn('            %s  %s [x/y]' % (os.path.normpath(wt), self.head), out)
+        self.assertIn('            %s  %s [x/y]' % (os.path.normpath(wt).replace('\\', '/'), self.head), out)
 
     def test_a_failed_worktree_list_is_unknown(self):
         real = cmd.spawner()
@@ -282,13 +282,34 @@ class TheReadings(Fixture):
         sub = os.path.join(self.root, 'sub')
         os.makedirs(sub)
         out = self.run_preflight(where=sub)[1]
-        self.assertEqual(self.line(out, 'repo '), 'repo      %s' % os.path.normpath(self.root))
+        self.assertEqual(self.line(out, 'repo '), 'repo      %s' % os.path.normpath(self.root).replace('\\', '/'))
 
     def test_without_c_the_checkout_is_the_current_directory(self):
         os.chdir(self.root)
         code, out = self.run_preflight(where=False)
         self.assertEqual(code, 0, out)
-        self.assertEqual(self.line(out, 'repo '), 'repo      %s' % os.path.normpath(self.root))
+        self.assertEqual(self.line(out, 'repo '), 'repo      %s' % os.path.normpath(self.root).replace('\\', '/'))
+
+    def test_a_checkout_path_with_a_space_is_printed_whole_in_forward_slashes(self):
+        top = 'Z:%smy dir%srepo' % (chr(92), chr(92))
+        with mock.patch.object(preflight.repo, 'toplevel', return_value=(top, None)),                 mock.patch.object(preflight.report, 'report', return_value=['repo      ' + top]):
+            code, out = self.run_preflight()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.line(out, 'repo '), 'repo      Z:/my dir/repo')
+
+    def test_no_printed_path_has_a_backslash(self):
+        out = self.run_preflight()[1]
+        self.assertNotRegex(out, r'[A-Za-z]:\\')
+
+    def test_a_c_with_the_backslashes_eaten_names_the_forward_slash_form(self):
+        code, out = self.run_preflight(where='Z:GitHubnowhereatall')
+        self.assertEqual(code, 2)
+        self.assertIn('Instead: pass forward slashes, as -C Z:/GitHubnowhereatall', out)
+
+    def test_real_c_paths_in_either_slash_are_not_taken_for_mangled(self):
+        for where in (self.root, self.root.replace('\\', '/')):
+            code, out = self.run_preflight(where=where)
+            self.assertEqual(code, 0, out)
 
     def test_a_directory_in_no_repository_is_a_usage_error(self):
         outside = os.path.join(self.repo.base, 'outside')
@@ -326,7 +347,7 @@ class TheDocsLine(Fixture):
         with open(os.path.join(self.kit, 'tools', 'doc_budget.py'), 'w', encoding='utf-8') as fh:
             fh.write('import sys\nprint("DOC BUDGET OK " + " ".join(sys.argv[1:]))\n')
         docs = self.line(self.run_preflight()[1], 'docs ')
-        self.assertIn('DOC BUDGET OK -C %s' % os.path.normpath(self.root), docs)
+        self.assertIn('DOC BUDGET OK -C %s' % os.path.normpath(self.root).replace('\\', '/'), docs)
 
 
 class TheLinesAfterTheWorktrees(Fixture):
@@ -436,8 +457,8 @@ class TheLinesAfterTheWorktrees(Fixture):
         with open(os.path.join(self.home, user.DIR_NAME, user.FILE_NAME), 'w', encoding='utf-8') as fh:
             json.dump({'ledger_repos': ['beta']}, fh)
         out = self.run_preflight()[1]
-        self.assertEqual(self.line(out, 'config '), 'config    BROKEN ' + user.locate(self.home).error)
-        self.assertIn(os.path.join(folder, user.FILE_NAME), self.line(out, 'config '))
+        self.assertEqual(self.line(out, 'config '), 'config    BROKEN ' + user.locate(self.home).error.replace('\\', '/'))
+        self.assertIn(os.path.join(folder, user.FILE_NAME).replace('\\', '/'), self.line(out, 'config '))
         self.assertLess(out.index('\nconfig '), out.index('\nindex '))
 
 

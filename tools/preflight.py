@@ -24,7 +24,7 @@ sys.path.insert(0, KIT)
 
 from kitlib.config import ConfigError, load as load_config        # noqa: E402
 from kitlib.git import refs, repo                                   # noqa: E402
-from kitlib.preflight import board, report, state                  # noqa: E402
+from kitlib.preflight import board, paths, report, state           # noqa: E402
 
 USAGE = 2
 
@@ -73,6 +73,9 @@ def main(argv=None, lock_reader=None, home=None):
         why = refs.bad_rev(a.base)
         if why:
             p.error('--base: %s' % why)
+    fixed = paths.mangled_dir(a.dir)
+    if fixed:
+        p.error(paths.mangled_message(a.dir, fixed))
     top, why = repo.toplevel(os.path.abspath(a.dir))
     if top is None:
         p.error('-C: %s' % why)
@@ -85,17 +88,17 @@ def main(argv=None, lock_reader=None, home=None):
             board_lines = board.lines(top, cfg, KIT, base=a.base)
             rel = board.state_file(cfg)
     except ConfigError as e:
-        print_safe('preflight: refused: kit configuration: %s' % e)
+        print_safe(paths.forward('preflight: refused: kit configuration: %s' % e))
         return USAGE
     for line in lines + (board_lines or []):
-        print_safe(line)
+        print_safe(paths.forward(line, top))
     if a.write_state:
         where, why = state.path(repo.main_checkout_toplevel(top) or top, rel)
         if where is None:
             print_safe('preflight: refused: %s' % why)
             return USAGE
         size = state.write(where, time.strftime('%Y-%m-%d %H:%M'), '\n'.join(board.state_lines(lines, board_lines)))
-        print_safe('state written: %s (%d bytes)' % (where, size))
+        print_safe(paths.forward('state written: %s (%d bytes)' % (where, size), where))
     return 0
 
 
