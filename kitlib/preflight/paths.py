@@ -1,5 +1,6 @@
 """Paths as the tools print them: forward slashes (Git Bash eats a backslash typed in a copied
-path, so `-C Z:\\GitHub\\x` arrives as `Z:GitHubx`), and the -C that shows that damage."""
+path, so a drive-letter `-C` with backslashes arrives with none), and the -C that shows that
+damage."""
 import os
 import re
 
