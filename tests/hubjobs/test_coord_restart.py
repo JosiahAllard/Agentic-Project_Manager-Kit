@@ -1172,6 +1172,31 @@ class OwnerJob(JobBase):
             self.run_job()
         self.assertEqual(len(self.calls), 1)
 
+    def test_a_woken_session_that_starts_and_stops_between_two_runs_is_not_woken_again(self):
+        self.held_run()
+        self.items = [item('question', 'EX-Q7', NOW + 30)]
+        self.down()
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.records()['kit']['started_at'], self.now)   # the start resets it
+        self.stop()                                               # up and down before the next run
+        for _ in range(4):
+            self.now += 3600
+            self.run_job()
+        self.assertEqual(len(self.calls), 1)
+
+    def test_started_at_keeps_the_earliest_of_the_stored_and_the_live_values(self):
+        self.live = ['kit-coord-a1']
+        self.run_job()
+        self.created = NOW - 100                                  # only a later session still runs
+        self.run_job()
+        self.assertEqual(self.records()['kit']['started_at'], NOW - 3600)
+        rows = [dict(proc('kit-coord-a1'), Created=iso(NOW - 50)),
+                dict(proc('kit-coord-a1'), Created=iso(NOW - 4000))]
+        self.procs = lambda: rows
+        self.job = self.new_job()
+        self.run_job()
+        self.assertEqual(self.records()['kit']['started_at'], NOW - 4000)   # the earliest row of a name
+
     def test_pending_unread_is_a_note_and_the_records_wake_still_runs(self):
         self.held_run()
         self.items = C.OwnerUnread('the hub gives the job no pending read')

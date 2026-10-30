@@ -399,8 +399,8 @@ class Sources(object):
                    user's), for a job that reads it again
       pending      callable(for_key) -> the pending items for a session key (Api.pending: each
                    with kind, id, from, at). Set by build() once the Api exists, before the
-                   jobs are made; None before. Read only: unlike GET pending it marks nothing
-                   handed or seen.
+                   jobs are made; None before. Read only: unlike GET pending it sets no handed/seen
+                   marks (the routing's own clean-up of marks for items gone is not one).
     """
 
     def __init__(self, tokens=None, static_dir=STATIC_DIR, pm_data=None, notices=None, repos=None,

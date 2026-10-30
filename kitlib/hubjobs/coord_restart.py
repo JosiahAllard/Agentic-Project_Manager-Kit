@@ -547,7 +547,11 @@ class RestartJob(object):
         rows = lookup.launched(self.procs())
         live = {lookup.rc_name(p.get('CommandLine')) for p in rows}
         live.discard(None)
-        created = {lookup.rc_name(p.get('CommandLine')): row_created(p) for p in rows}
+        created = {}
+        for p in rows:
+            n, t = lookup.rc_name(p.get('CommandLine')), row_created(p)
+            if t is not None:
+                created[n] = t if n not in created else min(created[n], t)
         changed = self._note_sightings(sessions, live, records, now, created)
         down = {k: e for k, e in pmstart.down_entries(sessions, live)
                 if not k.startswith('_') and e.get('agent') and e.get('stem')}
@@ -592,6 +596,7 @@ class RestartJob(object):
             key, d, entry = started
             rec = records.setdefault(key, {})
             rec['starts'] = recent_starts(rec, now) + [now]
+            rec['started_at'] = now     # the new session starts now; a sighting replaces it with its Created
             self._write_records(records)    # before the start: a crash mid-start still counts
             changed = False
             self._start(key, d, entry)
@@ -701,7 +706,7 @@ class RestartJob(object):
 
     def _note_sightings(self, sessions, live, records, now, created=None):
         """Record seen_at, the account and started_at (the earliest creation time of the stem's
-        live processes, `created` {name: epoch or None}; dropped when none is known) for every
+        live processes, `created` {name: epoch}, and the stored value: the minimum, reset only by a start) for every
         coordinator entry with a live session of its stem; True when anything changed."""
         changed = False
         for key, entry in state.entries(sessions):
@@ -714,10 +719,11 @@ class RestartJob(object):
             rec = records.setdefault(key, {})
             rec['seen_at'] = now
             starts = [t for t in ((created or {}).get(n) for n in mine) if t is not None]
+            old = rec.get('started_at')
+            if isinstance(old, (int, float)) and not isinstance(old, bool):
+                starts.append(old)      # an earlier session of the stem exiting must not move it forward
             if starts:
                 rec['started_at'] = min(starts)
-            else:
-                rec.pop('started_at', None)
             rec.pop('held', None)       # running again: the stop it was held on is over
             acct = name_account(mine[-1])
             if acct is not None:
