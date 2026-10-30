@@ -545,7 +545,19 @@ store's git push (the `push` setting).
   next success (`job_event`). A job may push a word of its own with `ctx.event(word, detail=None)`;
   a detail is one more header field, `[hub push] job <name> <word> detail:<detail> route:pm
   attempt:<k>`, cut to the header alphabet like every field (a sha or a count, never prose). Each job
-  owes at most one push: a newer event replaces one not yet written, its detail with it.
+  owes at most one push: a newer event replaces one not yet written, its detail with it, except a
+  word in `push.JOB_EACH` (`unblocked`), owed once per detail, so two records unblocked in one round
+  are two pushes. `unblock-conditions` (`kitlib/hubjobs/unblock_conditions.py`, every 300 s) reads
+  each `launcher.repos` repository's store with no fetch and, on each blocked record, each `until`
+  line it may act on (docs/backlog.md "block --until"); a met condition clears that one member in one
+  store commit under `Session: hub-condition` (`recordwrite.condition_met`, which re-reads the record
+  and writes nothing when the line is gone) and pushes `unblocked` with detail `<repo>:<ID>`. A
+  to-do or question is read from its hub store document on disk, a record from the named
+  repository's store, a plugin folder under `pluginsource` `export_dir`. Free text, a member the
+  record is not blocked on, an `owner` member on anything but a to-do or a question, and a condition
+  that cannot be read are never acted on; nothing met is a skip, and a store that cannot be read or
+  a refused write is a failure once the pass has done the rest. A stopped coordinator learns of the
+  opened record from `coord-restart`'s backlog wake; nothing else is pushed.
   `session-watch` (`kitlib/hubjobs/session_watch.py`, docs/pm-watch.md "Hub session-watch job") runs
   pm_watch's checks every 60 s, first at 30 s, and pushes at most once a run: one event as its kind
   (`idle`, `stopped`, `usage`, `reset`, `bgfail`, `locknotice`, `remote`, `error`) with its subject

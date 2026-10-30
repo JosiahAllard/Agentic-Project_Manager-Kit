@@ -1,4 +1,4 @@
-"""A hold's end condition that a program can check: the `until` key (docs/backlog.md "Fields",
+"""A hold's end condition that a program can check: the `until` key (docs/backlog.md "Records",
 "block --until").
 
 An `until` line is `<member> <condition>`: the `blocked_on` member it ends and, after one space,
