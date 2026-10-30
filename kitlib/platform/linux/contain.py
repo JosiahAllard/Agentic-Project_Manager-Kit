@@ -416,10 +416,15 @@ TERMINAL = (signal.SIGINT, signal.SIGQUIT, signal.SIGHUP)
 for s in TERMINAL:
     signal.signal(s, signal.SIG_IGN)
 uid, gid = os.getuid(), os.getgid()
+def idmap(uid, n):
+    # root (sudo's root steps) maps every id, as only root may: with its own id alone mapped,
+    # every other user's file is unmapped in the job, root's capabilities do not reach it, and a
+    # folder such as a 0750 home is closed to root as to a stranger (git: failed to stat)
+    return '0 0 4294967295' if uid == 0 else '%d %d 1' % (n, n)
 try:
     os.unshare(os.CLONE_NEWUSER | os.CLONE_NEWPID)
-    for name, text in (('setgroups', 'deny'), ('uid_map', '%d %d 1' % (uid, uid)),
-                       ('gid_map', '%d %d 1' % (gid, gid))):
+    for name, text in (('setgroups', 'deny'), ('uid_map', idmap(uid, uid)),
+                       ('gid_map', idmap(uid, gid))):
         with open('/proc/self/' + name, 'w') as f:
             f.write(text)
 except (AttributeError, OSError) as e:
