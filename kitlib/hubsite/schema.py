@@ -5,7 +5,7 @@ field tables), checked by the store before every write.
   ID_PREFIX              {collection: prefix} of the collections whose ids the store assigns
   STORE_KEYS             the keys the store itself sets on every document (version, updated_at)
   check(coll, fields)    [kitlib.hubvalidate.Finding]: an `error` per missing required field, per
-                         field of the wrong type, and per to_pm or approvals kind that is not
+                         field of the wrong type, and per to_pm, handoffs or approvals kind that is not
                          known (an unknown status is kitlib.hubvalidate's status-unknown error);
                          an approval's required fields depend on its kind (BY_KIND)
   check_id(doc_id)       an error message for a document id that cannot be a file name, else None
@@ -24,7 +24,7 @@ import re
 from kitlib import hubvalidate
 
 COLLECTIONS = ('questions', 'inbox', 'todos', 'to_pm', 'stories', 'pages', 'page_html', 'repos',
-               'approvals', 'schedules', 'finding_marks', 'skill_edits', 'landings')
+               'approvals', 'schedules', 'finding_marks', 'skill_edits', 'landings', 'handoffs')
 ID_PREFIX = {coll: prefix for prefix, coll in hubvalidate.REF_COLLECTIONS.items()}
 STORE_KEYS = ('version', 'updated_at')
 CODE = 'schema-field'
@@ -84,8 +84,13 @@ FIELDS = {
         'verdict': _STR, 'code': _INT, 'summary': _STR, 'gate_once': _BOOL, 'escalated': _BOOL,
         'repo': _STR, 'main_branch': _STR, 'main': _STR, 'records': _LIST, 'mode': _STR,
         'deploy': _STR, 'posted_at': _STR}),
+    # kitlib.hubsite.api, "Hand-offs": a session's record that it checkpointed and stands down
+    # (from: its session key; kind: KINDS['handoffs']; state_path: its state note); the api
+    # takes from, kind and state_path only and sets at
+    'handoffs': (('from', 'kind', 'state_path', 'at'), {
+        'from': _STR, 'kind': _STR, 'state_path': _STR, 'at': _STR}),
 }
-KINDS = {'to_pm': ('question', 'fyi', 'act')}
+KINDS = {'to_pm': ('question', 'fyi', 'act'), 'handoffs': ('handoff', 'restart', 'stop')}
 # {collection: {kind: more required fields}}: a document of such a collection needs its kind's
 # fields too, None standing for a document with no kind; any other kind is an error
 BY_KIND = {'approvals': {None: ('head', 'files'), 'op': ('op', 'line', 'args_sha256')}}

@@ -1275,6 +1275,28 @@ new main (`<repo> <main_branch> at <main>`, so a batch's branches sit together),
 A row's chips are the repo, the verdict, the mode and Deploy when the tip carried a deploy note; its card
 (`landingCard`) gives the tip, new main, verdict and summary, gate, records closed and the deploy note.
 
+## handoffs/C-NNN
+A session's hand-off record: written beside its ready reply to the PM (skill session-handoff step 5),
+with the reply's word and state note path, through the MCP tool `hub_handoff_ready` or `tools/hub.py
+handoffs add`. The types are `schema.FIELDS['handoffs']`; the source is `kitlib/hubsite/api.py`
+docstring "Hand-offs".
+
+| Field | Written by | Meaning |
+|---|---|---|
+| (doc id) | server | `C-001`, `C-002`, ...: the document's id, not a field; a higher number is newer |
+| from | agent | the session's key: a launcher session key (sessions.json, read on each add) or `pm`, checked as a question's `from` is |
+| kind | agent | `handoff`, `restart` or `stop` (`api.HANDOFF_KINDS`): the ready reply's word |
+| state_path | agent | the absolute path of the state note, on one line |
+| at | server | ISO time the hub took it |
+
+Routes, below `/api/v1`: POST `/handoffs` (agent) adds one record: all three fields are required and any
+other is refused (`invalid`, naming the field: an unknown kind, a blank, relative or multi-line path, a key
+the hub does not know). GET `/handoffs` (any role) gives `{items}`, the newest record of each session
+(the highest id per `from`), sorted by key, or with `from=<key>` that key's alone (an unknown key: none).
+Over the tunnel only, the state path is cut to `.../<its file name>`; every other caller gets it whole. Every record is
+kept; none is pending or pushed, no route changes or deletes one, and `GET /api/v1/snapshot` leaves them
+out. `hub.py handoffs [--from KEY]` prints `C-1 <kind> from=<key> at=<time> <path>` per session.
+
 ## Machine lock routes
 The hub server reads and changes the machine lock in-process through `kitlib.lock.api` (the owner's
 decision), for the schedule page. `kitlib/hubsite/api.py` docstring "Machine lock" is the source; the
