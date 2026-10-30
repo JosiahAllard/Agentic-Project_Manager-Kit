@@ -43,22 +43,28 @@ class Follow(unittest.TestCase):
         self.assertEqual(self.record(), os.path.normpath(self.kit(NEW)))
         self.assertIn(NEWER, headerfollow.line('C:/kit', self.payload, current=self.kit(NEWER), now=self.later()))
 
+    def age(self, minutes, k='abc-123-main'):
+        """Date the record `minutes` back, as if its folder was named to the session then."""
+        then = time.time() - minutes * 60
+        os.utime(os.path.join(self.root, headerfollow.HEADERS, k), (then, then))
+
     def test_while_the_old_folder_is_there_the_line_waits_an_hour_from_the_last_one(self):
         headerfollow.note(self.kit(OLD), self.payload, event='SessionStart')
-        soon = time.time() + headerfollow.EVERY_S - 60
-        self.assertIsNone(headerfollow.line('C:/kit', self.payload, current=self.kit(NEW), now=soon))
-        self.assertIsNone(headerfollow.line('C:/kit', self.payload, current=self.kit(NEWER), now=soon))
+        self.age(59)
+        self.assertIsNone(headerfollow.line('C:/kit', self.payload, current=self.kit(NEW)))
+        self.assertIsNone(headerfollow.line('C:/kit', self.payload, current=self.kit(NEWER)))
         self.assertEqual(self.record(), os.path.normpath(self.kit(OLD)))     # not spent while held back
-        line = headerfollow.line('C:/kit', self.payload, current=self.kit(NEWER), now=self.later())
-        self.assertIn(NEWER, line)
+        self.age(61)
+        self.assertIn(NEWER, headerfollow.line('C:/kit', self.payload, current=self.kit(NEWER)))
         # the line just given starts the next hour: a refresh right after it is held back again
-        self.assertIsNone(headerfollow.line('C:/kit', self.payload, current=self.kit(NEW),
-                                            now=time.time() + 60))
+        self.assertIsNone(headerfollow.line('C:/kit', self.payload, current=self.kit(NEW)))
+        self.age(61)
+        self.assertIn(NEW, headerfollow.line('C:/kit', self.payload, current=self.kit(NEW)))
 
     def test_a_session_whose_old_folder_is_gone_is_told_at_once(self):
         headerfollow.note(self.kit(OLD), self.payload, event='SessionStart')
         os.rename(self.kit(OLD), self.kit(OLD) + pluginsource.CLAIM + '42')     # prune's claim
-        line = headerfollow.line('C:/kit', self.payload, current=self.kit(NEW), now=time.time())
+        line = headerfollow.line('C:/kit', self.payload, current=self.kit(NEW))
         self.assertIn(NEW, line)
         self.assertEqual(self.record(), os.path.normpath(self.kit(NEW)))
 
