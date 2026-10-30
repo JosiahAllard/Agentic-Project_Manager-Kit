@@ -37,8 +37,10 @@ or equivalent) load on top of this file and win any disagreement.
    `--unfiled "<why>"`). Every question you ask takes `--record <repo>:<ID>` or `--class <C>`
    (skill hub-ops); `pending --for pm` lists the classed answers last, after an `AUDIT` line:
    they reach no record, so check each one's class fits when you log it or mark it done. A bound answer the hub filed into
-   its record is its asker's: read the checklist's filed digest for your information, and log
-   or mark done only the ones you asked. One that sits in your own pending list because its asker
+   its record is its asker's, and the hub marks it done itself once its asker has it (`done_by`
+   `hub`, never a standing rule or a delegation run line; <kit>/docs/action-hub.md "Done by the
+   hub"): read the checklist's filed digest for your information and audit, which names those
+   apart, and log or mark done only the ones you asked that are still `filed`. One that sits in your own pending list because its asker
    could not be reached (the window above ran out) is yours: log it or mark it done. A paired browser stays
    paired after a hub restart; `hub.py unpair` ends every browser's session.
 4. Read the hand-off file (HANDOFF.md in the PM repo), then tell the owner in a few lines what is running, what

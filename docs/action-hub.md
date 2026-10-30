@@ -300,7 +300,8 @@ launcher's sessions.json, read again on each add; any other value is refused, an
 `--from` is the PM's. The answer stays pending for everyone, the PM included, until the PM logs the
 ruling in the rulings ledger and then marks the question logged (`questions log`, which takes no ruling
 id: the ledger entry's Source names the question), or marks it done when it needs no ruling (`questions
-done`), so each `pending` read lists it again and a plain wait would print it again at once: a caller
+done`; a bound question's filed answer the hub marks done itself once its asker has it, "Done by the
+hub"), so each `pending` read lists it again and a plain wait would print it again at once: a caller
 that does wait passes `--except` and every id it has acted on (`wait --pending --for <its key> --except
 Q-7 T-3`). Every verb takes `--port N` and `--json` (the server's answer as one JSON line). The server
 alone decides what a role may do: the owner's verbs (answer, todos done, stories add and withdraw, to-pm
@@ -408,8 +409,11 @@ otherwise, so the PM is the fallback for a creator that is gone (`route`, "Route
   (default `pm`) must be one of the two, else `forbidden` (field `from`) and the question is unchanged;
   like the edit check it is a claim, since agents share one token. A done question is no longer pending
   and its push ends (`questions_done`). A question bound to a record whose answer the hub filed (status
-  `filed`, "Filing the answer") stays pending, with `filed` true on the item, until its asker logs it or
-  marks it done: both take a filed question as they take an answered one.
+  `filed`, "Filing the answer") stays pending, with `filed` true on the item, until its asker has it: the
+  hub then marks it done itself ("Done by the hub"). Until then its asker may log it or mark it done:
+  both take a filed question as they take an answered one. `questions done` of a question the hub
+  already marked done writes nothing and answers ok, with its version and `done_by` `hub`; the `from`
+  check comes first, so another key is still `forbidden`.
 - `--for pm` lists the PM's items and every answered question, whoever asked it, because the PM logs
   each ruling, and every decided approval. A filed question is on it only while it is the PM's: the PM
   asked it, or its asker cannot be reached, so an answer filed while its asker is gone still reaches
@@ -466,8 +470,9 @@ store's git push (the `push` setting).
     asked is told once. Until 2026-10-27 `held` went to nobody and `freed` only to the PM, on the
     assumption that a live session would find the answer by itself; live coordinators did not, and owner
     answers sat unread (KIT-HUB-FILED-ANSWER-NO-PUSH). The PM start's digest still counts the answers
-    filed since the last start that are still `filed` (docs/pm-start.md "Filed answers"); a logged or
-    done one drops out.
+    filed since the last start that are still `filed`, and those the hub marked done (`done_by` `hub`,
+    named apart; docs/pm-start.md "Filed answers"); a logged one, or one its asker marked done, drops
+    out.
 
   The phase a question goes through while it is being filed is skipped: a filed answer is judged against
   the question as it was before the answer (a first answer or a re-answer). An answer that is a standing
@@ -489,7 +494,8 @@ store's git push (the `push` setting).
   by picking the item up (`pending --for` or `wait --pending --for` hands it over), or by `todos ack`;
   the PM by `todos ack` for a to-do and by `questions log` or `questions done` for a question; for a
   question the hub filed into its record (status `filed`) asked by another session, by the filing itself,
-  since its asker reads it; for a filed answer's note to the PM that asked it, its `freed` ping and its
+  since its asker reads it; once the asker of a filed answer has it (its pick-up, or the PM that asked:
+  the first written try), the worker marks the question done ("Done by the hub"); for a filed answer's note to the PM that asked it, its `freed` ping and its
   push to a record's coordinator, by the first written try; for a standing rule, only by logging it (a standing rule is never
   marked done); for a story, any change of its status (`stories set`), for a skill edit, any change
   of its status (`skill-edit done` or `fail`, the owner's withdraw), and for a note to the PM, its
@@ -593,7 +599,7 @@ Tests: tests/hubsite/test_push.py, tests/host/test_claude_peer.py, tests/launche
 ## questions/Q-NNN
 | Field | Written by | Meaning |
 |---|---|---|
-| status | PM, owner, hub | `open`, then `answered` (owner), then `logged` (PM), or `done` (PM: no ruling needed, `questions done`), or `filed` (hub: the answer was filed into the bound record, "Filing the answer"), then `logged` or `done` (its asker) |
+| status | PM, owner, hub | `open`, then `answered` (owner), then `logged` (PM), or `done` (PM: no ruling needed, `questions done`), or `filed` (hub: the answer was filed into the bound record, "Filing the answer"), then `logged` or `done` (its asker), or `done` (hub, with `done_by` `hub`, once its asker had it: "Done by the hub") |
 | repo, from, asked_at | PM, coordinator | where it came from; `from` is `pm` or the asking coordinator's launcher session key, the session its answer goes back to; asked_at is ISO time |
 | title | PM | the question itself |
 | context | PM | everything needed to answer; nothing is assumed from chat |
@@ -602,7 +608,8 @@ Tests: tests/hubsite/test_push.py, tests/host/test_claude_peer.py, tests/launche
 | urgent | PM | true sorts it to the top with an Urgent marker; only for items that block work or have a deadline |
 | refs, story | PM | ids it refers to; the story a follow-up question belongs to |
 | answer | owner | `{choice: index or "other", label, note, at}` |
-| done_why, done_at | PM | why the answer needed no ruling, and when it was marked done (ISO time) |
+| done_why, done_at | PM, asker, hub | why the answer needed no ruling, and when it was marked done (ISO time); the hub's is `filed into <repo>:<id>` |
+| done_by | hub | `hub` when the hub marked it done ("Done by the hub"), for the PM's audit; null otherwise, and cleared by a re-answer or a promote |
 | unfiled_why | PM | why an answer whose filing failed for good was logged or marked done anyway ("Filing the answer") |
 | record | PM, coordinator | `{repo, id}`: the backlog record the question is about; absent or null on an unbound question |
 | class | PM, coordinator | `rule`, `machine`, `cross-repo` or `go`: what kind of question one bound to no record is ("A question's class"); absent or null on a bound question |
@@ -691,9 +698,10 @@ The hub files the owner's answer to a bound question into the record itself, in 
    answer that ends the wait frees it too), `held` otherwise (it still waits on more, or it was open), and
    null when a read that decides it cannot tell (no record view, a view that raised, no fields, a
    completed record). The push reads it to choose who hears. A filed question stays pending for its
-   asker, with `filed` true, until the asker logs it (`questions log`, once its ruling is in the ledger)
-   or marks it done (`questions done`), so an asker busy when the owner answers still finds the answer in
-   the push and on its next `pending --for KEY`. It is the PM's only when the PM asked it or its asker
+   asker, with `filed` true, until the asker has it, and the hub then marks it done ("Done by the
+   hub"); until then the asker may log it (`questions log`, once its ruling is in the ledger) or mark it
+   done (`questions done`), so an asker busy when the owner answers still finds the answer in the push
+   and on its next `pending --for KEY`. It is the PM's only when the PM asked it or its asker
    cannot be reached ("Who handles a pending item"). The page shows a filed card as `filed in <record id>
    · waiting for <asker> to read it` (the PM for its own question) and keeps its Change answer button: a
    re-answer files again. A delegation run line answered on a bound question waits for the asker's log
@@ -732,6 +740,31 @@ Known limits:
 - After the store reports an Uncommitted error the line is already in the record, so the retry changes
   nothing and marks the question `filed` before the store's catch-up applies it.
 
+#### Done by the hub
+A filed answer is the asker's to act on, and it needs no ruling: the record already carries it. So the
+hub marks the question done itself once its asker has it, and nobody has to (`kitlib.hubsite.push`
+`auto_done_ok`, `_hub_done`):
+- Which: a question with status `filed`, a known `filed_as` (`pulled`, `freed` or `held`) and a record,
+  that is not a standing rule and whose options and answer carry no delegation run line (`run D-NNN`,
+  which waits for its asker's log step, `kitlib.delegations.run` `hub_order`). A standing rule, an
+  unbound question (a classed one too), an answer whose filing failed and one filed with no `filed_as`
+  stay as they are, for the PM or their asker.
+- When: never in the filing's own write. The push worker writes it once the asker has the answer: its
+  pick-up (`pending --for` or `wait --pending --for` hands it over), or, when the PM asked, the first
+  written try of the PM's push; an asker that picked it up before the push fired has it at once. When
+  the push goes to a stand-in (the record's coordinator, or the PM's `freed` ping), the asker is still
+  owed it, unsent: it is done once the asker reads it, and the stand-in's push and the `freed` ping run
+  their course first. An asker that never reads it leaves it `filed` (no gave-up line for it).
+- How: status `done`, `done_by` `hub`, `done_why` `filed into <repo>:<id>`, `done_at`, via `hub-push`,
+  pinned to the version the question had when its push fired: a new answer, a promote, the asker's own
+  log or done, or any other write since wins, the question stays as it is and the server logs `push: Q-n
+  not marked done: conflict`. The entry survives a server restart (push-state.json).
+- Afterwards: it is no longer pending. Its card says `filed in <record id> · done by the hub once <asker>
+  had it` and keeps Change answer (a re-answer reopens it: `answered`, `done_by`, `done_why` and
+  `done_at` cleared, filed again, and pushed to its asker afresh) and Make it a standing rule (a promote
+  files it again: status `filed`, for the PM to log). The PM start's digest counts it apart
+  (docs/pm-start.md "Filed answers").
+
 #### A standing rule
 An answer to a bound question goes to its asker, so the PM would not log it as a ruling. When the owner
 wants the answer to hold beyond this record, so the same question is not asked again, the owner makes it a
@@ -742,7 +775,8 @@ standing rule, which the PM logs in the ledger (`questions log`, docs/ledger.md)
 - Afterwards (promote): the same route with `standing` true and no `choice` keeps the answer as it is and
   files nothing again; it sets `standing` `{at, via}` at the time of the promote (`_promote`). It takes an
   optional `if_version`; a `note` is refused `invalid`, field `note`. It is refused `invalid`, field
-  `status`, unless the question is `answered` or `filed` (an answer whose filing failed can be promoted),
+  `status`, unless the question is `answered`, `filed`, or done by the hub (`done_by` `hub`; the promote
+  makes it `filed` again) (an answer whose filing failed can be promoted),
   field `record` for a question bound to no record, and field `standing` for one already standing. There
   is no separate route.
 - Who reads it: a filed standing rule stays pending for its asker and is also pending for the PM
@@ -750,15 +784,15 @@ standing rule, which the PM logs in the ledger (`questions log`, docs/ledger.md)
   `questions done` is refused `invalid`, field `standing`: the asker's routine done would end the PM's push
   with nothing logged.
 - The page: a bound question's card has a "Make this a standing rule" box beside the options, ticked
-  again on a re-answer of a standing one; it sends `standing` true only when ticked. A filed card that is
-  not standing has a "Make it a standing rule" button (the promote, with the version it shows), and a
+  again on a re-answer of a standing one; it sends `standing` true only when ticked. A filed card, or one
+  the hub marked done, that is not standing has a "Make it a standing rule" button (the promote, with the version it shows), and a
   standing card says `a standing rule, for the PM to log`.
 
 Known limits:
 - Until the PM logs it, a filed standing rule stays in its asker's pending list too: the asker cannot
   mark it done.
-- The page offers the promote only on a filed card: an answer whose filing failed is promoted through the
-  route, or by answering again with the box ticked.
+- The page offers the promote only on a filed card or one the hub marked done: an answer whose filing
+  failed is promoted through the route, or by answering again with the box ticked.
 
 ## inbox/M-NNN
 The owner's inbox: the PM's answer to every question the owner asks in a note (on a question, a to-do or
