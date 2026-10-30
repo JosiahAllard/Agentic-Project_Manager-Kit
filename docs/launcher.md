@@ -50,7 +50,7 @@ The default folder `~/.claude` launches with `CLAUDE_CONFIG_DIR` removed, never 
 
 An account is signed in when one of its folders holds `.credentials.json`; a launch uses the first such folder, and an account with none is refused. An org is signed in when its `.claude.json` names an `oauthAccount`. Each session's status line writes `usage-status.json` into its account folder.
 
-`pick-account` chooses among signed-in accounts the one under `--limit`% (default 95) of its seven-day window whose week resets soonest, so the allowance that expires first is used first; when every account is over, the soonest reset anyway. A passed reset reads 0%. `deep` and `consultant` with `--account auto` pick the same way, then refuse an account at or over 95% of either window unless `--force`: the last 5% is the PM's headroom.
+`pick-account` chooses among signed-in accounts the one under `--limit`% (default 95) of its seven-day window whose week resets soonest, so the allowance that expires first is used first; when every account is over, the soonest reset anyway. A passed reset reads 0%. `deep` and `consultant` with `--account auto` pick the same way, then refuse an account at or over 95% of either window unless `--force`: that is the same 95% band `pick-account` skips.
 
 ## Usage
 

@@ -46,7 +46,7 @@ class Headroom(unittest.TestCase):
         h = Home(self)
         h.usage('1', five=(95, NOW + DAY / 24), week=(20, NOW + DAY))
         out = []
-        with self.assertRaisesRegex(A.LaunchError, "Account 1 is at 95% of its five_hour window.*PM's headroom"):
+        with self.assertRaisesRegex(A.LaunchError, "Account 1 is at 95% of its five_hour window.*95% limit"):
             A.check_headroom(h.settings, '1', NOW, False, out)
         A.check_headroom(h.settings, '1', NOW, True, out)
         self.assertIn('--force: starting on account 1 anyway', out[-1])
