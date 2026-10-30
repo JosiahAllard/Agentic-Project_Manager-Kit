@@ -332,7 +332,8 @@ def do_measure(a):
         print('REFUSED: cannot read the kinds table or the lock history: %s' % e)
         return G.REFUSED
     kinds, notes = measure.propose(table, history, layout['medium_cores'],
-                                   store.settings.history_min_runs, agent_cap=layout['agent_cap'])
+                                   store.settings.history_min_runs, agent_cap=layout['agent_cap'],
+                                   aliases=aliases)
     doc = measure.document(kinds, 'PROPOSED by gate.py --measure from %d day(s) of history; '
                                   'review, then commit to kitlib/lock/kinds.json.' % a.days,
                            aliases)

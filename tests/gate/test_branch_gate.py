@@ -41,7 +41,7 @@ class BranchGate(fixtures.GateRepoCase):
         later = self.repo.commit('later', 'b.py', cwd=wt)
         self.assertIsNotNone(gate_ok.verify(wt, later)[1])
         # the run went through the scratch lock store
-        self.assertTrue(any(d.get('kind') == 'engine-test' for d in self.store.history_records(1)))
+        self.assertTrue(any(d.get('kind') == 'test' for d in self.store.history_records(1)))
 
     def test_the_lock_run_is_a_gate_run(self):
         """The gate books as a gate (book(gate=True)), so the lock stops the build daemons it
@@ -302,6 +302,36 @@ class GateConfigHash(unittest.TestCase):
         self.assertFalse(set(runner.HASH_REMOVED) & set(schema.defaults('gate')))
         with tempfile.TemporaryDirectory() as root:
             self.assertFalse(set(runner.HASH_REMOVED) & set(kconfig.load(root).section('gate')))
+
+    def test_every_alias_in_the_kinds_table_hashes_as_the_name_first_written(self):
+        """Each kinds.json alias {old: new}: new is in HASH_KIND_AS, maps to a name an alias
+        retired (the first written, never itself a kind now), and old and new hash alike, so a
+        second rename that maps only to the previous name fails here."""
+        from kitlib.lock import kinds
+        al = kinds.aliases()
+        self.assertTrue(al)
+        for old, new in al.items():
+            with self.subTest(old=old, new=new):
+                self.assertIn(new, runner.HASH_KIND_AS)
+                first = runner.HASH_KIND_AS[new]
+                self.assertIn(first, al)
+                self.assertEqual(al[first], new)
+                self.assertNotIn(first, runner.HASH_KIND_AS)
+                a = gate_ok.config_hash(runner.gate_config(self.Cfg({'kind': old})))
+                b = gate_ok.config_hash(runner.gate_config(self.Cfg({'kind': new})))
+                c = gate_ok.config_hash(runner.gate_config(self.Cfg({'kind': first})))
+                self.assertEqual(a, b)
+                self.assertEqual(a, c)
+
+    def test_a_kind_under_its_new_or_retired_name_hashes_alike(self):
+        # gate.kind "test" and "engine-test" (and app-run, engine-run) name one kind: a record
+        # made under either verifies under the other, in old and new kits alike.
+        for new, old in (('test', 'engine-test'), ('app-run', 'engine-run')):
+            a = gate_ok.config_hash(runner.gate_config(self.Cfg({'steps': [], 'kind': new})))
+            b = gate_ok.config_hash(runner.gate_config(self.Cfg({'steps': [], 'kind': old})))
+            self.assertEqual(a, b, new)
+        self.assertNotEqual(runner.gate_config(self.Cfg({'kind': 'build'})),
+                            runner.gate_config(self.Cfg({'kind': 'engine-test'})))
 
     def test_a_default_config_hashes_as_it_did_before_the_keys_were_removed(self):
         # The hash a repo with no gate config had at 19f5763e0, while python_tests,

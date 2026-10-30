@@ -82,15 +82,16 @@ Exit codes:
 ## codemap
 
 ```
-python tools/codemap.py [-C DIR] [--dir DIR | --find NAME | --file PATH]
+python tools/codemap.py [-C DIR] [--dir DIR | --find NAME | --file PATH | --symbol NAME [PATH]]
 ```
 
-`kitlib.docs.codemap.run` has four modes:
+`kitlib.docs.codemap.run` has five modes:
 
 - **No option.** One row per source folder.
 - **`--dir`.** That folder's files and their types.
 - **`--find`.** Types (by substring) and members (by exact name).
 - **`--file`.** One file's types and members, with line numbers.
+- **`--symbol`.** One Python function or class (`Class.method` too) as numbered source; PATH narrows it. Not found or ambiguous: exit 1.
 
 It reads tracked and untracked-but-not-ignored files (`git ls-files -co --exclude-standard`). Exit 0, or 2 when git cannot list the files. There are no `.kit.json` keys.
 

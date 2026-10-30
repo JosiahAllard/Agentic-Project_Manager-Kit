@@ -24,7 +24,7 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 TOOL = os.path.join(REPO, 'tools', 'machine_lock.py')
 SCRIPT = 'machine_lock.py'
 
-HEAVY = (('godot --headless --path .', 'engine-run'),
+HEAVY = (('godot --headless --path .', 'app-run'),
          ('blender -b scene.blend -a', 'render'),
          ('dotnet build', 'build'),
          ('gradlew assemble', 'build'))

@@ -21,6 +21,7 @@ no end notice: its slots free when the next look finds it gone.
 """
 import os
 
+from kitlib.lock import kinds as kinds_mod
 from kitlib.lock import layout as lay
 from kitlib.lock import site
 from kitlib.lock.store import iso, local_text, parse_iso, write_json
@@ -32,13 +33,16 @@ KIND = "lock-window"
 def target(store, kind, k, L, whole=False):
     """The notice folder for a run of `kind` (its kinds-table entry k, layout L), or None for no
     notice. Heavy is a size: a kind whose cpu size (layout.kind_cores) reaches the heavy alias's,
-    agent_cap, whether the table says "heavy" or a measured whole number."""
+    agent_cap, whether the table says "heavy" or a measured whole number. A kind listed in the
+    machine config's notice kinds matches under its retired name too (kinds.canonical)."""
     n = site.notice(store)
     if n is None:
         return None
     d, kinds = n
     if kinds is not None:
-        return d if kind in kinds else None
+        al = kinds_mod.aliases(store.kinds_path)
+        want = kinds_mod.canonical(kind, table_aliases=al)
+        return d if any(kinds_mod.canonical(x, table_aliases=al) == want for x in kinds) else None
     heavy = lay.kind_cores(L, k) >= L["agent_cap"]
     return d if whole or heavy or (k.get("gpu") and not k.get("share")) else None
 

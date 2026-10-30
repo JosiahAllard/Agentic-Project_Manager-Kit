@@ -845,10 +845,14 @@ class Store:
         """Expected seconds of a run of repo, kind and mode (run_mode): the median held time of
         its finished (how: done) runs of that mode, at least history_min_s; None with fewer than
         history_min_runs of them, so a thin mode falls back to the kind's guide, not to the
-        other modes' median."""
-        s = self.settings
+        other modes' median. A line written under a kind's retired name (an alias in the kinds
+        table) counts as a line of the kind it now names."""
+        from kitlib.lock import kinds as kinds_mod      # kinds imports no store: no cycle
+        s, al = self.settings, kinds_mod.aliases(self.kinds_path)
+        kind = kinds_mod.canonical(kind, table_aliases=al)
         ds = sorted(float(d["held_s"]) for d in self.history_records()
-                    if d.get("repo") == repo and d.get("kind") == kind and d.get("how") == "done"
+                    if d.get("repo") == repo and d.get("how") == "done"
+                    and kinds_mod.canonical(d.get("kind"), table_aliases=al) == kind
                     and self.run_mode(d.get("priority"), d.get("branch"), d.get("gate")) == mode
                     and isinstance(d.get("held_s"), (int, float)) and d["held_s"] >= 0)
         if len(ds) < s.history_min_runs:

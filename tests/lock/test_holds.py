@@ -281,6 +281,29 @@ class Holds(StoreCase):
                             hl.shares_for(self.table["cpu-eval"]))
         self.assertIn("was made for", why)
 
+    def test_a_hold_and_a_run_that_name_one_kind_by_old_and_new_name_match(self):
+        """A hold made under a kind's retired name (by a kit from before its rename) is claimed
+        by a run booked under the new name, and the other way round. Red before: claim compared
+        the names as written, `was made for kind ...`."""
+        with open(self.kinds_path, encoding="utf-8") as f:
+            doc = json.load(f)
+        doc["aliases"] = {"old-test": {"to": "engine-test", "why": "renamed"}}
+        with open(self.kinds_path, "w", encoding="utf-8") as f:
+            json.dump(doc, f)
+        shares = hl.shares_for(self.table["engine-test"])
+        for held, run in (("old-test", "engine-test"), ("engine-test", "old-test")):
+            h, _ = self.agent_hold()
+            path = self.store.path("holds", h["id"] + ".json")
+            with open(path, encoding="utf-8") as f:
+                rec = json.load(f)
+            rec["kind"] = held
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(rec, f)
+            got, why = hl.claim(self.store, self.L, self.rec("r-" + held, kind=run), h["id"],
+                                shares)
+            self.assertIsNone(why, (held, run))
+            self.assertEqual(got["claim"]["id"], "r-" + held)
+
     def test_claim_of_no_hold(self):
         self.assertEqual(hl.claim(self.store, self.L, self.rec("r-1"), "h-none", None),
                          (None, "no hold h-none"))
