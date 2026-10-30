@@ -128,9 +128,10 @@ The package exports `ADAPTER`, a `kitlib.host.HostAdapter`:
   paths"; Claude: `hosts/claude/adapter/agent_models.py` `models`).
 - The renderer's optional `vendored(root)`: `{path: bytes}` of kit files the host's plugin ships a
   copy of, read from the kit checkout `root` and drift-checked with the rest. A plugin root that is
-  not the whole kit cannot reach the kit's `boot/` from a plugin cache, so it ships `boot/kitboot.py`
-  and `boot/hook.py` this way, and a `hosts.json` holding its own entry beside them (Codex). The
-  copy finds the kit through `PM_KIT_ROOT`, or the checkout it sits in.
+  not the whole kit cannot reach the kit's `boot/` from a plugin cache, so it would ship
+  `boot/kitboot.py` and `boot/hook.py` this way, with a `hosts.json` holding its own entry beside
+  them, and the copy finds the kit through `PM_KIT_ROOT`, or the checkout it sits in. No host does
+  today: Claude's and Codex's plugin roots are laid out as the kit.
 
 ## 3. The shell: `hosts/<name>/shell/`
 

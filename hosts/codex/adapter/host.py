@@ -29,7 +29,7 @@ hands it to kitlib.host.hookmain.dispatch.
   launcher()           hosts.codex.adapter.launcher: launch plans only; it runs nothing yet
   plugin_installer()   None
   plugin_copy(home, environ)   optional (tools/_host.py plugin_copies): the step plugin_refresh
-                       --apply runs to mirror the export into the Codex plugin copy
+                       --apply runs to install the export into Codex
                        (hosts.codex.adapter.plugin_copy.Step; docs/plugin-source.md)
   content()            hosts.codex.adapter.content (the content renderer)
 """

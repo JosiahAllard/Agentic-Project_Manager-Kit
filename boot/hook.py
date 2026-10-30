@@ -9,15 +9,15 @@ decision 20). A host adds no hook script: its manifest runs this file with its n
 
 Before any kit code runs, with the standard library alone:
   1. The host's entry is read from HOSTS, the hosts.json in the folder above this file's boot/:
-     the kit's own, or, for a plugin whose root is not the kit, the copy holding that host's entry
-     which its renderer ships beside its copy of boot/ (docs/new-host.md). Never from the kit about
-     to boot, which a pin has not checked yet.
+     the kit's own (every host's plugin root is laid out as the kit, so this is the kit's own
+     boot/; docs/new-host.md `vendored` covers a host that would ship a copy). Never from the kit
+     about to boot, which a pin has not checked yet.
   2. Fast path: a call of the host's hook.tool_event to a tool its hook.guarded_tools does not
      name (skips) is allowed, exit 0 with nothing written, before the kit boots: in every session
      (fast_path "all") or only in one no launcher marked ("unmarked": MARK unset or blank, as
      kitlib.sessionmark reads it; a test holds the two equal).
   3. boot/kitboot.py beside this file binds the kit (docs/kitboot.md): PM_KIT_ROOT when set, else
-     the checkout this file is in, else the checkout a plugin copy sits in (kit_here).
+     the checkout this file is in (kit_here; its copy case serves only a host that would ship one).
 Then the adapter the entry names is imported and kitlib.host.hookmain.dispatch runs the event: the
 guard, failing closed, for the tool event (the adapter's DEADLINE, if any, counting from this
 file's start), the start context for any other. When the kit will not boot or import, or the answer
@@ -69,8 +69,9 @@ def skips(hook, payload, environ):
 
 def kit_here(entry, root=None):
     """The kitboot.py `here` for kitboot.boot when PM_KIT_ROOT is unset: None when the folder above
-    boot/ is a kit (kit.json; this file's own checkout), else, for a plugin copy, the checkout as
-    many folders above it as the entry's shell has parts, when that holds kit.json; else None, and
+    boot/ is a kit (kit.json; this file's own checkout, as for every host today), else, for a copy
+    a host's plugin would ship (docs/new-host.md `vendored`; none does now), the checkout as many
+    folders above it as the entry's shell has parts, when that holds kit.json; else None, and
     kitboot then refuses unless PM_KIT_ROOT names a kit."""
     root = root or os.path.dirname(HERE)
     if os.path.isfile(os.path.join(root, 'kit.json')):

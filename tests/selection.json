@@ -20,7 +20,6 @@
     ["hosts/codex/**", ["codex"]],
     ["hosts/codex/adapter/**", ["content", "roster"]],
     ["hosts/codex/shell/agents/**", ["roster", "content"]],
-    ["hosts/codex/shell/skills/**", ["skills", "content"]],
     ["tests/codex/**", ["codex"]],
     ["hosts/__init__.py", ["host", "guard"]],
     ["hosts/claude/__init__.py", ["pmwatch", "guard"]],

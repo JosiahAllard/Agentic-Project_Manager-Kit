@@ -9,11 +9,10 @@ role's effort, else TIER_EFFORT of its tier), `sandbox_mode` (read-only for a re
 role, else the role's `sandbox`: sandbox_mode) and
 `developer_instructions`, the role body with its tokens filled from TOKENS, as a TOML multi-line
 string. Codex agent files carry no tool list, so `capabilities` and `cache` are not rendered; the
-sandbox is what limits a role. Lines end as the role file's do. Each skill folder is copied byte for
-byte to `hosts/codex/shell/skills/<name>/`: the default host's plugin points at `content/skills/`
-itself, and Codex follows once a live install shows it loads skills from outside its plugin
-folder (decision 29 in docs/multi-host-plan.md section 7; README.md "Not verified"). A skill file
-is a copy, so it carries no generated-file line.
+sandbox is what limits a role. Lines end as the role file's do. The skills are not copied: the plugin
+root is the whole export, and plugin.json names the kit's own `content/skills/`. `retired()` names
+the folders the old plugin copy needed (`hosts/codex/shell/skills`, `hosts/codex/shell/boot`), so
+any file left there is stale.
 
 manifests(kit, content) writes the plugin's files, each JSON with indent 2 and a final newline:
 - `hosts/codex/shell/plugin.json`: Codex's plugin manifest, which the plugin export
@@ -37,20 +36,9 @@ manifests(kit, content) writes the plugin's files, each JSON with indent 2 and a
   line, as a POSIX shell line, in hooks_rel(platform), `hooks/hooks.<platform>.json`; plugin.json
   names hooks.json alone, and the plugin export (kitlib.pluginsource) writes the platform's file
   in its place.
-vendored(root) copies the kit's boot folder, boot/kitboot.py and boot/hook.py, to
-`hosts/codex/shell/boot/` byte for byte, and writes `hosts/codex/shell/hosts.json` holding hosts.json's
-Codex entry alone (HOSTS_REL), for the old plugin copy (hosts.codex.adapter.plugin_copy's mirror),
-whose plugin root is hosts/codex/shell (${PLUGIN_ROOT}): a plugin copied out of the kit that way
-cannot reach the kit's boot/ or hosts.json. An install from the export has the kit's own at its
-root, and these copies go with the mirror (docs/plugin-source.md "Codex"). It must carry the
-check that verifies the kit it binds through PM_KIT_ROOT, as the Codex branch's plugin carried
-release_binding.py, the hook entry, and the hook data that entry reads before the kit boots (never
-from the kit it is about to verify). render_content --check fails when a copy drifts.
-The JSON files and the byte-for-byte copies carry no generated-file line: JSON holds no comment, and
-a copy must stay the bytes of its source.
+The JSON files carry no generated-file line: JSON holds no comment.
 """
 import json
-import os
 import re
 
 from kitlib import agentname
@@ -62,18 +50,15 @@ from kitlib.host.content import ContentError, banner, role_source, substitute
 HOST = 'codex'
 SHELL_REL = 'hosts/codex/shell'
 AGENTS_REL = SHELL_REL + '/agents'
-SKILLS_REL = SHELL_REL + '/skills'
+# Folders the old plugin copy (pm-kit-local) needed and the renderer no longer writes.
+RETIRED = (SHELL_REL + '/skills', SHELL_REL + '/boot')
 MANIFEST_REL = SHELL_REL + '/plugin.json'
 MCP_REL = SHELL_REL + '/mcp.json'
 HOOKS_REL = SHELL_REL + '/hooks/hooks.json'
-# Kit files the plugin ships a copy of: {copy: source}, both repo-relative.
-VENDORED = {SHELL_REL + '/boot/kitboot.py': 'boot/kitboot.py', SHELL_REL + '/boot/hook.py': 'boot/hook.py'}
-# The plugin's hosts.json: the kit's, Codex's entry alone, read by its copy of boot/hook.py.
-HOSTS_REL = SHELL_REL + '/hosts.json'
 ENTRY = 'boot/hook.py'
 PLUGIN_ROOT = '${PLUGIN_ROOT}'
 # The plugin's skills: the kit's content folder itself, as for the default host (Codex loads them from the
-# plugin root, the export; the skills copy under SHELL_REL is the old mirror's, docs/plugin-source.md).
+# plugin root, the export; docs/plugin-source.md "Codex").
 PLUGIN_SKILLS_REL = 'content/skills'
 DESCRIPTION = ('The PM kit as a Codex plugin (ARCHITECTURE.md, Packaging; hosts/codex/README.md): its hooks, '
                'skills, the read-only machine lock MCP server and the hub MCP server. Rendered from kit.json and content/ by '
@@ -233,7 +218,12 @@ class CodexContent:
         return dict(registry.host(HOST).tiers)
 
     def owned(self):
-        return (AGENTS_REL, SKILLS_REL)
+        return (AGENTS_REL,)
+
+    def retired(self):
+        """Folders this renderer once wrote and no longer does (kitlib.content: every file in
+        one is stale)."""
+        return RETIRED
 
     @staticmethod
     def tokens():
@@ -279,9 +269,6 @@ class CodexContent:
         out = {}
         for role in content.roles:
             out[self.role_path(role.name)] = self.agent_file(role, names)
-        for skill in content.skills:
-            for rel, data in skill.files:
-                out['%s/%s/%s' % (SKILLS_REL, skill.name, rel)] = data
         return out
 
     @staticmethod
@@ -310,18 +297,6 @@ class CodexContent:
                 hook['statusMessage'] = status
             events[event] = [{'matcher': matcher, 'hooks': [hook]}]
         return {'hooks': events}
-
-    def vendored(self, root):
-        """{copy: bytes} of VENDORED, read from the kit checkout `root`, and HOSTS_REL: its
-        hosts.json's Codex entry alone, JSON with indent 2 and a final newline."""
-        out = {}
-        for copy, source in VENDORED.items():
-            with open(os.path.join(root, *source.split('/')), 'rb') as f:
-                out[copy] = f.read()
-        with open(os.path.join(root, 'hosts.json'), encoding='utf-8') as f:
-            entry = json.load(f)[HOST]
-        out[HOSTS_REL] = (json.dumps({HOST: entry}, indent=2) + '\n').encode('utf-8')
-        return out
 
     def manifests(self, kit, content, registry_path=None):
         """{path: bytes} of plugin.json, and mcp.json and hooks.json once for each platform
