@@ -31,7 +31,8 @@ CONFIG_KEY = 'guard_rules'
 # lock state, .kit.json, generated files, gate results, destructive git in a main checkout, branch -D,
 # forcing or deleting main, core.hooksPath, owner identity, the owner's delegation list
 # (owner-delegations), kill-by-name, the backlog roles, raw
-# writes and audit log, and file-tool edits of a main checkout stay deny (docs/guard.md "Rule modes").
+# writes and audit log, file-tool edits of a main checkout and the write jail's outer bound
+# (dev-drive: no agent write off the Dev Drive) stay deny (docs/guard.md "Rule modes").
 DEFAULTS = {
     'unplaced': WARN,           # a write the guard cannot place (kitlib.guard.rules.UNPLACED)
     # dropped as blocks: the owner can turn each back on

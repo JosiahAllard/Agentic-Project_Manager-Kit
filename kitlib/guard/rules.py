@@ -1979,7 +1979,8 @@ def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=N
 UNPLACED = 'unplaced'
 # the rules a write the guard cannot place would otherwise be refused under (unplaced())
 PLACE_RULES = frozenset(['main-checkout', 'write-jail', 'git-main-history', 'git-restore', 'git-checkout',
-                         'git-reset-hard', 'git-clean', 'git-stash', 'git-bulk-add', 'git-commit-all'])
+                         'git-reset-hard', 'git-clean', 'git-stash', 'git-bulk-add', 'git-commit-all',
+                         'dev-drive'])
 
 
 def unplaced(d, role):
@@ -2197,34 +2198,92 @@ def session_mark(event, ctx):
 
 
 def jail_roots(event, ctx, cwd):
-    return jail.roots(ctx, cwd, lambda p: is_root(p, None, ctx), session_mark(event, ctx))
+    return jail_view(event, ctx, cwd)[0]
+
+
+# The outer bound on the write jail (docs/guard.md "Write jail", "Outer bound"): an agent session's
+# write the roots allow is refused when it is off the Dev Drive (the machine config's dev_drive).
+DEV_DRIVE = 'dev-drive'
+
+
+def jail_view(event, ctx, cwd):
+    """(roots, dev, dropped) for an agent session running in `cwd`: its write roots (jail.roots),
+    the Dev Drive's root while the outer bound judges (rule dev-drive not off; None when dev_drive
+    is unset) and, while it denies, the data and mark roots dropped for lying off the Dev Drive,
+    each said as a warning naming the entry and its path."""
+    m = modes.mode(DEV_DRIVE)
+    dev = None if m == modes.OFF else jail.dev_root(ctx)
+    dropped = []
+    rs = jail.roots(ctx, cwd, lambda p: is_root(p, None, ctx), session_mark(event, ctx),
+                    dev=dev if m == modes.DENY else None, dropped=dropped)
+    for r in dropped:
+        modes.note('the %s root %s is not on the Dev Drive (%s), so it is no write root: an agent session writes only '
+                   'on the Dev Drive. The owner moves the folder onto the Dev Drive and the entry with it (%s).'
+                   % (r.kind, quote(r.path), fwd(dev),
+                      '.kit.json guard.data_roots' if r.kind == jail.DATA else 'the machine config\'s guard_mark_roots'))
+    return rs, dev, dropped
 
 
 JAIL_ASK = 'Ask the coordinator (a coordinator asks the PM) when the work needs a folder outside them.'
 
 
+def jail_aim(event, ctx, cwd, dest, rewrite):
+    """The folder a rewrite names in place of the jail's destination `dest`, or None: when `dest`
+    is a main checkout this role may not edit (main-checkout refuses the same write there), its
+    own worktree of it, <worktree> when the call shows none."""
+    if dest is None or rewrite is None:
+        return None
+    place = ctx.place(dest.path)
+    try:
+        barred = place.kind == repo.MAIN and not kconfig.permissions(
+            event, kconfig.roles(ctx.config(place.top or dest.path))).get('edit_main_checkout')
+    except Exception:  # noqa: BLE001 - the advice only: a config that does not read leaves it as it was
+        barred = False
+    return (own_worktree(ctx, cwd, place.top) or '<worktree>') if barred else None
+
+
+def dev_drive_bound(event, ctx, cwd, rs, dev, target, role, what, rewrite=None, run=None):
+    """The outer bound: `target`, which the jail's roots allow (or a dropped root holds), refused
+    when it is not on the Dev Drive `dev` (jail.on_drive: links and junctions resolved). None when
+    `dev` is None (dev_drive unset, or the rule off) or the target is on it. The alternative aims
+    at the session's own checkout, else temp, on the Dev Drive (jail.destination)."""
+    if not dev or not target or jail.on_drive(target, dev):
+        return None
+    why = ('%s: %s is not on the Dev Drive (%s): an agent session writes only there, whatever folder it may '
+           'otherwise write. %s' % (what, fwd(target), fwd(dev), JAIL_ASK))
+    dest = jail.destination(rs, dev)
+    if dest is None:
+        return refuse(DEV_DRIVE, role, why + ' To see where this session runs:', 'pwd')
+    if rewrite is not None:
+        name = os.path.basename(target.rstrip('\\/')) or 'out'
+        there = jail_aim(event, ctx, cwd, dest, rewrite) or dest.path
+        return refuse(DEV_DRIVE, role, why + ' The same write in %s:' % fwd(there),
+                      rewrite(fwd(there) + '/' + name if there.startswith('<') else fwd(os.path.join(there, name))))
+    return refuse(DEV_DRIVE, role, why + ' Run it with %s as the working directory:' % quote(dest.path),
+                  run or 'cd %s' % quote(dest.path))
+
+
+def in_dropped(target, dropped, dev):
+    """True when `target` is off the Dev Drive `dev` and lies in a root jail_view dropped for lying
+    off it. A dropped root that holds the Dev Drive (<drive>/ around <drive>/dev) opens nothing on it: a
+    target there is judged by the other roots alone."""
+    if not dropped or jail.on_drive(target, dev):
+        return False
+    t = jail.real(target)
+    return any(jail.inside(t, r.real) for r in dropped)
+
+
 def write_jail(event, ctx, target, cwd, role, what, rewrite=None, run=None):
     """An agent session's write outside its roots (kitlib.guard.jail): its checkout, its
     repository's other worktrees (jail.sibling), temp and the .kit.json data roots, judged by the
-    resolved path."""
+    resolved path; then, last, the outer bound (dev_drive_bound) on a write they allow."""
     if not target or not agent_session(event, ctx):
         return None
-    rs = jail_roots(event, ctx, cwd)
+    rs, dev, dropped = jail_view(event, ctx, cwd)
     verdict, root = jail.judge(target, rs)
-    if verdict is None or (verdict == jail.OUTSIDE and jail.sibling(ctx, target, cwd)):
-        return None
-    dest, aim = jail.destination(rs), None
-    if dest is not None and rewrite is not None:
-        place = ctx.place(dest.path)
-        try:
-            barred = place.kind == repo.MAIN and not kconfig.permissions(
-                event, kconfig.roles(ctx.config(place.top or dest.path))).get('edit_main_checkout')
-        except Exception:  # noqa: BLE001 - the advice only: a config that does not read leaves it as it was
-            barred = False
-        if barred:
-            # the checkout it may write is a main checkout this role may not edit (main-checkout
-            # refuses the same write there): its own worktree of it, <worktree> when the call shows none
-            aim = own_worktree(ctx, cwd, place.top) or '<worktree>'
+    if verdict is None or (verdict == jail.OUTSIDE and (jail.sibling(ctx, target, cwd) or in_dropped(target, dropped, dev))):
+        return dev_drive_bound(event, ctx, cwd, rs, dev, target, role, what, rewrite, run)
+    aim = jail_aim(event, ctx, cwd, jail.destination(rs), rewrite)
     return jail_refusal(role, rs, verdict, root, what, target, rewrite, run, aim)
 
 
@@ -6211,32 +6270,42 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
         return git_jail_unknown(ctx, cmd, gc, cwd, role)
     if gc.unknown:
         return None                             # a computed subcommand: the unreadable rule's
-    rs = None
+    view = None
     for w in git_targets(gc):
         if w.dyn:
             continue
         target = sh.resolve_path(w.text, gc.dir, home=getattr(ctx, 'home', None))
         if not target:
             continue
-        rs = rs or jail_roots(event, ctx, cwd)
+        view = view or jail_view(event, ctx, cwd)
+        rs, dev, dropped = view
         verdict, root = jail.judge(target, rs)
-        if verdict is not None and not (verdict == jail.OUTSIDE and jail.sibling(ctx, target, cwd)):
-            what = '`%s` makes %s' % (bare(cmd), w.text)
-            # a word an inline alias gave has no span in the line to aim (inline_alias)
-            return jail_refusal(role, rs, verdict, root, what, target,
-                                rewrite=None if w.start is None else git_retarget(ctx, cmd, inv, gc, w, cwd))
+        what = '`%s` makes %s' % (bare(cmd), w.text)
+        allowed = verdict is None or (verdict == jail.OUTSIDE and (jail.sibling(ctx, target, cwd) or
+                                                                   in_dropped(target, dropped, dev)))
+        if allowed and (not dev or jail.on_drive(target, dev)):
+            continue
+        # a word an inline alias gave has no span in the line to aim (inline_alias)
+        rewrite = None if w.start is None else git_retarget(ctx, cmd, inv, gc, w, cwd)
+        if allowed:
+            d = dev_drive_bound(event, ctx, cwd, rs, dev, target, role, what, rewrite)
+            if d:
+                return d
+            continue
+        return jail_refusal(role, rs, verdict, root, what, target, rewrite=rewrite)
     if git_reads(gc):
         return None
+    rs, dev, dropped = view or jail_view(event, ctx, cwd)
+    changes = '`%s` changes the checkout %s' % (bare(cmd), fwd(gc.dir))
     landed, why = lander_check(event, ctx, cmd, inv, gc)
     if landed:
-        return None
+        return dev_drive_bound(event, ctx, cwd, rs, dev, gc.dir, role, changes)
     d = pm_data_unknown(ctx, gc.dir, cwd, role, '`%s`' % bare(cmd))
     if d:
         return d
-    rs = rs or jail_roots(event, ctx, cwd)
     verdict, root = jail.judge(gc.dir, rs)
-    if verdict is None or (verdict == jail.OUTSIDE and jail.sibling(ctx, gc.dir, cwd)):
-        return None
+    if verdict is None or (verdict == jail.OUTSIDE and (jail.sibling(ctx, gc.dir, cwd) or in_dropped(gc.dir, dropped, dev))):
+        return dev_drive_bound(event, ctx, cwd, rs, dev, gc.dir, role, changes)
     if why is not None:
         return lander_refusal(ctx, cmd, gc, 'write-jail', role, why)
     what = '`%s` changes the checkout %s' % (bare(cmd), fwd(gc.dir))

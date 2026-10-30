@@ -32,6 +32,28 @@ class HeaderText(unittest.TestCase):
     def test_it_names_no_host(self):
         self.assertNotRegex(header.text('/k'), r'(?i)claude|codex|plugin_root')
 
+    def test_it_warns_naming_the_key_while_the_machine_config_sets_no_dev_drive(self):
+        # docs/guard.md "Write jail", "Outer bound": dev_drive unset leaves the bound off, said at every start
+        # relative, or not an existing folder (the Dev Drive unmounted, a wrong letter): the bound is off too
+        missing = os.path.join(ROOT, 'no-such-dev-drive-folder')
+        for user in ({'dev_drive': None}, {'dev_drive': '  '}, {}, None, {'dev_drive': 'dev'}, {'dev_drive': missing}):
+            with self.subTest(user=user):
+                text = header.text('C:/k', user=user)
+                self.assertIn('\nWarning: the machine config sets no usable dev_drive', text)
+                self.assertIn('docs/kit-json.md "Machine config keys"', text)
+        text = header.text('C:/k', user={'dev_drive': ROOT})
+        self.assertNotIn('dev_drive', text)
+        self.assertTrue(text.endswith('never a folder to look for.'), text)
+
+    def test_the_warning_and_the_guard_agree_on_whether_the_bound_is_on(self):
+        # the header asks the guard's own question (kitlib.guard.jail.dev_root_of), so it warns
+        # exactly when the bound has no Dev Drive
+        from kitlib.guard import jail
+        for value in (None, '', 'dev', os.path.join(ROOT, 'no-such-dev-drive-folder'), ROOT):
+            with self.subTest(value=value):
+                user = {'dev_drive': value}
+                self.assertEqual(header.dev_drive_note(user) is None, jail.dev_root_of(user) is not None)
+
 
 class ClaudeContext(unittest.TestCase):
     def test_session_and_subagent_start_carry_additional_context(self):
