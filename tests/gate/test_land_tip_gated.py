@@ -107,35 +107,25 @@ class Refused(TipCase):
 
 
 class GitCopy(TipCase):
-    """A tip whose record is only in the git common dir (gate_ok.legacy_dir), as an older kit
-    writes it: it lands until the legacy read is retired (kitlib.records.gate_ok "The grace
-    window")."""
+    """A tip whose record is only in the git common dir (gate_ok.legacy_dir): with a dev_drive it
+    does not count; with none (a load node set up without one) it is the gate's one record."""
 
-    def git_copy_only(self, wt):
-        """A real --full pass of the branch at `wt`, then its record left only in .git."""
+    def test_with_a_dev_drive_the_gate_writes_no_git_copy_and_a_git_copy_alone_does_not_land(self):
+        wt, tip = self.branch('feature', {'a.py': 'x = 1\n'})
         self.gate(wt, full=True)
-        tip = self.repo.git('rev-parse', 'HEAD', cwd=wt)
-        os.remove(gate_ok.record_path(self.repo.root, tip))
-        self.assertTrue(os.path.isfile(gate_ok.legacy_path(self.repo.root, tip)))
-        return tip
-
-    def test_a_git_copy_written_now_lands(self):
-        wt, tip = self.branch('feature', {'a.py': 'x = 1\n'})
-        self.assertEqual(self.git_copy_only(wt), tip)
+        self.assertFalse(os.path.exists(gate_ok.legacy_path(self.repo.root, tip)))
+        path = gate_ok.record_path(self.repo.root, tip)
+        with open(path, encoding='utf-8') as f:
+            body = f.read()
+        os.remove(path)
+        os.makedirs(gate_ok.legacy_dir(self.repo.root), exist_ok=True)
+        with open(gate_ok.legacy_path(self.repo.root, tip), 'w', encoding='utf-8') as f:
+            f.write(body)
         out = self.lander(BRANCH, self.main, tip).run()
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertEqual(self.remote_main(), self.main_now())
-
-    def test_a_git_copy_from_before_the_switch_lands(self):
-        wt, tip = self.branch('feature', {'a.py': 'x = 1\n'})
-        self.git_copy_only(wt)
-        os.rmdir(gate_ok.record_dir(self.repo.root))    # no record folder, as an older kit left it
-        out = self.lander(BRANCH, self.main, tip).run()
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertEqual(self.remote_main(), self.main_now())
+        self.assert_refused(out, BRANCH, tip, wt, 'no gate-OK record for %s' % tip)
 
     def test_with_no_dev_drive_the_branch_gate_passes_with_only_the_git_copy(self):
-        # Until the .git copies are retired: as before the record folder, a warning, not a fail.
+        # Kept for load nodes set up without a dev_drive: a warning, not a fail.
         wt, tip = self.branch('feature', {'a.py': 'x = 1\n'})
         with mock.patch('kitlib.config.user.dev_drive', return_value=None):
             out = self.gate(wt, full=True)
@@ -146,7 +136,9 @@ class GitCopy(TipCase):
         self.assertIn('dev_drive', warned[0])
         self.assertTrue(os.path.samefile(out.record, gate_ok.legacy_path(self.repo.root, tip)))
         self.assertFalse(os.path.exists(gate_ok.record_path(self.repo.root, tip)))
-        self.assertEqual(gate_ok.verify_full(self.repo.root, tip)[0]['commit'], tip)
+        with mock.patch('kitlib.config.user.dev_drive', return_value=None):
+            self.assertEqual(gate_ok.verify_full(self.repo.root, tip)[0]['commit'], tip)
+        self.assertIsNone(gate_ok.verify_full(self.repo.root, tip)[0])
 
 
 def same_path(a, b):

@@ -19,12 +19,11 @@ redfirst never ask.
 An allowance is `<dev_drive>/pm-kit/kit-gate-budget/<repo key>/<result.file_stem(branch)>.json`
 (kitlib.gate.result.kit_folder and repo_key): {branch, runs (the new total), why, at, by (the
 caller's role and session)}. The folder is outside every checkout, where agents' own file writes
-do not reach. One written before the branch was last made is not read. `gate.py allow` also
-writes a .git copy, `<git common dir>/kit-gate-budget/<stem>.json` (legacy_path), after the
-folder's file, for an older kit's gate until the .git copies are retired; with no dev_drive it
-writes only that copy. While the folder has no allowance for the branch, or there is no folder,
-this check reads that .git copy, until the legacy read is retired, so a branch given an
-allowance before the folder moved needs no fresh one. The owner is never refused. Anything the check cannot read is one WARNING and the gate runs (fail
+do not reach. One written before the branch was last made is not read. With no dev_drive there
+is no folder: `gate.py allow` writes, and this check reads, the .git copy
+`<git common dir>/kit-gate-budget/<stem>.json` (legacy_path) instead; with a dev_drive the copy
+is neither written nor read. It stays for load nodes set up without a dev_drive
+(docs/load-nodes.md). The owner is never refused. Anything the check cannot read is one WARNING and the gate runs (fail
 open): a wrong refusal would stop every agent's gate.
 """
 import datetime
@@ -112,8 +111,8 @@ def allow_path(root, branch):
 
 
 def legacy_path(root, branch):
-    """The allowance's .git copy: written for an older kit, and read when the folder has none
-    (allowance)."""
+    """The allowance's .git copy: the only copy with no dev_drive (a load node set up without
+    one); with a dev_drive it is neither written nor read (allow, allowance)."""
     return os.path.join(_common(root), DIR_NAME, '%s.json' % result.file_stem(branch))
 
 
@@ -127,12 +126,10 @@ def _folder_path(root, branch):
 
 def allowance(root, branch, after=None):
     """The allowance record of `branch` (a dict), or None: none, or written before `after`. The
-    folder's file; when it has none, or there is no folder (no dev_drive), the .git copy
-    (legacy_path) until the legacy read is retired."""
+    folder's file; only when there is no folder (no dev_drive), the .git copy (legacy_path)."""
     folder = _folder_path(root, branch)
-    for path in (folder, legacy_path(root, branch)):
-        if path is None:
-            continue
+    # The .git copy is kept for load nodes set up without a dev_drive (docs/load-nodes.md).
+    for path in ((folder,) if folder is not None else (legacy_path(root, branch),)):
         try:
             with open(path, encoding='utf-8') as f:
                 rec = json.load(f)
@@ -194,9 +191,8 @@ def refusal(root, store, repo_name, branch, say, who=None):
 
 def allow(root, branch, total, why, store, who=None):
     """Writes the allowance of `branch`: `total` gate runs in all, replacing any earlier one, to
-    the folder, then its .git copy (legacy_path); when the copy cannot be written the folder's
-    file is removed. With no folder (no dev_drive) only the .git copy, which allowance() then
-    reads. (path written, the folder's or else the copy's; runs used so far). ValueError when
+    the folder; with no folder (no dev_drive) to the .git copy (legacy_path) instead, which
+    allowance() then reads. (path written, the folder's or else the copy's; runs used so far). ValueError when
     total is not a whole number above RUNS or why is empty; BudgetError when the branch, its
     repository or a file cannot be read or written."""
     if isinstance(total, bool) or not isinstance(total, int) or total <= RUNS:
@@ -214,18 +210,11 @@ def allow(root, branch, total, why, store, who=None):
     path, copy = _folder_path(root, branch), legacy_path(root, branch)
     rec = {'branch': branch, 'runs': total, 'why': why.strip(), 'at': lockstore.iso(),
            'by': {'role': who.get('role'), 'session': who.get('session')}}
-    if path is None:                    # no dev_drive: the .git copy alone, as before the folder
+    if path is None:
+        # Kept for load nodes set up without a dev_drive (docs/load-nodes.md).
         _write(copy, rec)
         return copy, used
-    _write(path, rec)                   # the folder first: a failed write leaves no copy to read
-    try:
-        _write(copy, rec)
-    except BudgetError as e:
-        try:
-            os.remove(path)
-        except OSError as gone:
-            raise BudgetError('%s; and %s could not be removed: %s' % (e, path, gone))
-        raise
+    _write(path, rec)
     return path, used
 
 

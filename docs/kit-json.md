@@ -16,6 +16,8 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - Retired keys are still accepted and ignored, so an older install loads: `backlog` may still carry `retired_docs`, `rename_script` and `ledger_repo`, and `landing` may still carry `lanes` and `lock_file` (`RETIRED` in `kitlib/config/schema.py`); nothing reads them. A whole `ruling_cites` or `stubs` section is accepted the same way and dropped unchecked (`RETIRED_SECTIONS` there); any other unknown section still refuses.
 - A repo lists its own heavy programs in `heavy.programs`; the kit defaults are general tools only (godot, blender, dotnet, gradle). For example `{"program": "run_tests.bat", "kind": "test", "why": "runs the engine test suite"}`, `{"program": "graph_build*", "kind": "graph-build", "why": "rebuilds the graph"}` and `{"program": "local_model*", "kind": "local-ai", "unless_args": ["--help"], "why": "loads a model onto the gpu"}`.
 
+Operating rule (the PM's, not an owner ruling): switch `landing.gate_once` off if more than 10% of 30 landings under it go red, or the landing lane is over 50% busy for a week, both measured from the landing logs; turning it off is an owner edit to `.kit.json`.
+
 ## With no file
 
 `.kit.json` is optional: a repository with none is all defaults, and every key a file writes is an override. A file that is there but does not parse, or holds an unknown section or key or a wrong type, still refuses every call that reads it (the guard, the gate, land, commit, pre-push), as before.

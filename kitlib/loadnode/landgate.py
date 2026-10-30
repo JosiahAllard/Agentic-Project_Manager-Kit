@@ -108,7 +108,8 @@ def land_gate(wt, spec, say, merged_gate=None, kit_hash=None):
                             base=base, config_rev=base, source=out.facts.get('source'),
                             full=full and not docs, mode='docs' if docs else None)
     except gate_ok.NoRecordFolder:
-        pass                            # the .git copy is written, which read_record reads
+        # Kept for load nodes set up without a dev_drive: the .git copy, which read_record reads.
+        pass
     except gate_ok.RecordError as e:
         say('GATE FAILED: the gate-OK record could not be written: %s' % e)
         return EXIT_FAILED

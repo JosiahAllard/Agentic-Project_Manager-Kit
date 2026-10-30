@@ -103,7 +103,7 @@ class WriteTest(GateOkCase):
             with self.assertRaises(gate_ok.RecordError, msg=bad):
                 self.passed(input_keys=bad)
 
-    def test_the_record_is_in_the_drive_folder_with_a_git_copy_whichever_checkout_writes_it(self):
+    def test_the_record_is_in_the_drive_folder_with_no_git_copy_whichever_checkout_writes_it(self):
         wt = self.repo.worktree('a')
         path, rec = self.passed(root=wt)
         self.assertEqual(os.path.dirname(path), gate_ok.record_dir(self.repo.root))
@@ -111,9 +111,9 @@ class WriteTest(GateOkCase):
         self.assertTrue(os.path.normcase(path).startswith(os.path.normcase(
             os.path.join(self.drive, 'pm-kit', 'kit-gate-ok') + os.sep)))
         self.assertEqual(os.path.basename(path), self.head + '.json')
-        copy = os.path.join(self.repo.common_dir(), 'kit-gate-ok', self.head + '.json')
-        with open(copy, encoding='utf-8') as f:
+        with open(path, encoding='utf-8') as f:
             self.assertEqual(json.load(f), rec)
+        self.assertFalse(os.path.exists(os.path.join(self.repo.common_dir(), 'kit-gate-ok')))
         self.assertIsNotNone(gate_ok.verify(self.repo.root, self.head, GATE)[0])
 
     def test_a_write_leaves_no_temp_file_and_a_second_pass_replaces_the_first(self):
@@ -127,9 +127,9 @@ class WriteTest(GateOkCase):
     def test_a_replace_held_open_is_tried_five_times_0_2_s_apart_then_a_record_error(self):
         # The equivalence test of _write_file's move onto kitlib.fs.replace: the loop it replaced
         # tried RETRIES (5) times, sleeping RETRY_SLEEP (0.2 s) between, then raised the
-        # PermissionError (a RecordError here), the temp file removed. The record folder's write
-        # comes first and is the one held; its .git copy then replaces at once. The clock is
-        # faked, so the count is exact.
+        # PermissionError (a RecordError here), the temp file removed. With a dev_drive the record
+        # folder's write is the only one: no .git copy is written. The clock is faked, so the
+        # count is exact.
         folder_rec = os.path.normcase(gate_ok.record_path(self.repo.root, self.head))
         copy = gate_ok.legacy_path(self.repo.root, self.head)
         for fails, tries, written in ((2, 3, True), (4, 5, True), (5, 5, False), (9, 5, False)):
@@ -156,10 +156,10 @@ class WriteTest(GateOkCase):
                 self.assertEqual(len(calls), tries)
                 self.assertEqual(clock.sleeps, [0.2] * (tries - 1))
                 self.assertEqual((os.path.exists(folder_rec), os.path.exists(copy), len(others)),
-                                 (written, written, 1 if written else 0))
+                                 (written, False, 0))
                 if not written:
                     self.assertIn('held open', str(cm.exception))
-                for folder in (os.path.dirname(folder_rec), os.path.dirname(copy)):
+                for folder in (os.path.dirname(folder_rec),):
                     self.assertEqual([n for n in os.listdir(folder) if n.endswith('.tmp')], [])
 
     def test_the_replace_goes_through_kitlib_fs_replace_with_the_old_bounds(self):
@@ -171,8 +171,7 @@ class WriteTest(GateOkCase):
         with mock.patch.object(gate_ok.fsreplace, 'replace', spy):
             path, _ = self.passed()
         bounds = (gate_ok.REPLACE_WAIT, 0.2)
-        self.assertEqual(seen, [(os.path.normcase(path),) + bounds,
-                                (os.path.normcase(gate_ok.legacy_path(self.repo.root, self.head)),) + bounds])
+        self.assertEqual(seen, [(os.path.normcase(path),) + bounds])
         self.assertAlmostEqual(gate_ok.REPLACE_WAIT, 0.7)
 
     def test_a_replace_refused_otherwise_is_not_retried(self):
@@ -297,11 +296,11 @@ class VerifyTest(GateOkCase):
 
 
 class LegacyTest(GateOkCase):
-    """The grace window: the .git copy is written beside every record, and every reader takes it
-    when the record folder has no record for the commit or there is no record folder."""
+    """The .git copy (legacy_path): with a dev_drive it is neither written nor read; with none
+    (a load node set up without one) it is the only record, written and read as before."""
 
     def git_copy(self, rev=None, **kw):
-        """A record written only to the .git folder, as an older kit writes it."""
+        """A record written only to the .git folder, as a gate with no dev_drive writes it."""
         rec = gate_ok.build(self.repo.root, rev or self.head, kw.pop('gate', GATE), KIT, 'kit-test',
                             '2026-10-06T10:00:00Z', STEPS, **kw)
         path = gate_ok.legacy_path(self.repo.root, rec['commit'])
@@ -310,23 +309,16 @@ class LegacyTest(GateOkCase):
             f.write(json.dumps(rec, sort_keys=True, indent=1) + '\n')
         return path, rec
 
-    def test_a_git_record_from_before_the_switch_counts(self):
-        _, rec = self.git_copy(full=True)
+    def test_with_a_dev_drive_a_git_copy_alone_is_not_read(self):
+        self.git_copy(full=True)
         self.assertFalse(os.path.exists(gate_ok.record_path(self.repo.root, self.head)))
-        self.assertEqual(gate_ok.read(self.repo.root, self.head), (rec, None))
-        self.assertEqual(gate_ok.verify(self.repo.root, self.head), (rec, None))
-        self.assertEqual(gate_ok.verify_full(self.repo.root, self.head), (rec, None))
+        self.assertEqual(gate_ok.read(self.repo.root, self.head), (None, 'none'))
+        self.assertIsNone(gate_ok.verify(self.repo.root, self.head)[0])
+        self.assertIsNone(gate_ok.verify_full(self.repo.root, self.head)[0])
 
-    def test_a_git_copy_written_now_counts_too(self):
-        self.passed()                           # the folder holds records: the switch is behind
-        self.repo.write('x.txt', 'x\n')
-        other = self.repo.commit('more', 'x.txt')
-        _, rec = self.git_copy(other)
-        self.assertEqual(gate_ok.verify(self.repo.root, other), (rec, None))
-
-    def test_the_record_folder_wins_over_the_git_copy(self):
+    def test_with_a_dev_drive_a_git_copy_beside_the_record_is_ignored(self):
         path, rec = self.passed()
-        self.rewrite(gate_ok.legacy_path(self.repo.root, self.head), full=True, mode='full')
+        self.git_copy(full=True, mode='full')
         self.assertEqual(gate_ok.verify(self.repo.root, self.head), (rec, None))
         self.assertIn('without --full', gate_ok.verify_full(self.repo.root, self.head)[1])
         with open(path, 'w', encoding='utf-8') as f:
@@ -360,12 +352,10 @@ class LegacyTest(GateOkCase):
         self.assertFalse(os.path.exists(gate_ok.legacy_path(self.repo.root, self.head)))
         self.assertEqual(gate_ok.read(self.repo.root, self.head), (None, 'none'))
 
-    def test_a_failed_git_copy_write_removes_the_folder_record(self):
+    def test_with_a_dev_drive_a_blocked_git_folder_does_not_stop_the_write(self):
         self.blocked(gate_ok.legacy_dir(self.repo.root))
-        with self.assertRaises(gate_ok.RecordError):
-            self.passed()
-        self.assertFalse(os.path.exists(gate_ok.record_path(self.repo.root, self.head)))
-        self.assertEqual(gate_ok.read(self.repo.root, self.head)[0], None)
+        path, rec = self.passed()
+        self.assertEqual(gate_ok.read(self.repo.root, self.head), (rec, None))
 
     def test_with_no_record_anywhere_the_answer_is_none(self):
         self.assertEqual(gate_ok.read(self.repo.root, self.head), (None, 'none'))
