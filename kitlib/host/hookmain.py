@@ -7,7 +7,9 @@ lives here once:
         (adapter.CONTEXT_EVENTS): the context text, adapter.start_text(event_name, kit, payload,
         environ, part) when the adapter has one, else the kit header (kitlib.host.header; no part
         then), written through adapter.context; exit 0. The header part (no part) also records
-        which kit folder the header named (kitlib.host.headerfollow.note). Any other event: run()
+        which kit folder the header named (kitlib.host.headerfollow.note); at a SubagentStart that
+        folder, and the one the context text names, is the current export
+        (kitlib.host.headerfollow.start_kit), not the one the session began on. Any other event: run()
         over the payload `text`, the adapter's DEADLINE (None when it has none) for the whole call
         from `started`, with `kit`. `entry` and `args` are the hook's own command line, for the
         reproduce line of a deny.
@@ -304,6 +306,12 @@ def dispatch(adapter, event_name, kit, text, stdout, entry=None, args=(), part=N
         except ValueError:
             payload = {}
         payload = payload if isinstance(payload, dict) else {}
+        if part is None and event_name == 'SubagentStart':
+            try:
+                from kitlib.host import headerfollow
+                kit = headerfollow.start_kit(kit, environ)
+            except Exception:                   # advice too: the session's own folder stands
+                pass
         start = getattr(adapter, 'start_text', None)
         if start is not None:
             body = start(event_name, kit, payload, environ, part)
