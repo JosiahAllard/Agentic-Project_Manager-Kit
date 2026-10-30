@@ -219,6 +219,465 @@ class Tiers(unittest.TestCase):
         self.assertEqual(text.count('os.getgid()'), 1)
 
 
+BASE_JOB = 'pmkit-job-41-2-0a1b2c.scope'
+
+
+class Delegated(unittest.TestCase):
+    """The boot hook's route off systemd (delegated_group, the probe's order, the job in /pm-kit,
+    sweep), on a cgroup tree faked in a test folder: CGROOT points there and the reads of this
+    process's own ids and cgroup are patched, so each case runs on any host."""
+
+    def setUp(self):
+        self.c = c = contain()
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.group = self.root + '/pm-kit'
+        os.makedirs(os.path.join(self.group, 'anchor'))
+        self.ctl('cpuset cpu memory pids')
+        open(os.path.join(self.group, 'cgroup.procs'), 'w').close()
+        for patch in (mock.patch.object(c, 'CGROOT', self.root),
+                      mock.patch.object(c, 'cgroup2', return_value=True),
+                      mock.patch.object(c, 'SYSTEMD_DIR', os.path.join(self.root, 'no-systemd')),
+                      mock.patch.object(c.os, 'getuid', create=True,
+                                        return_value=os.lstat(self.group).st_uid)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def ctl(self, text):
+        with open(os.path.join(self.group, 'cgroup.subtree_control'), 'w') as f:
+            f.write(text + '\n')
+
+    def group_of(self, own='/pm-kit/anchor'):
+        return self.c.delegated_group(own=own)
+
+    def test_the_group_of_the_boot_hook_is_the_route(self):
+        self.assertEqual(self.group_of(), ('/pm-kit', None))
+        self.assertEqual(self.group_of('/pm-kit/%s/main' % BASE_JOB), ('/pm-kit', None))
+
+    def test_no_cgroup2_or_no_group_on_a_systemd_box_is_no_route_and_no_message(self):
+        with mock.patch.object(self.c, 'cgroup2', return_value=False):
+            self.assertEqual(self.group_of(), (None, None))
+        shutil.rmtree(self.group)
+        os.makedirs(self.c.SYSTEMD_DIR)
+        self.assertEqual(self.group_of(), (None, None))
+
+    def test_no_group_says_the_boot_hook_did_not_run(self):
+        shutil.rmtree(self.group)
+        base, why = self.group_of()
+        self.assertIsNone(base)
+        self.assertIn('the boot hook did not run', why)
+        self.assertIn('/etc/local.d/pm-kit-cgroup.start', why)
+        self.assertIn('/etc/cron.d/pm-kit', why)
+
+    def events(self, text):
+        with open(os.path.join(self.group, 'anchor', 'cgroup.events'), 'w') as f:
+            f.write(text)
+
+    def test_a_process_outside_the_group_is_told_to_start_from_the_kit_s_tmux_server(self):
+        self.events('populated 1\nfrozen 0\n')
+        for own in ('/', '/user.slice', '/pm-kit', '/pm-kitx/anchor'):
+            with self.subTest(own=own):
+                base, why = self.group_of(own)
+                self.assertIsNone(base)
+                self.assertIn('start work from the kit\'s tmux server: tmux -L pm-kit attach -t '
+                              'pm-kit-anchor \\; new-window', why)
+                self.assertIn(own, why)
+
+    def test_outside_the_group_with_the_anchor_empty_names_the_root_step_or_a_reboot(self):
+        for state in ('populated 0\nfrozen 0\n', None):
+            with self.subTest(state=state):
+                if state is None:
+                    os.remove(os.path.join(self.group, 'anchor', 'cgroup.events'))
+                else:
+                    self.events(state)
+                base, why = self.group_of('/user.slice')
+                self.assertIsNone(base)
+                self.assertIn('the kit\'s tmux server has ended (/pm-kit/anchor is empty)', why)
+                self.assertIn('run sudo python3 ', why)
+                self.assertIn('machine_setup.py --delegation --apply again, or reboot', why)
+                # never the advice to start the server by hand: that one would not be contained
+                self.assertNotIn('tmux -L pm-kit', why)
+                self.assertNotIn('start work from', why)
+
+    def test_the_way_in_never_starts_a_server_nor_works_in_the_anchor_s_own_window(self):
+        from kitlib.machinesetup import delegation
+        self.assertEqual(self.c.ATTACH, delegation.ATTACH)
+        self.assertTrue(self.c.ATTACH.startswith('tmux -L pm-kit attach -t pm-kit-anchor '))
+        self.assertTrue(self.c.ATTACH.endswith(' \\; new-window'))
+        self.assertNotIn('new-session', self.c.ATTACH)
+
+    def test_a_group_that_is_not_this_user_s_is_refused(self):
+        with mock.patch.object(self.c.os, 'getuid', create=True,
+                               return_value=os.lstat(self.group).st_uid + 1):
+            base, why = self.group_of()
+        self.assertIsNone(base)
+        self.assertIn('is owned by uid', why)
+        real = os.lstat
+        link = types.SimpleNamespace(st_mode=0o120777, st_uid=os.lstat(self.group).st_uid)
+        with mock.patch.object(self.c.os, 'lstat',
+                               side_effect=lambda p: link if p == self.group else real(p)):
+            base, why = self.group_of()
+        self.assertIsNone(base)
+        self.assertIn('not a folder', why)
+        shutil.rmtree(self.group)
+        open(self.group, 'w').close()
+        base, why = self.group_of()
+        self.assertIsNone(base)
+        self.assertIn('not a folder', why)
+
+    def test_a_group_this_user_cannot_move_processes_into_is_refused(self):
+        with mock.patch.object(self.c.os, 'access', return_value=False):
+            base, why = self.group_of()
+        self.assertIsNone(base)
+        self.assertIn('cgroup.procs is not writable', why)
+
+    def test_a_group_without_its_controllers_is_refused(self):
+        self.ctl('cpu pids')
+        base, why = self.group_of()
+        self.assertIsNone(base)
+        self.assertIn('cpuset, memory', why)
+        os.remove(os.path.join(self.group, 'cgroup.subtree_control'))
+        self.assertIsNone(self.group_of()[0])
+
+    def test_the_probe_takes_the_group_before_a_systemd_scope(self):
+        c = self.c
+        seen = []
+
+        def trial(base=None):
+            seen.append(base)
+            return ('S1', [], None) if base else (None, (), 'no systemd-run')
+
+        with mock.patch.object(c, 'parent_job', return_value=None), \
+                mock.patch.object(c, 'delegated_group', return_value=('/pm-kit', None)), \
+                mock.patch.object(c, 'sweep') as sweep, \
+                mock.patch.object(c, 'trial', side_effect=trial), \
+                mock.patch.object(c, 'w1_trial', side_effect=AssertionError('a W1 trial ran')):
+            tier = c._probe()
+        self.assertEqual((tier.name, tier.base, tier.parent), ('S1', '/pm-kit', None))
+        self.assertEqual(seen, ['/pm-kit'])
+        sweep.assert_called_once_with('/pm-kit')
+        self.assertIn('/pm-kit', tier.text)
+        self.assertIs(type(c.Job.__new__(c.Job, tier=tier)), c.ScopeJob)
+
+    def test_without_the_group_the_probe_says_why_at_the_lower_tier(self):
+        c = self.c
+        why = 'this process runs outside /pm-kit (in /): start work from ...'
+        with mock.patch.object(c, 'parent_job', return_value=None), \
+                mock.patch.object(c, 'delegated_group', return_value=(None, why)), \
+                mock.patch.object(c, 'sweep', side_effect=AssertionError('a sweep ran')), \
+                mock.patch.object(c, 'trial', return_value=(None, (), 'no systemd-run')), \
+                mock.patch.object(c, 'w1_trial', return_value=None):
+            tier = c._probe()
+        self.assertEqual((tier.name, tier.why, tier.base), ('W1', why, None))
+        self.assertIn(why, tier.text)
+        # the group's trial fails: a systemd scope is still tried, and the group's why is shown
+        with mock.patch.object(c, 'parent_job', return_value=None), \
+                mock.patch.object(c, 'delegated_group', return_value=('/pm-kit', None)), \
+                mock.patch.object(c, 'sweep'), \
+                mock.patch.object(c, 'trial', side_effect=lambda base=None: (
+                    None, (), 'the group trial failed' if base else 'no systemd-run')), \
+                mock.patch.object(c, 'w1_trial', return_value='denied'):
+            tier = c._probe()
+        self.assertEqual((tier.name, tier.why), ('W2', 'the group trial failed'))
+        # a systemd box: no group, no message, the scope as before
+        with mock.patch.object(c, 'parent_job', return_value=None), \
+                mock.patch.object(c, 'delegated_group', return_value=(None, None)), \
+                mock.patch.object(c, 'trial', return_value=('S2', [c.S2_LACK], None)):
+            tier = c._probe()
+        self.assertEqual((tier.name, tier.base), ('S2', None))
+        # a process in a kit job reads its tier there and never looks for the group
+        with mock.patch.object(c, 'parent_job', return_value='/pm-kit/' + BASE_JOB), \
+                mock.patch.object(c, 'delegated_group', side_effect=AssertionError('it looked')), \
+                mock.patch.object(c, 'nested_tier', return_value=c.Tier('S1', parent='/pm-kit/'
+                                                                         + BASE_JOB)):
+            self.assertEqual(c._probe().parent, '/pm-kit/' + BASE_JOB)
+
+    def scope(self, **attrs):
+        base = dict(cg=None, name=None, unit=None, parent=None, base='/pm-kit', carried=None,
+                    cpuset=True, mask=None, short=False, tier=self.c.Tier('S1', base='/pm-kit'),
+                    note=None, pin=None, effective=None, _peak=0)
+        base.update(attrs)
+        return bare(self.c.ScopeJob, **base)
+
+    def test_a_job_in_the_group_is_made_there_with_no_systemd_run(self):
+        c = self.c
+        job = self.scope()
+        made = []
+        p = types.SimpleNamespace(pid=4242)
+
+        def ready(this, proc, fd, want=('s',)):
+            return {'s': [str(p.pid), made[0]]}
+
+        with mock.patch.object(c, '_tool', side_effect=AssertionError('systemd-run looked up')), \
+                mock.patch.object(c, 'bus_env', side_effect=AssertionError('the user bus')), \
+                mock.patch.object(c, 'carrier', side_effect=AssertionError('a carrier')), \
+                mock.patch.object(c.ScopeJob, '_make_nested', lambda this, cg: made.append(cg)), \
+                mock.patch.object(c.ScopeJob, '_ready', ready), \
+                mock.patch.object(c, 'cgroup_of', side_effect=lambda pid: made[0] + '/main'), \
+                mock.patch.object(c, '_popen', return_value=p) as popen:
+            self.assertIs(job._begin(['sleep', '1'], {}, {}), p)
+        self.addCleanup(c._close, job._g)
+        self.addCleanup(c._close, job._k)
+        self.assertEqual(len(made), 1)
+        self.assertTrue(c.TOP.match(job.name), job.name)
+        self.assertEqual(made[0], '/pm-kit/' + job.name)
+        self.assertEqual(job.cg, made[0])
+        argv = popen.call_args[0][0]
+        self.assertEqual(argv[:6], [c.SH, '-c', c.STUB, 'pmkit-job', job.name, made[0]])
+        self.assertEqual(argv[-2:], ['sleep', '1'])
+
+    def test_a_group_job_s_kill_is_written_only_to_its_own_cgroup(self):
+        c = self.c
+        with mock.patch.object(c, '_write') as write:
+            self.assertTrue(self.scope(cg='/pm-kit/' + BASE_JOB, name=BASE_JOB)._kill_all())
+            write.assert_called_once_with(self.root + '/pm-kit/' + BASE_JOB + '/cgroup.kill', '1')
+        for cg in ('/elsewhere/' + BASE_JOB, '/pm-kit/x/' + BASE_JOB, '/pm-kit'):
+            with self.subTest(cg=cg), mock.patch.object(c, '_write') as write:
+                with self.assertRaisesRegex(jobmod().JobError, 'refused to kill'):
+                    self.scope(cg=cg, name=BASE_JOB)._kill_all()
+                write.assert_not_called()
+
+    def test_a_group_job_is_removed_at_close_and_pins_through_its_own_cpuset(self):
+        c = self.c
+        cg = '/pm-kit/' + BASE_JOB
+        with mock.patch.object(c, 'wait_empty', return_value=True), \
+                mock.patch.object(c, 'rmtree_cgroup') as rm:
+            self.scope(cg=cg, name=BASE_JOB, kill_on_close=False).close()
+        rm.assert_called_once_with(cg)
+        wrote = {}
+        with mock.patch.object(c, '_call', side_effect=AssertionError('systemctl')), \
+                mock.patch.object(c, '_write', side_effect=lambda p, t: wrote.update({p: t})), \
+                mock.patch.object(c, '_read', return_value='0\n'):
+            self.assertTrue(self.scope(cg=cg, name=BASE_JOB)._set_pin(1))
+        self.assertEqual(wrote, {self.root + cg + '/cpuset.cpus': '0'})
+
+    def test_a_group_job_s_leftovers_go_to_a_sibling_in_the_group_not_to_systemd(self):
+        c = self.c
+        cg = '/pm-kit/' + BASE_JOB
+        os.makedirs(self.root + cg)
+        moved = []
+        job = self.scope(cg=cg, name=BASE_JOB)
+        with mock.patch.object(c, '_call', side_effect=AssertionError('busctl')), \
+                mock.patch.object(c.ScopeJob, 'pids', return_value=[77]), \
+                mock.patch.object(c.ScopeJob, 'contains',
+                                  side_effect=lambda pid: 'out' if moved else 'in'), \
+                mock.patch.object(c, '_write', side_effect=lambda p, t: moved.append((p, t))):
+            self.assertEqual(job.leftovers(), [77])
+        self.assertEqual(len(moved), 1)
+        dest, pid = moved[0]
+        self.assertEqual(pid, '77')
+        name = os.path.basename(os.path.dirname(dest))
+        self.assertTrue(c.LEFT.match(name), name)
+        self.assertEqual(os.path.dirname(os.path.dirname(dest)), self.group)
+
+    def test_the_group_s_trial_kills_and_empties_with_no_systemd(self):
+        c = self.c
+        cg = '/pm-kit/' + BASE_JOB
+        os.makedirs(self.root + cg)
+        p = mock.Mock(pid=4242, returncode=None)
+        p.poll.return_value = 0
+
+        def start(this, cmd, **kw):
+            this.cg, this.name = cg, BASE_JOB
+            return p
+
+        def wait(seconds=None):
+            p.returncode = -9
+
+        p.wait.side_effect = wait
+        with mock.patch.object(c, '_tool', side_effect=AssertionError('systemd-run looked up')), \
+                mock.patch.object(c, 'bus_env', side_effect=AssertionError('the user bus')), \
+                mock.patch.object(c, '_call', side_effect=AssertionError('systemctl')), \
+                mock.patch.object(c.signal, 'SIGKILL', 9, create=True), \
+                mock.patch.object(c.os, 'sched_getaffinity', create=True, return_value={0}), \
+                mock.patch.object(c.hardware, 'all_mask', return_value=1), \
+                mock.patch.object(c.ScopeJob, 'start', start), \
+                mock.patch.object(c.ScopeJob, 'terminate', return_value=True), \
+                mock.patch.object(c.ScopeJob, 'close') as close, \
+                mock.patch.object(c, 'wait_empty', return_value=True), \
+                mock.patch.object(c, '_read', return_value='0\n'), \
+                mock.patch.object(c, '_read_int', return_value=5):
+            self.assertEqual(c.trial('/pm-kit'), ('S1', [], None))
+            close.assert_called_once_with()
+            with mock.patch.object(c, 'wait_empty', return_value=False):
+                name, _, why = c.trial('/pm-kit')
+            self.assertIsNone(name)
+            self.assertIn('still there', why)
+
+            def refused(this, cmd, **kw):
+                raise OSError('no room')
+
+            with mock.patch.object(c.ScopeJob, 'start', refused):
+                self.assertEqual(c.trial('/pm-kit'),
+                                 (None, (), 'a trial job in /pm-kit could not be made (no room)'))
+
+    def test_sweep_takes_only_empty_jobs_and_leftovers_whose_maker_has_gone(self):
+        c = self.c
+        proc = os.path.join(self.root, 'proc')
+        os.makedirs(os.path.join(proc, '500'))
+        names = {'pmkit-job-499-1-0a0a0a.scope': True,            # maker gone, empty: swept
+                 'other-job-499-2-0b0b0b.scope': True,            # another prefix's: swept too
+                 'pmkit-leftovers-499-3-0c0c0c': True,            # maker gone, empty: swept
+                 'pmkit-job-499-4-0d0d0d.scope': False,           # maker gone, populated
+                 'pmkit-job-500-5-0e0e0e.scope': False,           # its maker runs
+                 'anchor': False, 'pmkit-job-x.scope': False, 'stray': False}
+        for n, _swept in names.items():
+            os.makedirs(os.path.join(self.group, n), exist_ok=True)
+        with open(os.path.join(self.group, 'pmkit-job-499-4-0d0d0d.scope', 'cgroup.events'),
+                  'w') as f:
+            f.write('populated 1\nfrozen 0\n')
+        with mock.patch.object(c, 'PROC', proc), \
+                mock.patch.object(c, 'rmtree_cgroup') as rm:
+            c.sweep('/pm-kit')
+        self.assertEqual(sorted(a[0][0] for a in rm.call_args_list),
+                         sorted('/pm-kit/' + n for n, swept in names.items() if swept))
+
+    def test_the_tier_line_names_the_group(self):
+        c = self.c
+        self.assertEqual(c.Tier('S1', base='/pm-kit').text,
+                         'containment: strong (S1; jobs in the kit\'s cgroup /pm-kit)')
+        self.assertEqual(c.Tier('S1').text, 'containment: strong (S1)')
+
+
+class KitTmux(unittest.TestCase):
+    """kitlib.launcher.linuxwin: a window opens in the kit's tmux server (tmux -L pm-kit) when
+    that server runs in the boot hook's group and is tmux 3.2 or later (new-session -e), else in
+    the default server, the reason said; and when the kit's server refuses the window, in the
+    default server too."""
+
+    def setUp(self):
+        self.w = importlib.import_module('kitlib.launcher.linuxwin')
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, True)
+        self.sock = os.path.join(folder, 'pm-kit')
+        self.addCleanup(self.w._opened.clear)
+
+    def anchored(self, cg='/pm-kit/anchor', out='4242 3.4\n', code=0, sock=True, said='tmux 3.4\n'):
+        if sock:
+            open(self.sock, 'w').close()
+        elif os.path.exists(self.sock):
+            os.remove(self.sock)
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv)
+            if argv[1:] == ['-V']:
+                return types.SimpleNamespace(returncode=0, stdout=said, stderr='')
+            return types.SimpleNamespace(returncode=code, stdout=out, stderr='')
+
+        with mock.patch.object(self.w, 'anchor_socket', return_value=self.sock), \
+                mock.patch.object(contain(), 'cgroup_of', return_value=cg) as of:
+            got = self.w.anchor_check(run)
+        return got, calls, of
+
+    def test_the_kit_s_server_counts_only_when_it_runs_in_the_group(self):
+        got, calls, of = self.anchored()
+        self.assertEqual(got, (True, None))
+        self.assertEqual(calls, [['tmux', '-L', 'pm-kit', 'display-message', '-p',
+                                  '#{pid} #{version}']])
+        of.assert_called_once_with(4242)
+        for kw in (dict(cg='/user.slice/x.scope'), dict(cg='/pm-kit'), dict(cg=None),
+                   dict(code=1), dict(out='no server\n')):
+            with self.subTest(**kw):
+                self.assertEqual(self.anchored(**kw)[0], (False, None))
+        got, calls, _ = self.anchored(sock=False)
+        self.assertEqual((got, calls), ((False, None), []))
+
+    def test_a_kit_s_server_older_than_3_2_is_not_used_and_says_why(self):
+        for out in ('4242 3.1c\n', '4242 3.0a\n', '4242 2.9\n'):
+            with self.subTest(out=out):
+                (ok, why), _, _ = self.anchored(out=out)
+                self.assertFalse(ok)
+                self.assertIn('needs tmux 3.2 or later (new-session -e)', why)
+                self.assertIn('tmux %s' % out.split()[1][:3], why)
+        for out in ('4242 3.2\n', '4242 next-3.5\n', '4242 3.3a\n'):
+            with self.subTest(out=out):
+                self.assertEqual(self.anchored(out=out)[0], (True, None))
+        # a server that names no version: the binary is asked
+        got, calls, _ = self.anchored(out='4242\n', said='tmux 3.1c\n')
+        self.assertFalse(got[0])
+        self.assertEqual(calls[-1], ['tmux', '-V'])
+        self.assertEqual(self.anchored(out='4242 \n', said='tmux 3.4\n')[0], (True, None))
+        self.assertFalse(self.anchored(out='4242\n', said='')[0][0])
+        self.assertEqual([self.w.tmux_version(t) for t in ('tmux 3.1c', 'tmux next-3.4', 'master',
+                                                            None)],
+                         [(3, 1), (3, 4), None, None])
+
+    def test_an_anchored_window_opens_in_the_kit_s_server_with_the_caller_s_path(self):
+        w = self.w
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv)
+            return types.SimpleNamespace(returncode=0, stdout='', stderr='')
+
+        with mock.patch.object(w, 'anchor_check', return_value=(True, None)), \
+                mock.patch.dict(os.environ, {'PATH': '/srv/kit/.local/bin:/usr/bin',
+                                             'LANG': 'C.UTF-8'}):
+            w.open_window('echo hi', 'pm-a1', run=run)
+            said = w.opened_in('pm-a1')
+        argv = calls[0]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(argv[:5], ['tmux', '-L', 'pm-kit', 'new-session', '-d'])
+        self.assertIn('PATH=/srv/kit/.local/bin:/usr/bin', argv)
+        self.assertEqual(argv[argv.index('PATH=/srv/kit/.local/bin:/usr/bin') - 1], '-e')
+        self.assertEqual(argv[argv.index('-s') + 1:], ['pm-a1', '/bin/bash', '-c', 'echo hi'])
+        self.assertIn('tmux -L pm-kit attach -t', said)
+        with mock.patch.object(w, 'anchor_check', return_value=(False, None)):
+            self.assertEqual(w.tmux_argv('pm-a1', 'x')[:2], ['tmux', 'new-session'])
+            self.assertNotIn('-L', w.opened_in('pm-a1'))
+
+    def test_an_old_kit_s_server_opens_the_window_in_the_default_server_and_says_why(self):
+        w = self.w
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv)
+            return types.SimpleNamespace(returncode=0, stdout='', stderr='')
+
+        why = "the kit's tmux server is tmux 3.1, and a window there needs tmux 3.2 or later"
+        with mock.patch.object(w, 'anchor_check', return_value=(False, why)):
+            w.open_window('echo hi', 'pm-a1', run=run)
+        self.assertEqual(calls, [['tmux', 'new-session', '-d', '-s', 'pm-a1', '/bin/bash', '-c',
+                                  'echo hi']])
+        with mock.patch.object(w, 'anchor_check', side_effect=AssertionError('asked again')):
+            said = w.opened_in('pm-a1')
+        self.assertIn("tmux session 'pm-a1' (tmux attach -t 'pm-a1')", said)
+        self.assertIn('not contained there: ' + why, said)
+
+    def test_a_window_the_kit_s_server_refuses_opens_in_the_default_server(self):
+        w = self.w
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv)
+            if '-L' in argv:
+                return types.SimpleNamespace(returncode=1, stdout='', stderr='unknown flag -e\n')
+            return types.SimpleNamespace(returncode=0, stdout='', stderr='')
+
+        with mock.patch.object(w, 'anchor_check', return_value=(True, None)):
+            w.open_window('echo hi', 'pm-a1', run=run)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][:3], ['tmux', '-L', 'pm-kit'])
+        self.assertEqual(calls[1], ['tmux', 'new-session', '-d', '-s', 'pm-a1', '/bin/bash', '-c',
+                                    'echo hi'])
+        said = w.opened_in('pm-a1')
+        self.assertNotIn('-L', said)
+        self.assertIn("the kit's tmux server refused the window (tmux exit 1: unknown flag -e)",
+                      said)
+        # a name the kit's server already has is refused, never opened elsewhere
+        calls[:] = []
+
+        def dup(argv, **kw):
+            calls.append(argv)
+            return types.SimpleNamespace(returncode=1, stdout='', stderr='duplicate session: pm-a1')
+
+        with mock.patch.object(w, 'anchor_check', return_value=(True, None)), \
+                self.assertRaises(importlib.import_module('kitlib.launcher.settings').LaunchError):
+            w.open_window('echo hi', 'pm-a1', run=dup)
+        self.assertEqual(len(calls), 1)
+
+
 class Expand(unittest.TestCase):
     def test_the_no_expand_switch_is_passed_only_when_systemd_run_names_it(self):
         c = contain()
