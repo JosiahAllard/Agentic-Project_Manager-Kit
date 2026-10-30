@@ -11,29 +11,35 @@ repository holds no copies of the kit's tools (decision 21 in docs/multi-host-pl
 every call is `python <kit>/tools/<x>.py -C <checkout>`.
 """
 
-# Said at every start while the machine config sets no dev_drive, or does not read: the guard's
-# outer bound on agent writes (docs/guard.md "Write jail", "Outer bound") is off then.
-NO_DEV_DRIVE = ('Warning: the machine config sets no dev_drive (the Dev Drive\'s root folder), or cannot be '
-                'read, so the guard does not hold agent writes to the Dev Drive. The owner sets dev_drive '
-                '(docs/kit-json.md "Machine config keys").')
+# Said at every start while the guard's outer bound on agent writes (docs/guard.md "Write jail",
+# "Outer bound") is off for want of a usable dev_drive: unset, relative, not an existing folder, or
+# a machine config that does not read.
+NO_DEV_DRIVE = ('Warning: the machine config sets no usable dev_drive (the Dev Drive\'s root folder: unset, '
+                'relative, not an existing folder, or the config cannot be read), so the guard does not hold '
+                'agent writes to the Dev Drive. The owner sets dev_drive (docs/kit-json.md "Machine config keys").')
 
 _READ = object()
 
 
-def dev_drive_note(user=_READ):
-    """NO_DEV_DRIVE when `user` (a machine config as kitlib.config.user.user_config returns it;
-    default: this machine's, read here) sets no dev_drive or does not read; else None. A process
-    under the kit's home fence (kitlib.config.user.fenced: the kit's tests and their children)
-    reads no machine config here and says nothing."""
+def dev_drive_note(user=_READ, kit=None):
+    """NO_DEV_DRIVE when the guard's outer bound has no Dev Drive to hold writes to, else None. It
+    asks what the guard asks (kitlib.guard.jail.dev_root: the guard's tolerant read of the machine
+    config, Ctx.user; an absolute dev_drive that is an existing folder), so the warning and the
+    bound always agree. `user` is a machine config as Ctx.user returns it (default: this
+    machine's, read here). A process under the kit's home fence (kitlib.config.user.fenced: the
+    kit's tests and their children) reads no machine config here and says nothing."""
     from kitlib.config import user as kuser
-    if user is _READ:
-        if kuser.fenced():
-            return None
-        try:
-            user = kuser.user_config()
-        except Exception:  # noqa: BLE001 - a config that does not read leaves the bound off: say so
-            user = None
-    return None if isinstance(user, dict) and kuser.dev_drive(user) else NO_DEV_DRIVE
+    from kitlib.guard import jail
+    if user is not _READ:
+        return None if jail.dev_root_of(user) else NO_DEV_DRIVE
+    if kuser.fenced():
+        return None
+    try:
+        from kitlib.guard import context
+        dev = jail.dev_root(context.Ctx(kit=kit))
+    except Exception:  # noqa: BLE001 - a config that does not read leaves the bound off: say so
+        dev = None
+    return None if dev else NO_DEV_DRIVE
 
 
 def text(kit, user=_READ):
@@ -46,5 +52,5 @@ def text(kit, user=_READ):
             'Every other name in angle brackets (`<worktree>`, `<repo>`, `<slug>`, `<branch>` and the '
             'like) is a placeholder you fill in from your brief, never a folder to look for.'
             % (k, k))
-    note = dev_drive_note(user)
+    note = dev_drive_note(user, kit)
     return head + ('\n' + note if note else '')

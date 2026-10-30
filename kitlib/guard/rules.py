@@ -1979,7 +1979,8 @@ def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=N
 UNPLACED = 'unplaced'
 # the rules a write the guard cannot place would otherwise be refused under (unplaced())
 PLACE_RULES = frozenset(['main-checkout', 'write-jail', 'git-main-history', 'git-restore', 'git-checkout',
-                         'git-reset-hard', 'git-clean', 'git-stash', 'git-bulk-add', 'git-commit-all'])
+                         'git-reset-hard', 'git-clean', 'git-stash', 'git-bulk-add', 'git-commit-all',
+                         'dev-drive'])
 
 
 def unplaced(d, role):
@@ -2262,8 +2263,12 @@ def dev_drive_bound(event, ctx, cwd, rs, dev, target, role, what, rewrite=None, 
                   run or 'cd %s' % quote(dest.path))
 
 
-def in_dropped(target, dropped):
-    """True when `target` lies in a root jail_view dropped for lying off the Dev Drive."""
+def in_dropped(target, dropped, dev):
+    """True when `target` is off the Dev Drive `dev` and lies in a root jail_view dropped for lying
+    off it. A dropped root that holds the Dev Drive (Z:/ around Z:/dev) opens nothing on it: a
+    target there is judged by the other roots alone."""
+    if not dropped or jail.on_drive(target, dev):
+        return False
     t = jail.real(target)
     return any(jail.inside(t, r.real) for r in dropped)
 
@@ -2276,7 +2281,7 @@ def write_jail(event, ctx, target, cwd, role, what, rewrite=None, run=None):
         return None
     rs, dev, dropped = jail_view(event, ctx, cwd)
     verdict, root = jail.judge(target, rs)
-    if verdict is None or (verdict == jail.OUTSIDE and (jail.sibling(ctx, target, cwd) or in_dropped(target, dropped))):
+    if verdict is None or (verdict == jail.OUTSIDE and (jail.sibling(ctx, target, cwd) or in_dropped(target, dropped, dev))):
         return dev_drive_bound(event, ctx, cwd, rs, dev, target, role, what, rewrite, run)
     aim = jail_aim(event, ctx, cwd, jail.destination(rs), rewrite)
     return jail_refusal(role, rs, verdict, root, what, target, rewrite, run, aim)
@@ -6277,7 +6282,7 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
         verdict, root = jail.judge(target, rs)
         what = '`%s` makes %s' % (bare(cmd), w.text)
         allowed = verdict is None or (verdict == jail.OUTSIDE and (jail.sibling(ctx, target, cwd) or
-                                                                   in_dropped(target, dropped)))
+                                                                   in_dropped(target, dropped, dev)))
         if allowed and (not dev or jail.on_drive(target, dev)):
             continue
         # a word an inline alias gave has no span in the line to aim (inline_alias)
@@ -6299,7 +6304,7 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
     if d:
         return d
     verdict, root = jail.judge(gc.dir, rs)
-    if verdict is None or (verdict == jail.OUTSIDE and (jail.sibling(ctx, gc.dir, cwd) or in_dropped(gc.dir, dropped))):
+    if verdict is None or (verdict == jail.OUTSIDE and (jail.sibling(ctx, gc.dir, cwd) or in_dropped(gc.dir, dropped, dev))):
         return dev_drive_bound(event, ctx, cwd, rs, dev, gc.dir, role, changes)
     if why is not None:
         return lander_refusal(ctx, cmd, gc, 'write-jail', role, why)

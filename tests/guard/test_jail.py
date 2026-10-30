@@ -798,6 +798,17 @@ class LanderMainCheckout(MainGit):
             with self.subTest(text):
                 self.allowed(self.git(text, tool='PowerShell'))
 
+    def test_the_landing_verbs_meet_the_dev_drive_bound(self):
+        # docs/guard.md "Outer bound": the lander's landing run is bounded too; here the Dev Drive is
+        # the lander's own worktree, so the main checkout is off it
+        m = self.main
+        self.w.user_config({'dev_drive': self.w.wt})
+        d = self.git('git -C "%s" fetch origin main' % m)
+        self.assertEqual((d.verdict, d.rule), ('deny', 'dev-drive'), d.reason)
+        self.assertIn('is not on the Dev Drive', d.reason)
+        self.w.user_config({'dev_drive': self.w.base})
+        self.allowed(self.git('git -C "%s" fetch origin main' % m))
+
     def test_a_lander_may_fetch_the_whole_remote(self):
         # docs/guard.md "Write jail", git bullet: `git fetch <remote>` writes only remote-tracking refs and FETCH_HEAD
         m = self.main
@@ -1933,6 +1944,47 @@ class DevDrive(Base):
         quiet = self.judged(event('Write', {'file_path': os.path.join(self.off, 'x.txt'), 'content': 'x'},
                                   self.w.wt, True))
         self.assertEqual((quiet.verdict, quiet.rule), ('allow', ''), quiet.reason)
+
+    def test_a_dropped_root_that_holds_the_dev_drive_opens_nothing_on_it(self):
+        # dev_drive a folder (Z:/dev) inside a data root (Z:/): the root is dropped, and a target on
+        # the Dev Drive outside the session's other roots stays outside them
+        hold = os.path.join(self.w.base, 'hold')
+        dev = os.path.join(hold, 'dev')
+        os.makedirs(dev)
+        self.w.kit({'repo': {'name': 'demo', 'push_block': True},
+                    'guard': {'data_roots': [{'path': hold, 'mode': 'open', 'why': 'test'}]}})
+        self.bound(dev_drive=dev)
+        self.jailed(self.write(os.path.join(dev, 'x.txt'), env=self.agents), 'write-jail')
+        self.jailed(self.write(os.path.join(hold, 'x.txt'), env=self.agents), 'dev-drive')
+
+    def test_a_write_the_guard_only_guesses_at_is_unplaced(self):
+        # node -e code's write stands in as the folder it runs in (off the Dev Drive here): a
+        # guess, so it meets unplaced (warn by default), as write-jail's guesses do
+        from unittest import mock
+        from kitlib.guard import modes
+        self.bound()
+        text = 'node -e "require(\'fs\').writeFileSync(\'x.txt\', \'y\')"'
+        self.jailed(self.run_bash(text, cwd=self.off, env=self.agents), 'unplaced')
+        with mock.patch.dict(modes.DEFAULTS, {'unplaced': modes.WARN}):
+            d = guard.decide(action(bash(text, self.off, True)), self.w.ctx(environ=self.agents))
+        self.assertEqual((d.verdict, d.rule), ('allow', rules.WARNED), d.reason)
+        self.assertIn('is not on the Dev Drive', d.reason)
+
+    def test_a_dev_drive_that_is_relative_or_not_there_turns_the_bound_off(self):
+        # a bad value must not refuse every agent write: the header warns instead (tests/host/test_header.py)
+        for value in ('dev', os.path.join(self.w.base, 'no-such-drive')):
+            with self.subTest(value=value):
+                self.bound(dev_drive=value)
+                self.allowed(self.write(os.path.join(self.off, 'x.txt'), env=self.agents))
+
+    def test_git_changing_a_checkout_off_the_dev_drive(self):
+        # the checkout git writes (gc.dir): a folder in AGENT_TEMP, a root, but off the drive
+        there = os.path.join(self.off, 'repo')
+        os.makedirs(there)
+        self.bound()
+        d = self.jailed(self.run_bash('git -C "%s" commit -m x' % W.fwd(there), env=self.agents), 'dev-drive')
+        self.assertIn('changes the checkout', d.reason)
+        self.assertIn('is not on the Dev Drive', d.reason)
 
 
 setUpModule = W.deny_softened           # these pin what the guard cannot place and the dropped rules (world.deny_softened)

@@ -30,8 +30,8 @@ refuses the writes inside that folder. A root's mode holds wherever it nests: a 
 it also lies in the checkout or temp, and one inside an add-only root may only be new.
 
 The outer bound (rules.dev_drive_bound, rule dev-drive): a write the roots allow is still refused
-when it is not on the Dev Drive, the machine config's dev_drive (dev_root, on_drive); unset, the
-bound is off. While it denies, roots drops a data or mark root off the Dev Drive.
+when it is not on the Dev Drive, the machine config's dev_drive (dev_root, on_drive); unset,
+relative or not an existing folder, the bound is off. While it denies, roots drops a data or mark root off the Dev Drive.
 
 Paths compare after kitlib.guard.paths.norm(real=True): os.path.realpath (symlinks and junctions
 resolved, `..` folded), then the case fold (os.path.normcase on Windows). On Linux whether a root
@@ -266,14 +266,25 @@ def roots(ctx, cwd, is_root, mark=None, dev=None, dropped=None):
 
 
 def dev_root(ctx):
-    """The Dev Drive's root folder, the machine config's dev_drive (kitlib.config.user.dev_drive),
-    or None: unset, or a config that does not read (ctx.user's tolerant read sets no key). None
-    leaves the outer bound off."""
+    """The Dev Drive's root folder, the machine config's dev_drive read the guard's tolerant way
+    (ctx.user), or None (dev_root_of). None leaves the outer bound off. kitlib.host.header reads
+    it the same way, so the start warning and the guard agree."""
     try:
         user = ctx.user()
     except Exception:  # noqa: BLE001 - no config read: the bound stays off, as with no key
         return None
-    return kuser.dev_drive(user) if isinstance(user, dict) else None
+    return dev_root_of(user)
+
+
+def dev_root_of(user):
+    """dev_drive of the machine config `user` (kitlib.config.user.dev_drive) when it is an absolute
+    path to an existing folder; else None: unset, a config that does not read (ctx.user's
+    tolerant read sets no key), relative, or not there (the Dev Drive unmounted, a wrong letter),
+    so a bad value turns the bound off rather than refusing every agent write."""
+    value = kuser.dev_drive(user) if isinstance(user, dict) else None
+    if not value or not os.path.isabs(value) or not os.path.isdir(value):
+        return None
+    return value
 
 
 def on_drive(path, dev):
