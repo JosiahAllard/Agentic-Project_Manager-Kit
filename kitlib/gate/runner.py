@@ -93,10 +93,13 @@ def gate_config(cfg):
     the hash still names what decides the steps. A key of HASH_IF_SET that is unset is left out,
     so a config that sets none of them hashes as it did before the key existed: a record a kit
     without the key wrote still verifies. Each key of HASH_REMOVED is put in with the default it
-    hashed as, so a record a kit that still had the key wrote verifies too."""
+    hashed as, so a record a kit that still had the key wrote verifies too. A renamed kind
+    hashes under its old name (HASH_KIND_AS)."""
     gate = cfg.section('gate')
     hashed = {k: v for k, v in gate.items() if not (k in HASH_IF_SET and v is None)}
     hashed.update((k, v) for k, v in HASH_REMOVED.items() if k not in hashed)
+    if isinstance(hashed.get('kind'), str):
+        hashed['kind'] = HASH_KIND_AS.get(hashed['kind'], hashed['kind'])
     return hashed
 
 
@@ -107,6 +110,13 @@ HASH_IF_SET = ('smoke_steps', 'docs_only')
 # the steps: dropping one would change every repo's hash, so every gate-OK record written on the
 # other side of that kit change would fail verify_record (docs/gate.md "Gate-OK record").
 HASH_REMOVED = {'python_tests': 'discover', 'python_tests_floor': None, 'trailers': None}
+# A renamed kind hashes under the name it had when records were first written (kitlib/lock/
+# kinds.json "aliases"), so "gate".kind under either name, and the default, hash as before the
+# rename: records from both sides of it verify. Fixed here, never read from the table. A kind
+# rename must add its entries here (the new name, and any name between), each mapped to the name
+# first written, not the previous one (tests/gate/test_branch_gate.py checks it against the
+# aliases). A repository-defined kind in "gate".kind goes through this same mapping.
+HASH_KIND_AS = {'test': 'engine-test', 'app-run': 'engine-run'}
 
 
 def gate_config_at(root, rev):
@@ -117,8 +127,8 @@ def gate_config_at(root, rev):
 
 def verify_record(root, commit):
     """gate_ok.verify() with the gate config read from the record's own `config_rev` (the commit
-    whose `.kit.json` the gate ran with): `(record, None)` or `(None, why)`. Until the legacy read
-    is retired a record's .git copy counts when the record folder has none (gate_ok.read)."""
+    whose `.kit.json` the gate ran with): `(record, None)` or `(None, why)`. A record's .git copy
+    counts only when there is no record folder (no dev_drive; gate_ok.read)."""
     def config_at(rev):
         try:
             return gate_config_at(root, rev)
@@ -872,7 +882,7 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
                                          source=eff.source, full=bool(full),
                                          mode='docs' if docs else None, input_keys=input_keys)
     except gate_ok.NoRecordFolder as e:
-        # Until the .git copies are retired: the .git copy is written, as before the record folder.
+        # Kept for load nodes set up without a dev_drive (docs/load-nodes.md): the .git copy.
         path = gate_ok.legacy_path(top, head)
         facts['record'] = path
         lines.append('warning: the gate-OK record could not be written to the record folder: %s'

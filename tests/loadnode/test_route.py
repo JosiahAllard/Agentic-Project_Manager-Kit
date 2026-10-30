@@ -142,6 +142,19 @@ class NeedOf(unittest.TestCase):
         with self.assertRaises(KeyError):
             route.need_of('no-such-kind', table=table, layout='L')
 
+    def test_a_retired_name_sizes_as_the_kind_it_names(self):
+        # the kit's kinds.json aliases engine-test to test: a --kind engine-test job or a base
+        # gate.kind "engine-test" is sized, not declined as an unknown kind
+        from kitlib.lock import layout as lay
+        table = {'test': object(), 'app-run': object()}
+        calls = []
+        orig = lay.need_for
+        lay.need_for = lambda layout, spec: calls.append(spec) or {'cpu': 2, 'gpu': 0}
+        self.addCleanup(setattr, lay, 'need_for', orig)
+        self.assertEqual(route.need_of('engine-test', table=table, layout='L'), {'cpu': 2, 'gpu': 0})
+        route.need_of('engine-run', table=table, layout='L')
+        self.assertEqual(calls, [table['test'], table['app-run']])
+
 
 if __name__ == '__main__':
     unittest.main()

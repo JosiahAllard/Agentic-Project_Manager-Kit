@@ -29,6 +29,7 @@ import json
 import os
 import time
 
+from kitlib.lock import kinds as kinds_mod
 from kitlib.lock import layout as lay
 from kitlib.lock.store import (EXIT_BUSY, EXIT_HOLD, EXIT_RESERVED, EXIT_USAGE, LockError,
                                iso, local_ok, local_text, new_id, parse_iso, public, read_json,
@@ -709,7 +710,8 @@ def end_hold(store, L, hid, how="released"):
 # ------------------------------------------------------------------ a run inside a hold
 def claim(store, L, rec, hid, shares):
     """run --hold hid: (hold, None) once run record rec may use it, else (None, why: exit 12).
-    An agent hold must be live, made for rec's repo, slug, kind and shares, and not claimed by
+    An agent hold must be live, made for rec's repo, slug, kind (a retired name of it, an alias
+    in the kinds table, matches) and shares, and not claimed by
     another live run; its claim {id, pid, ctime, at} is written into it and dies with the run's
     wrapper. An owner whole hold must admit rec (admits: the owner's own runs); it is not
     claimed (it may hold several of the owner's runs, one after another). No other hold can be run inside."""
@@ -730,7 +732,14 @@ def claim(store, L, rec, hid, shares):
                               "can" % text(h))
             want = {"repo": rec.get("repo"), "slug": rec.get("slug"), "kind": rec.get("kind"),
                     "shares": shares}
-            diff = [k for k, v in want.items() if h.get(k) != v]
+            al = kinds_mod.aliases(store.kinds_path)    # a kind under its retired name matches
+
+            def same(k, v):
+                if k == "kind":
+                    return kinds_mod.canonical(h.get(k), table_aliases=al) == \
+                        kinds_mod.canonical(v, table_aliases=al)
+                return h.get(k) == v
+            diff = [k for k, v in want.items() if not same(k, v)]
             if diff:
                 return None, "%s was made for %s, not this run's %s" % (
                     text(h), ", ".join("%s %s" % (k, h.get(k)) for k in diff),

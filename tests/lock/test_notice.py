@@ -117,6 +117,20 @@ class Target(StoreCase):
                 self.assertEqual(notice.target(self.store, "x", k, self.L, whole),
                                  self.tmp if want else None)
 
+    def test_a_kind_listed_under_its_retired_name_matches_and_the_reverse(self):
+        """kinds.json "aliases": a machine config naming "engine-test" still gets notices for
+        a "test" run, and a config naming "test" for a run booked under "engine-test". The kit's
+        own table, whose aliases these are."""
+        self.store.kinds_path = None
+        k = {"cpu": "medium", "gpu": 0}
+        for listed, kind in (("engine-test", "test"), ("test", "engine-test"),
+                             ("engine-run", "app-run"), ("test", "test")):
+            with self.subTest(listed=listed, kind=kind):
+                self.store.site = {"notice": {"dir": self.tmp, "kinds": [listed]}}
+                self.assertEqual(notice.target(self.store, kind, k, self.L), self.tmp)
+        self.store.site = {"notice": {"dir": self.tmp, "kinds": ["engine-test"]}}
+        self.assertIsNone(notice.target(self.store, "app-run", k, self.L))
+
     def test_off(self):
         self.store.site = {"daemons": "stop"}
         self.assertIsNone(notice.target(self.store, "x", {"cpu": "heavy"}, self.L, True))

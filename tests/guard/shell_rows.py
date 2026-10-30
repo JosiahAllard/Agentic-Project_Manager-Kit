@@ -16,7 +16,7 @@ def win(*parts):
     return BS.join(parts)
 
 
-def heavy(slug, rest, kind='engine-run'):
+def heavy(slug, rest, kind='app-run'):
     return LOCK + ' --kind %s --repo demo --slug %s -- %s' % (kind, slug, rest)
 
 

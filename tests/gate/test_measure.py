@@ -45,6 +45,17 @@ class Propose(unittest.TestCase):
         self.assertEqual(new['engine-test'], TABLE['engine-test'])
         self.assertIn('engine-test: kept (2 finished run(s); 3 needed)', notes)
 
+    def test_runs_under_a_kinds_retired_name_count_as_that_kind(self):
+        """Red before: a history line under the old name (from before the rename) was no run of
+        the kind, so two old and one new run were too few."""
+        hist = [run('old-test', 600, peak=8), run('old-test', 600, peak=8),
+                run('engine-test', 600, peak=8)]
+        aliases = {'old-test': {'to': 'engine-test', 'why': 'renamed'}}
+        new, notes = measure.propose(TABLE, hist, medium_cores=8, aliases=aliases)
+        self.assertEqual(new['engine-test']['_measured']['runs'], 3)
+        new, _ = measure.propose(TABLE, hist, medium_cores=8)
+        self.assertEqual(new['engine-test'], TABLE['engine-test'])
+
     def test_the_input_table_is_not_changed(self):
         before = copy.deepcopy(TABLE)
         measure.propose(TABLE, [run('engine-test', 600, peak=8)] * 3, medium_cores=8)

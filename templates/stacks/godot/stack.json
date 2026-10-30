@@ -1,6 +1,6 @@
 {
   "BUILD_COMMAND": "dotnet build --nologo -nodeReuse:false -c Debug",
-  "TEST_COMMAND": "python \"<kit folder>/tools/machine_lock.py\" run --repo <REPO> --slug engine-tests --kind engine-test -- tools\\godot.cmd --headless --path . res://tests/engine_tests.tscn",
+  "TEST_COMMAND": "python \"<kit folder>/tools/machine_lock.py\" run --repo <REPO> --slug engine-tests --kind test -- tools\\godot.cmd --headless --path . res://tests/engine_tests.tscn",
   "FAST_TEST_COMMAND": "dotnet test --nologo -c Debug",
   "GODOT_VERSION": "4.7.2",
   "ENGINE_TEST_SCENE": "res://tests/engine_tests.tscn",

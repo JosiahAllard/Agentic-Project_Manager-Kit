@@ -10,12 +10,10 @@ common dir, where records were before, is writable by any session that can write
 NoRecordFolder. One record per commit; a later pass of the same commit replaces it (atomically: a
 temp file in the same folder, then os.replace).
 
-The grace window (until the legacy read and the .git copies are retired, later work): every
-write also writes the record's .git copy, `<git common dir>/kit-gate-ok/<commit>.json`
-(legacy_dir), after the folder's record, for an older kit's readers (write). Every reader (a landing, the guard, the pre-push
-hook, the worktree and review tools) reads the record folder first and, when it has no record
-for the commit or there is no record folder (no dev_drive), the .git copy, so a branch gated by
-an older kit or before the record folder moved needs no fresh gate.
+The .git copy, `<git common dir>/kit-gate-ok/<commit>.json` (legacy_dir), is used only when
+there is no record folder (no dev_drive): it is then the one record written (write) and the one
+read (read). With a dev_drive it is neither written nor read. It stays for load nodes set up
+without a dev_drive (docs/load-nodes.md "Gating a branch on a node").
 
 The record (SCHEMA 1), every key always present:
 
@@ -151,9 +149,8 @@ def record_dir(root):
 
 
 def legacy_dir(root):
-    """The old record folder, `<git common dir>/kit-gate-ok`: written beside the new one until
-    the .git copies are retired, and read when the new one has no record until the legacy read
-    is retired (read)."""
+    """The old record folder, `<git common dir>/kit-gate-ok`: written and read only when there is
+    no record folder (no dev_drive; write, read)."""
     return os.path.join(_common(root), DIR_NAME)
 
 
@@ -324,28 +321,18 @@ def build(root, rev, gate_config, kit, repo_name, started_utc, steps, base=None,
 
 
 def write(root, record):
-    """Write `record` (from build()) to the record folder, then to its .git copy (legacy_dir),
-    each atomically; returns the record folder's path. The folder first, so a failed write leaves
-    no copy that read() would take; when the copy then fails the folder's record is removed, so
-    the record is there only when its copy is. RecordError when either write fails.
-    NoRecordFolder, with only the .git copy written, when there is no record folder (no
-    dev_drive)."""
+    """Write `record` (from build()) to the record folder, atomically; returns its path.
+    RecordError when the write fails. NoRecordFolder, with the .git copy (legacy_path) written
+    instead, when there is no record folder (no dev_drive)."""
     commit = record.get('commit')
     old = legacy_path(root, commit)
     try:
         path = record_path(root, commit)
     except NoRecordFolder:
+        # Kept for load nodes set up without a dev_drive (docs/load-nodes.md).
         _write_file(old, record)
         raise
     _write_file(path, record)
-    try:
-        _write_file(old, record)
-    except RecordError as e:
-        try:
-            os.remove(path)
-        except OSError as gone:
-            raise RecordError('%s; and %s could not be removed: %s' % (e, path, gone))
-        raise
     return path
 
 
@@ -396,22 +383,19 @@ def _load(path):
 
 def read(root, commit):
     """`(record, None)`, `(None, 'none')` when there is no record, or `(None, why)` when the file
-    is there and cannot be read as one. The record folder's file first; when it has none, or
-    there is no record folder (no dev_drive), the .git copy (legacy_path), until the legacy read
-    is retired (the module docstring)."""
+    is there and cannot be read as one. The record folder's file; only when there is no record
+    folder (no dev_drive), the .git copy (legacy_path)."""
     try:
         old = legacy_path(root, commit)
     except RecordError as e:
         return None, str(e)
     try:
-        path = record_path(root, commit)
-    except RecordError:
-        path = None
-    if path is not None:
-        rec, why = _load(path)
-        if why != 'none':
-            return rec, why
-    return _load(old)
+        return _load(record_path(root, commit))
+    except NoRecordFolder:
+        # Kept for load nodes set up without a dev_drive (docs/load-nodes.md).
+        return _load(old)
+    except RecordError as e:
+        return None, str(e)
 
 
 def verify(root, commit, gate_config=None, config_at=None):

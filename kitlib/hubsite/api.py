@@ -225,9 +225,13 @@ the local owner is given. POST records/{repo}/{id}/delete takes `confirm`, which
 An answer to a question bound to a record is filed by POST questions/{id}/answer as soon as it is
 stored, and again by POST questions/file (AGENT, optional {id}) and at hub start for every
 answered one not filed yet: file_answer. A filed question has status `filed` and stays pending,
-with `filed` true, until its asker logs it or marks it done (POST questions/{id}/log or done), so
-an asker between waits still reads the answer; the PM's list carries it only when it is the PM's
-or routed to `pm` (Routes), or a standing rule. One that failed stays `answered` with `filing`,
+with `filed` true, until its asker has it: the push worker then marks it done itself (done_by
+`hub`, kitlib.hubsite.push "Done by the hub"), never in the filing's own write; the asker may
+still log it or mark it done (POST questions/{id}/log or done; its done of one the hub marked
+done is no conflict). So an asker between waits still reads the answer; the PM's list carries it
+only when it is the PM's or routed to `pm` (Routes), or a standing rule. One the hub marked done
+takes a new answer, which reopens it, and a promote, which files it again (HUB_DONE_CLEARED).
+One that failed stays `answered` with `filing`,
 for the PM. A filed question carries `filed_as`, what the answer did to its record (pulled,
 freed, held: _filed_as, from the `record` view read before and after), which the push reads to
 choose who hears it. `standing` {at, via} marks an answer the owner made a standing rule (the
@@ -1167,7 +1171,8 @@ def questions_answer(api, req):
     """The owner's answer: `choice`, an optional `note`, and `standing` true when the answer is
     to be a standing rule (a question bound to a record only: the PM logs it, docs/action-hub.md
     "A standing rule"); a re-answer with no `standing` drops the mark. `standing` true with no
-    `choice` is the promote of an answer already given (_promote)."""
+    `choice` is the promote of an answer already given (_promote). A question the hub marked
+    done (_hub_done) takes a new answer too: it is reopened, its done fields cleared."""
     allowed = ('choice', 'note', 'standing', 'if_version')
     b = _fields(req, allowed, flags=('standing',))
     standing = _flag(b, 'standing', False)
@@ -1182,9 +1187,9 @@ def questions_answer(api, req):
     _pin(b)
     note = (_text(b, 'note') or '').strip()
     d = api.doc('questions', doc_id, b)
-    if d.get('status') not in ('open', 'answered', 'filed'):
+    if d.get('status') not in ('open', 'answered', 'filed') and not _hub_done(d):
         raise _invalid('%s is %s: only an open, an answered or a filed question takes an answer'
-                       % (doc_id, d.get('status')), 'status')
+                       ' (or one the hub marked done)' % (doc_id, d.get('status')), 'status')
     if standing and not isinstance(d.get('record'), dict):
         raise _invalid('%s is bound to no record: an answer the PM handles is logged by the PM '
                        'already, so it takes no standing flag' % doc_id, 'standing')
@@ -1206,12 +1211,18 @@ def questions_answer(api, req):
     if (d.get('filing') is not None or d.get('filed_at') is not None
             or d.get('filed_as') is not None):
         changes.update(filing=None, filed_at=None, filed_as=None)   # a re-answer is filed afresh
+    if _hub_done(d):
+        changes.update(HUB_DONE_CLEARED)    # a new answer reopens it
     if standing:
         changes['standing'] = {'at': answer['at'], 'via': answer['via']}
     elif d.get('standing') is not None:
         changes['standing'] = None      # a re-answer without the box is no standing rule
     out = api.change('questions', doc_id, d, changes, req,
                      {'status': 'answered', 'answer': answer})
+    if _hub_done(d):
+        # pending afresh: the old answer's hand-over must not pass for a pick-up of this one when
+        # no read ran in between (_routed forgets only what it sees gone; todos_done the same)
+        api._handed.pop(('question', doc_id), None)
     if isinstance(d.get('record'), dict):
         got = file_answer(api, doc_id, _via(req), full=req.full)
         if got is not None:
@@ -1503,6 +1514,16 @@ def questions_bind(api, req):
 # The statuses a question is logged or marked done from: an answer the PM handles, and one filed
 # into its record that its asker has not yet read and closed.
 HANDLED_FROM = ('answered', 'filed')
+# A question's done_by when the hub's push worker marked it done once its asker had the filed
+# answer (kitlib.hubsite.push "Done by the hub"), and what a new answer or a promote clears.
+HUB_DONE_BY = 'hub'
+HUB_DONE_CLEARED = {'done_by': None, 'done_why': None, 'done_at': None}
+
+
+def _hub_done(d):
+    """True when question d is done because the hub marked it so (HUB_DONE_BY): it still takes
+    a new answer and a promote, and its asker's own done is no conflict."""
+    return d.get('status') == 'done' and d.get('done_by') == HUB_DONE_BY
 # The filing codes no retry mends by itself (FILING_SAYS: the PM handles the answer); any other
 # code, or no filing mark yet, may still file on the next filing call (questions_file).
 FINAL_FILING = ('not_found', 'invalid', 'no_store')
@@ -1563,9 +1584,12 @@ def questions_done(api, req):
     caller's session key (AGENT_FROM, the PM, when none): refused `forbidden` (field from)
     unless it is the question's own `from` or the PM's, and before anything else about the
     question is said or written. Like _creator it is a claim checked against the item, not
-    proof (all agents share one token). Refused (`invalid`) for a question that is neither
-    answered nor filed, for a blank why and for a standing rule (the PM logs it). An answer bound
-    to a record and not filed is refused or needs `unfiled` (_unfiled), kept as `unfiled_why`."""
+    proof (all agents share one token). One the hub marked done already (_hub_done: once its
+    asker had the filed answer, maybe after the version the call pins) is done: ok, nothing
+    written, its version kept, `done_by` given. Refused (`invalid`) for a question that is
+    neither answered nor filed, for a blank why and for a standing rule (the PM logs it). An
+    answer bound to a record and not filed is refused or needs `unfiled` (_unfiled), kept as
+    `unfiled_why`."""
     b = _fields(req, ('why', 'from', 'if_version', 'unfiled'), required=('why',))
     _pin(b, required=True)
     _text(b, 'from')
@@ -1574,12 +1598,19 @@ def questions_done(api, req):
     if not why:
         raise _invalid('why says why the answer needs no ruling: it cannot be blank', 'why')
     doc_id = req.params['id']
-    d = api.doc('questions', doc_id, b)
+    d = api.doc('questions', doc_id)
     claimed = (b.get('from') or '').strip() or AGENT_FROM
     asker = d.get('from') or AGENT_FROM
     if claimed not in (asker, AGENT_FROM):
         raise HubError('forbidden', '%s is from %s: only its asker or %s can mark it done '
                        '(%s was given)' % (doc_id, asker, AGENT_FROM, ascii(claimed)), 'from')
+    if _hub_done(d):
+        # the hub marked it done once its asker had it (kitlib.hubsite.push "Done by the hub"),
+        # maybe after the version this call pins: done already, nothing written
+        return {'ok': True, 'id': doc_id, 'version': _version(d),
+                'revision': api.store.revision, 'warnings': [], 'status': 'done',
+                'done_by': HUB_DONE_BY}
+    d = api.doc('questions', doc_id, b)
     if d.get('status') not in HANDLED_FROM:
         raise _invalid('%s is %s: only an answered or filed question is marked done'
                        % (doc_id, d.get('status')), 'status')
@@ -1597,21 +1628,25 @@ def _promote(api, req, doc_id, b):
     answer already given to a question bound to a record a standing rule (the filed card's
     promote button), the answer kept as it is and not filed again: `standing` {at, via}, so the
     question is pending for the PM, who logs it into the ledger, as well as for its asker
-    (docs/action-hub.md "A standing rule"). Refused (`invalid`) for a question that is not
-    answered or filed, one bound to no record (the PM logs every such answer already) and one
-    already standing."""
+    (docs/action-hub.md "A standing rule"). One the hub marked done (_hub_done) is put back to
+    `filed`, its done fields cleared, so it is pending for the PM. Refused (`invalid`) for a
+    question that is not answered, filed or marked done by the hub, one bound to no record (the
+    PM logs every such answer already) and one already standing."""
     d = api.doc('questions', doc_id, b)
-    if d.get('status') not in HANDLED_FROM:
+    if d.get('status') not in HANDLED_FROM and not _hub_done(d):
         raise _invalid('%s is %s: only an answered or filed question is made a standing rule'
-                       % (doc_id, d.get('status')), 'status')
+                       ' (or one the hub marked done)' % (doc_id, d.get('status')), 'status')
     if not isinstance(d.get('record'), dict):
         raise _invalid('%s is bound to no record: the PM logs its answer already' % doc_id,
                        'record')
     if isinstance(d.get('standing'), dict):
         raise _invalid('%s is a standing rule already' % doc_id, 'standing')
     standing = {'at': api.clock(), 'via': _via(req)}
-    return api.change('questions', doc_id, d, {'standing': standing}, req,
-                      {'standing': standing})
+    changes = {'standing': standing}
+    if _hub_done(d):
+        # filed again, so pending for the PM, who logs it: the hub's done is undone
+        changes.update(HUB_DONE_CLEARED, status='filed')
+    return api.change('questions', doc_id, d, changes, req, {'standing': standing})
 
 
 def todos_list(api, req):

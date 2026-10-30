@@ -76,9 +76,10 @@ configured command is printed as written, never changed. The last check, always 
 
 When the hub is up and its pending ask answered, the hub lines end, before the push line, with at
 most one line counting the owner's answers the hub filed into their records since the last PM
-start that are still `filed`, waiting for their askers (`kitlib.pmstart` `filed_digest`;
-docs/action-hub.md "Filing the answer"). An answer its asker has logged or marked done since is
-not counted, and one answered again counts only once it is filed again, by that filing's time.
+start that are still `filed`, waiting for their askers, or that the hub marked done once their
+askers had them (`done_by` `hub`; `kitlib.pmstart` `filed_digest`; docs/action-hub.md "Filing
+the answer"). An answer its asker has logged or marked done itself since is not counted, and one
+answered again counts only once it is filed again, by that filing's time.
 A filed answer that changed nothing for the PM to do (`filed_as` `held`, or `pulled` with a
 worker on the record) is pushed to its asker, or the record's coordinator, not to the PM
 (docs/action-hub.md "Push notifications"), so this line is where the PM sees the ones still unread. It is information,
@@ -88,19 +89,22 @@ not a step.
   `kitlib.pmwatch.default_state_file`; `filed_stamp_file`). The path is worked out only when the
   hub is up. A stamp that is missing, unreadable or holds a time with no offset counts as
   24 hours before now (`FILED_FALLBACK`).
-- The ask: one `GET /api/v1/questions?status=filed&since=<T>`, at most `HUB_SITE_TIMEOUT_S`
-  (1.5 seconds), the third ask of the check. The route keeps the questions written (`updated_at`)
-  at or after T; the line counts those whose `filed_at` is at or after T.
+- The asks: `GET /api/v1/questions?status=filed&since=<T>`, then the same with `status=done`,
+  each at most `HUB_SITE_TIMEOUT_S` (1.5 seconds), the third and fourth asks of the check. The
+  route keeps the questions written (`updated_at`) at or after T; the line counts those whose
+  `filed_at` is at or after T, of the done ones only those with `done_by` `hub`.
 - The line: `hub: <k> answer(s) filed into records since <T>, for your information: python
-  "<kit>/tools/hub.py" questions --status filed --since <T>`; no line when `<k>` is 0. That
-  command lists them: `hub.py questions --since ISO` passes the route's `since` (it lists the
+  "<kit>/tools/hub.py" questions --status filed --since <T>`, then, when the hub marked `<d>` of
+  them done, `; <d> of them marked done by the hub once their asker had them (done_by hub):
+  python "<kit>/tools/hub.py" questions --status done --since <T>`; no line when `<k>` is 0.
+  Those commands list them: `hub.py questions --since ISO` passes the route's `since` (it lists the
   questions written at or after it, with or without `--status`).
 - The stamp is rewritten with now (whole file, through a `.tmp` and a replace) once the hub has
-  answered, line or no line, so the next start counts from this one; a stamp that cannot be
+  answered both asks, line or no line, so the next start counts from this one; a stamp that cannot be
   written is not reported, and the next start counts again from the old time.
 - Failures, each one line, and the stamp left as it was: the stamp's path cannot be worked out
   (`hub: answers filed since the last start not counted (<exception class>)`, and no ask), or the
-  ask fails (`hub: answers filed since <T> not asked (<exception class>)`). A hub that is down, or
+  ask or the done ask fails (`hub: answers filed since <T> not asked (<exception class>)`). A hub that is down, or
   whose pending ask failed, gets no digest and its stamp is neither read nor written.
 
 ## Kit currency (`kit_sync`)

@@ -45,6 +45,26 @@ def resolve(kind, table, path=None):
     return to if to in table else kind
 
 
+def aliases(path=None):
+    """{retired name: kind} from the `aliases` object of the kinds table at `path` (None: the
+    kit's); {} when it cannot be read. For comparing kind names only: load() and resolve() fail
+    closed on a bad aliases object, a comparison falls back to the names as written."""
+    try:
+        return policy.kinds_aliases(path or KINDS_FILE)
+    except ConfigError:
+        return {}
+
+
+def canonical(kind, path=None, table_aliases=None):
+    """`kind` under its current name: the kind a retired name is an alias of, else `kind` as
+    it is. A record written before a rename (a hold, a history line, a landing's booked kind)
+    then compares equal to one written after it. table_aliases: aliases(path), already read."""
+    if not isinstance(kind, str):
+        return kind
+    al = aliases(path) if table_aliases is None else table_aliases
+    return al.get(kind, kind)
+
+
 def is_size(cpu):
     """True for a whole number of cores of at least one (a bool is not one)."""
     return type(cpu) is int and cpu >= 1
@@ -91,7 +111,7 @@ def load(path=None, agent_cap=None):
 
 
 def describe(table):
-    """'engine-test: 3 cores' ('medium cpu' for an alias) ... one line per kind, for help text
+    """'test: 3 cores' ('medium cpu' for an alias) ... one line per kind, for help text
     and status."""
     lines = []
     for k, e in sorted(table.items()):

@@ -36,9 +36,9 @@ a constructor argument, and the defaults read this machine.
                      the named wrapper is an ancestor of this process, alive, and holding. The
                      variable alone is never proof.
   gate_ok(root, sha) kitlib.gate.runner.verify_record: the record must name a config_rev in
-                     sha's history and hash the gate config that commit holds; until the legacy
-                     read is retired a record's .git copy counts when the record folder has none
-                     (kitlib.records.gate_ok.read)
+                     sha's history and hash the gate config that commit holds; a record's .git
+                     copy counts only when there is no record folder (no dev_drive;
+                     kitlib.records.gate_ok.read)
   user()             the machine config (ledger_path, ledger_dir and the guard_* keys), read
                      tolerantly: files the strict reader refuses only for keys this kit does not
                      know still yield their ledger_path, ledger_dir and their string or

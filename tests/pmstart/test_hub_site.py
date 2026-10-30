@@ -467,12 +467,12 @@ AT = datetime.datetime(2026, 10, 6, 9, 0, tzinfo=UTC)
 
 
 class FiledClient(FakeClient):
-    """FakeClient whose GET /questions answers `filed` (the questions the hub holds filed) and
-    keeps each query it was asked."""
+    """FakeClient whose GET /questions answers `filed` (the questions the hub holds filed) for
+    status filed and `done` (the done ones) for status done, and keeps each query it was asked."""
 
-    def __init__(self, filed=(), **kw):
+    def __init__(self, filed=(), done=(), **kw):
         FakeClient.__init__(self, **kw)
-        self.filed, self.queries = list(filed), []
+        self.filed, self.done, self.queries = list(filed), list(done), []
 
     def get(self, path, role=hubclient.ANY, query=None, timeout=None):
         if path != "/questions":
@@ -481,13 +481,21 @@ class FiledClient(FakeClient):
         self.queries.append(query)
         if self.error:
             raise self.error
-        return {"ok": True, "items": self.filed}
+        return {"ok": True, "items": self.done if (query or {}).get("status") == "done"
+                else self.filed}
 
 
 def filed(*ats):
     return [{"id": "Q-%d" % (1000 + n), "status": "filed",
              "filed_at": at.isoformat() if isinstance(at, datetime.datetime) else at}
             for n, at in enumerate(ats)]
+
+
+def done(by, *ats):
+    """Done questions filed at `ats`, marked done by `by` (`hub`: the push worker; None: their
+    asker or the PM)."""
+    return [dict(q, id="Q-%d" % (2000 + n), status="done", done_by=by)
+            for n, q in enumerate(filed(*ats))]
 
 
 class FiledDigestTest(unittest.TestCase):
@@ -518,9 +526,10 @@ class FiledDigestTest(unittest.TestCase):
         c = FiledClient(filed(AT - hour, AT - 25 * hour))
         since = AT - pmstart.FILED_FALLBACK
         self.assertEqual(pmstart.filed_digest(c, self.stamp, AT), [self.line(1, since)])
+        text = since.isoformat(timespec="seconds")
         self.assertEqual(c.queries,
-                         [{"status": "filed", "since": since.isoformat(timespec="seconds")}])
-        self.assertEqual(c.calls, [("/questions", pmstart.HUB_SITE_TIMEOUT_S)])
+                         [{"status": "filed", "since": text}, {"status": "done", "since": text}])
+        self.assertEqual(c.calls, [("/questions", pmstart.HUB_SITE_TIMEOUT_S)] * 2)
         self.assertEqual(self.held(), {"at": AT.isoformat(timespec="seconds")})
 
     def test_the_next_start_counts_from_the_stamp_the_last_one_wrote(self):
@@ -550,6 +559,39 @@ class FiledDigestTest(unittest.TestCase):
                           % last.isoformat(timespec="seconds")])
         self.assertEqual(self.held()["at"], last.isoformat())
 
+    def test_answers_the_hub_marked_done_are_counted_and_named_apart(self):
+        # red proof: before the hub marked filed answers done, a done one dropped out unseen
+        last = AT - datetime.timedelta(hours=3)
+        self.write(json.dumps({"at": last.isoformat()}))
+        hour = datetime.timedelta(hours=1)
+        c = FiledClient(filed(AT - hour),
+                        done("hub", AT - hour, AT - 2 * hour, last - hour) + done(None, AT - hour))
+        text = last.isoformat(timespec="seconds")
+        self.assertEqual(pmstart.filed_digest(c, self.stamp, AT), [
+            self.line(3, last) + '; 2 of them marked done by the hub once their asker had them '
+            '(done_by hub): python "%s" questions --status done --since %s'
+            % (pmstart.HUB_TOOL, text)])
+        self.write(json.dumps({"at": last.isoformat()}))
+        only = FiledClient(done=done("hub", AT - hour))     # none still filed: a line all the same
+        self.assertEqual(pmstart.filed_digest(only, self.stamp, AT), [
+            self.line(1, last) + '; 1 of them marked done by the hub once their asker had them '
+            '(done_by hub): python "%s" questions --status done --since %s'
+            % (pmstart.HUB_TOOL, text)])
+
+    def test_a_done_ask_that_fails_is_one_line_and_leaves_the_stamp(self):
+        last = AT - datetime.timedelta(hours=3)
+        self.write(json.dumps({"at": last.isoformat()}))
+
+        class DoneFails(FiledClient):
+            def get(self, path, role=hubclient.ANY, query=None, timeout=None):
+                if (query or {}).get("status") == "done":
+                    raise OSError("C:\\secret")
+                return FiledClient.get(self, path, role, query, timeout)
+        self.assertEqual(pmstart.filed_digest(DoneFails(filed(AT)), self.stamp, AT),
+                         ["hub: answers filed since %s not asked (OSError)"
+                          % last.isoformat(timespec="seconds")])
+        self.assertEqual(self.held()["at"], last.isoformat())
+
     def test_a_stamp_that_cannot_be_read_falls_back_to_24_hours(self):
         since = AT - pmstart.FILED_FALLBACK
         for text in ("{", "[]", '{"at": 7}', '{"at": "2026-10-06T06:00:00"}', '{"no": 1}'):
@@ -574,7 +616,7 @@ class FiledDigestTest(unittest.TestCase):
         self.assertEqual(out[0], "hub: server up on port 4321, 0 pending for the PM")
         self.assertEqual(out[1], self.line(1, AT - pmstart.FILED_FALLBACK))
         self.assertIn("push", out[2])
-        self.assertEqual([t for _, t in c.calls], [pmstart.HUB_SITE_TIMEOUT_S] * 3)
+        self.assertEqual([t for _, t in c.calls], [pmstart.HUB_SITE_TIMEOUT_S] * 4)
         bare = FiledClient(filed(AT))
         self.assertEqual(len(site(bare)), 2)
         self.assertNotIn("/questions", [p for p, _ in bare.calls])
