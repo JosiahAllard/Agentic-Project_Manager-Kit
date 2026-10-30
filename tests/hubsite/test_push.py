@@ -1379,6 +1379,46 @@ class AutoDoneTest(FiledPushCase):
                                     {'why': 'w', 'from': 'other', 'if_version': stale})
         self.assertEqual((status, obj['error']['code']), (403, 'forbidden'), obj)
 
+    def entry(self, qid):
+        return self.worker._outbox['question:' + qid]
+
+    def test_a_silent_asker_still_owed_the_answer_is_not_counted_undelivered(self):
+        # mutation proof: _summarize counting a silent recipient reports 1 undelivered here
+        self.bind('parked', 'open', live=())
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.worker.poll()
+        self.later(10)
+        self.assertEqual([r for r, _t in self.push.calls], [push.PM_KEY], 'the freed ping alone')
+        recipients = self.entry(qid)['recipients']
+        self.assertTrue(recipients['kit'].get('silent'), recipients)    # still owed, unsent
+        self.assertEqual([r for r, st in recipients.items() if not st.get('silent')
+                          and st.get('last') != push.WRITTEN], [], recipients)
+        self.assertEqual(self.worker.status()['undelivered'], 0)
+
+    def test_a_standing_rule_made_of_an_owed_answer_drops_the_hub_done_and_the_silent_asker(self):
+        # mutation proof: the merge keeping `done`, `version` or `has_it`, or the silent asker,
+        # leaves them on the entry (push-outbox.json) of a standing rule, which the PM logs
+        self.bind('parked', 'open', live=())
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.worker.poll()
+        self.later(10)
+        before = self.entry(qid)
+        self.assertEqual((before.get('done'), type(before.get('version'))), ('kit', int))
+        self.assertTrue(before['recipients']['kit'].get('silent'))
+        self.promote(qid)
+        self.worker.poll()
+        after = self.entry(qid)
+        self.assertTrue(after['standing'])
+        self.assertEqual([k for k in ('done', 'version', 'has_it') if k in after], [], after)
+        self.assertEqual(sorted(after['recipients']), [push.PM_KEY], after['recipients'])
+        self.assertFalse(after['recipients'][push.PM_KEY]['once'])
+        self.assertIn('standing rule', self.push.to(push.PM_KEY)[-1])
+        self.pick_up('kit')
+        self.later(400)
+        self.assert_not_done(qid)       # a standing rule is the PM's to log
+
 
 if __name__ == '__main__':
     unittest.main()
