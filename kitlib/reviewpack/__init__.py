@@ -540,17 +540,29 @@ def pack(path, branch, base=None, diff=None):
         return Outcome(USAGE, lines)
 
 
-def gate_line(top, branch):
+def gate_line(top, branch, cfg=None):
     """The `gate` line: whether `branch`'s tip has the record a landing requires, a gate-OK
     record of exactly that commit from a `gate.py --full` pass (gate_ok.verify_full; docs/gate.md
-    "Landing"). Printed only: it never changes the exit status."""
+    "Landing"), or, when the base's config `cfg` sets "landing".gate_once (docs/gate.md "Gate once
+    at landing"), a default-mode ("select") record of it too. Printed only: it never changes the
+    exit status."""
     tip, why = gitrefs.resolve(branch, top)
     if not tip:
         return 'gate     tip of %s cannot be read (%s); landing will refuse' % (branch, why)
     rec, why = gate_ok.verify_full(top, tip)
     if rec is None:
+        scoped = gate_ok.verify(top, tip)[0] if gate_once(cfg) else None
+        if scoped is not None and gate_ok.mode_of(scoped) == 'select':
+            return ('gate     tip %s: scoped gate OK (the base sets "landing".gate_once), ended %s;'
+                    ' a strict path or a gate config change still needs --full'
+                    % (tip[:10], scoped.get('ended_utc')))
         return 'gate     tip %s: NO full-gate OK record (%s); landing will refuse' % (tip[:10], why)
     return 'gate     tip %s: full gate OK, ended %s' % (tip[:10], rec.get('ended_utc'))
+
+
+def gate_once(cfg):
+    """True when the Config `cfg` (None: no config) sets "landing".gate_once true."""
+    return cfg is not None and cfg.section('landing').get('gate_once') is True
 
 
 def _pack(lines, path, branch, base, diff):
@@ -592,7 +604,7 @@ def _pack(lines, path, branch, base, diff):
                   '--').splitlines()
     lines.append('commits  %d (no merges)' % len(commits))
     lines.extend('           ' + c for c in commits[:40])
-    lines.append(gate_line(top, branch))
+    lines.append(gate_line(top, branch, base_cfg))
 
     levels = risk_rules(top)
     groups = {}
