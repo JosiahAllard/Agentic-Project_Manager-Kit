@@ -5370,6 +5370,18 @@ def git_plain_commit(event, ctx, cmd, inv, cwd, role):
     return refuse('git-plain-commit', role, why + alt[0], alt[1])
 
 
+# a commit hash as typed: 7 to 40 hex digits (git's default abbreviation up to a full SHA-1)
+TYPED_HASH_RE = re.compile(r'[0-9a-fA-F]{7,40}')
+
+
+def typed_hash(revs):
+    """The one commit hash among a merge's or pull's words `revs` (commit_scan), which sync_base.py
+    then merges; `<hash>` when there is none, more than one, or the words could not be placed
+    (None). A branch name (origin/main) is never resolved: the coordinator names the hash."""
+    found = [r for r in revs or () if TYPED_HASH_RE.fullmatch(r)]
+    return found[0] if len(found) == 1 else '<hash>'
+
+
 def commit_alternative(ctx, gc, where):
     """(advice, command) for git `gc` when it makes a commit (COMMIT_VERBS, commit_scan), run in
     the linked worktree `where`: the kit tool that does the job with the trailer (git_plain_commit
@@ -5408,7 +5420,7 @@ def commit_alternative(ctx, gc, where):
     if sub in ('merge', 'pull'):
         return ('Sync with the commit your coordinator named; the tool merges exactly it and adds the trailer (to '
                 'merge anything else, run git -C %s merge --no-commit <rev>, then in its own call %s):' % (top, commit),
-                'python %s -C %s <hash> --model "<your model>"' % (kit_tool(ctx, 'sync_base'), top))
+                'python %s -C %s %s --model "<your model>"' % (kit_tool(ctx, 'sync_base'), top, typed_hash(revs)))
     if sub == 'am':
         return ('Apply the patch to the index, then in its own call commit it with %s:' % commit,
                 'git -C %s apply --index <patch>' % top)
