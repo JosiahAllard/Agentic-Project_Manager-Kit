@@ -25,6 +25,13 @@ class NotFound(Refusal):
     code = 1
 
 
+class Ended(NotFound):
+    """The id is no longer in the store because a commit (or a tracked file's removal here) ended
+    it: closed, retired or deleted. Not a mistake, so `show` prints it and exits 0."""
+    label = 'ENDED'
+    code = 0
+
+
 class Failure(Refusal):
     """The tool could not finish: the store or the ledger could not be read, git failed, or the
     write lost every compare-and-swap race it was allowed."""

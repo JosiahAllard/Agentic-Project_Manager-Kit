@@ -78,7 +78,7 @@ class Cli(unittest.TestCase):
         log = self.repo.git('log', '--format=%s', smod.STORE_REF)
         self.assertEqual(log.split('\n')[0], 'deletes FOO: the owner says this should not exist')
         rc, out = self.run_tool('show', 'FOO')
-        self.assertEqual(rc, 1, out)
+        self.assertEqual(rc, 0, out)
         self.assertIn('deletes FOO: the owner says this should not exist', out)
         rc, out = self.run_tool('delete', 'FOO', '--why', 'the owner says this should not exist')
         self.assertEqual(rc, 1, out)

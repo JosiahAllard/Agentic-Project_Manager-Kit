@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -181,7 +182,8 @@ class RunScript(StoreCase):
         self.assertRegex(lines[1], r"^run=r-\d{8}T\d{6}Z-[0-9a-f]{6}:\d+:\d+$")
 
     def test_the_bat_runs_in_the_runs_job(self):
-        make_scripts(self.dir, ["@ping -n 3 127.0.0.1 >nul"])
+        # a delay with no network (ping exits 1 where loopback ICMP is blocked)
+        make_scripts(self.dir, ['@"%s" -c "import time; time.sleep(2)"' % sys.executable])
         s = rm.book("engine-test", "kit", "resolve", cores=1, store=self.store, env=clean_env())
         with s:
             p = s.start(rm.script_command([os.path.join(self.dir, "gradlew")]),

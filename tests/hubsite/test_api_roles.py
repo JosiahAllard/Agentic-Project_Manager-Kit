@@ -248,6 +248,9 @@ ROWS = {
     ('POST', '/to_pm/{id}/delete'): (lambda s: seed_to_pm(s, 'queued'), None, None),
     ('POST', '/inbox'): (None, {'text': 'x'}, None),
     ('POST', '/inbox/{id}/read'): (seed_inbox, None, None),
+    ('GET', '/landings'): (None, None, None),
+    ('POST', '/landings'): (None, {'repo': 'r', 'branch': 'kit/x', 'tip': 'a' * 40,
+                                   'main': 'b' * 40}, None),
     ('GET', '/pages'): (None, None, None),
     ('POST', '/pages'): (None, {'id': 'plan-1', 'title': 't', 'html': '<p>x</p>'}, None),
     ('GET', '/pages/{id}'): (seed_page, None, None),
@@ -398,6 +401,8 @@ class RolesCase(unittest.TestCase):
                 ('POST', '/to_pm/send'): OWNER, ('POST', '/to_pm/{id}/reply'): AGENT,
                 ('POST', '/to_pm/{id}/edit'): OWNER, ('POST', '/to_pm/{id}/delete'): OWNER,
                 ('POST', '/inbox'): AGENT, ('POST', '/inbox/{id}/read'): OWNER,
+                # a landing's event is posted by tools/land.py, an agent; the owner only reads it
+                ('POST', '/landings'): AGENT,
                 ('POST', '/pages'): AGENT, ('POST', '/pages/{id}/delete'): OWNER,
                 # the owner sets the kit's automatic tasks; an agent only reads them
                 ('GET', '/schedules'): ANY, ('POST', '/schedules'): OWNER,
