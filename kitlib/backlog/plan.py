@@ -1549,7 +1549,7 @@ def _plan_takeover(snap, ctx, rec, reason, may_collide, blocker):
     full = resource_hits(rec.all('uses'), holding, ctx.capacity(snap), skip=rid,
                          branch=ctx.current_branch())
     folds, notes = _pull_fold_hits(ctx, rec.all('scope'), holding, ctx.current_branch())
-    given =[f for f, v in (('--reason', reason), ('--blocker', blocker)) if v is not None]
+    given = [f for f, v in (('--reason', reason), ('--blocker', blocker)) if v is not None]
     if given:
         raise Usage('`%s` is a dead pull of this session (pulled_by %s has no branch): `pull %s` '
                     'takes it over as it stands, with no %s' % (rid, old, rid, ', '.join(given)))

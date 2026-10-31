@@ -81,7 +81,7 @@ def _backlog_checks(root, home, now, notes, questions):
         notes.append('backlog: %d record(s) could not be read' % len(snap.unreadable))
     code_root = code_checkout(ctx.root)
     try:
-        resources = ctx.resources
+        resources = ctx.capacity(snap)
     except (Refusal, OSError) as exc:
         resources = None
         notes.append('backlog resources not read: %s' % ' '.join(str(exc).split()))
