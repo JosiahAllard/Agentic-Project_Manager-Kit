@@ -16,7 +16,6 @@ whose base is `TestCase`. A tool never depends on a test module (a tool naming o
 
 Selection (`select`, pure) for each changed repo-relative path:
   - a path matching `ignore` selects nothing;
-  - with `merged`, any tools path selects ALL (the whole suite);
   - a `selector_files` file (tools-relative) selects ALL: it changes what is selected or how it runs;
   - a tools `X.py` selects every test module that reaches X (and X itself if it is one);
   - a tools file in `extra` selects what reaches the modules that read it;
@@ -26,7 +25,10 @@ Selection (`select`, pure) for each changed repo-relative path:
 A changed tool that no test reaches selects the `guard_tests` (`unmapped_tool: "guard"`, whose
 audit then fails an untested tool) or ALL (`"all"`; also when no guard test exists). Every
 non-empty selection, and every one a tools path made, gets the existing `guard_tests`; then
-`always_run` is appended (module or module.Class ids, in config order).
+`always_run` is appended (module or module.Class ids, in config order). With `merged` (a landing's
+merged-tree gate, over base..merge) the selection is the same, and when a tools path made it the
+`whole_tree` classes of existing, unselected modules are appended too; the daily full run and
+--full run every module.
 
 The two `mentions` modes (the repositories' two selectors):
   "path"   (default) file-name edges are str constants ending in `Y.py`, followed transitively
@@ -50,7 +52,8 @@ kitlib/config/schema.py, checks keys and types at load, `config` the deeper shap
                   .solution()); with none, a piece entry is a ConfigError when it is read.
   patterns        [{"regex": "...", "modules": [...]}, ...]  a changed path matching selects them
   whole_tree      {"test_x.Class": "why"}      classes that read the whole real tree: out of the
-                                               read audit (pytests --audit), each with a reason
+                                               read audit (pytests --audit), each with a reason;
+                                               a merged selection a tools path made adds them
   untested        ["tool", ...]                tools no test imports, on purpose
   dynamic_imports {"module": [["reached", ...], "why"]}  computed import_module calls, declared
   guard_tests     ["test_tool_deps"]           (default) see above; only those that exist
@@ -560,8 +563,6 @@ def selection(changed, graph, merged=False, pieces=None, cfg=None):
         is_source = tokens and (f in graph.sources or matches_any(f, cfg['sources']))
         if in_tools or is_source:
             touched = True
-            if merged:
-                return ALL, 'full suite: %s changed on a merged branch' % f
             rest = f[len(prefix):] if in_tools else None
             if rest in cfg['selector_files']:
                 return ALL, 'full suite: %s changed (it decides the selection)' % f
@@ -586,8 +587,13 @@ def selection(changed, graph, merged=False, pieces=None, cfg=None):
         mods |= set(_guards(cfg, graph))
     out = sorted(mods)
     always = [t for t in cfg['always_run'] if t.split('.')[0] not in mods]
-    return out + always, '%d changed path(s) -> %d test module(s)%s' % (
-        counted, len(out), ' + %d always-run' % len(always) if always else '')
+    # A landing's merged gate: the whole_tree classes read every file, so no edge says which change
+    # reaches them; a tools change runs them all (the daily full run runs every module).
+    whole = [c for c in cfg['whole_tree'] if merged and touched and c not in always
+             and c.split('.')[0] in graph.tests and not {c.split('.')[0]} & (mods | set(always))]
+    return out + always + whole, '%d changed path(s) -> %d test module(s)%s%s' % (
+        counted, len(out), ' + %d always-run' % len(always) if always else '',
+        ' + %d whole-tree class(es) (merged)' % len(whole) if whole else '')
 
 
 def _guards(cfg, graph):
