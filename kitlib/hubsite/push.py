@@ -198,14 +198,17 @@ JOB_EACH = {'unblocked': 'A hub timed job cleared a hold whose `until` condition
                          '<ID>` gives the commit. No reply is needed.',
             'crossing': _CROSSOVER + 'detail (<session>:a<account>) nears the weekly limit and the '
                         'hub is moving it there. Do not hand it off or stop it yourself: when it '
-                        'replies ready, the hub runs the next step. No reply is needed.',
+                        'replies ready, the hub runs the next step. No reply is needed. Detail '
+                        'pm:a<account> is you, the PM: follow the checkpoint message the hub sent.',
             'would-cross': _CROSSOVER + 'would move detail (<session>:a<account>) now, but '
                            'launcher.usage_crossover is notify: nothing was stopped or started. '
                            'For your information; no reply is needed.',
             'stalled': _CROSSOVER + 'detail stands stopped at the weekly limit. On `full` the hub '
                        'stops it and starts a successor on its state note; otherwise it is yours.',
             'crossed': _CROSSOVER + 'the session in detail has taken over and its old session has '
-                       'gone. For your information; no reply is needed.',
+                       'gone. For your information; no reply is needed. When detail is the PM, '
+                       'coordinators.json names it and the old PM window stays until the owner '
+                       'closes it.',
             'cross-cleared': _CROSSOVER + 'dropped the crossing of detail before it finished; the '
                              'log says why and what it had done. For your information; no reply '
                              'is needed.',
@@ -217,8 +220,10 @@ JOB_EACH = {'unblocked': 'A hub timed job cleared a hold whose `until` condition
                           '30 minutes; its old session stays idle. Check on the successor.',
             'no-room': _CROSSOVER + 'detail needs moving and no account has room: nothing was '
                        'stopped or started. A stalled session wakes at its reset.',
-            'pm-limit': _CROSSOVER + 'the PM session is at the weekly limit; this job never moves '
-                        'it. It is yours to hand off.',
+            'pm-limit': _CROSSOVER + 'the PM session is at the weekly limit and this job cannot '
+                        'move it: it is not a launched session (the desktop app), or '
+                        'coordinators.json records no pm_session_id or pm_account. It is yours to '
+                        'hand off.',
             'unmanaged': _CROSSOVER + 'detail, a session with no sessions.json entry, is at the '
                          'weekly limit; this job leaves it to you.'}
 UNDELIVERED = 'push-undelivered.jsonl'

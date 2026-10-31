@@ -249,6 +249,161 @@ class Target(unittest.TestCase):
         self.assertEqual(d.target, '3')
 
 
+PM = U.PmLive('pm-session', 40, CREATED, '1')
+REC = U.Recorded('pm-sid-1', None, 1)
+
+
+def decide_pm(pms=(PM,), cross=None, stall=None, quiet=None, accounts=ACCOUNTS, newest=None, starts=None,
+              running=None, landed=None, mode='normal', now=NOW, note_at=None, cleared=None, asks=None,
+              points=None, recorded=REC, names=()):
+    return U.decide_pm(list(pms), cross, stall, quiet, accounts, newest, starts or {},
+                       {'1': 1} if running is None else running, landed or {}, mode, now, note_at=note_at,
+                       cleared=cleared, asks=asks, points=points, recorded=recorded, names=set(names))
+
+
+def pm_crossing(phase, **fields):
+    c = {'phase': phase, 'phase_at': NOW - 60, 'asked_at': NOW - 120, 'account': '1', 'target': '2',
+         'old_name': PM.name, 'old_pid': PM.pid, 'old_created': PM.created, 'old_sid': REC.sid,
+         'high_c': 5, 'delivered': True}
+    if phase == U.STARTING:
+        c['new_name'] = 'pm-a2'
+    c.update(fields)
+    return c
+
+
+def rising(start, end, minutes):
+    """Week readings rising from `start` to `end` over `minutes`, the last a minute old."""
+    return [[NOW - 60 - minutes * 60, start], [NOW - 60 - minutes * 30, (start + end) / 2.0], [NOW - 60, end]]
+
+
+class BurnEta(unittest.TestCase):
+    def test_the_time_to_100_at_the_rise_of_the_readings(self):
+        self.assertAlmostEqual(U.burn_eta([[NOW - 1800, 90], [NOW, 96]], NOW), 1200)
+        self.assertAlmostEqual(U.burn_eta([[NOW - 1860, 90], [NOW - 60, 96]], NOW), 1140)
+
+    def test_no_rise_or_too_short_a_span_is_none(self):
+        self.assertIsNone(U.burn_eta(None, NOW))
+        self.assertIsNone(U.burn_eta([[NOW, 96]], NOW))
+        self.assertIsNone(U.burn_eta([[NOW - 1800, 96], [NOW, 96]], NOW))
+        self.assertIsNone(U.burn_eta([[NOW - U.BURN_MIN_S + 1, 90], [NOW, 96]], NOW))
+
+    def test_a_drop_starts_the_run_again_and_old_or_bad_points_are_left_out(self):
+        self.assertIsNone(U.burn_eta([[NOW - 1800, 90], [NOW - 900, 99], [NOW, 2]], NOW))
+        pts = [[NOW - U.BURN_SPAN_S - 60, 0], ['x', 5], [NOW - 1800, 90], [NOW, 96], [NOW + 60, 99]]
+        self.assertAlmostEqual(U.burn_eta(pts, NOW), 1200)
+
+    def test_past_due_is_zero(self):
+        self.assertEqual(U.burn_eta([[NOW - 3600, 50], [NOW - 1800, 99]], NOW), 0.0)
+
+
+class PmDecide(unittest.TestCase):
+    def test_a_fresh_reading_at_99_asks_the_pm_for_a_checkpoint(self):
+        d = decide_pm()
+        self.assertEqual((d.action, d.target, d.word, d.detail), (U.ASK, '2', 'crossing', 'pm:a2'))
+
+    def test_the_early_trigger_needs_95_and_a_burn_rate_that_reaches_100_inside_the_lead(self):
+        fast = decide_pm(accounts={'1': on(97), '2': on(20)}, points=rising(90, 97, 30))
+        self.assertEqual((fast.action, fast.word), (U.ASK, 'crossing'))
+        self.assertIn('at its burn rate', fast.note)
+        self.assertEqual(decide_pm(accounts={'1': on(94), '2': on(20)}, points=rising(80, 94, 30)).action,
+                         U.HOLD)
+        self.assertEqual(decide_pm(accounts={'1': on(97), '2': on(20)}, points=rising(96, 97, 30)).action,
+                         U.HOLD)
+        self.assertEqual(decide_pm(accounts={'1': on(97), '2': on(20)}).action, U.HOLD)
+        stale = {'1': on(97, age=2 * 3600), '2': on(20)}
+        self.assertEqual(decide_pm(accounts=stale, points=rising(90, 97, 30)).action, U.HOLD)
+
+    def test_tier_one_only_else_no_room(self):
+        d = decide_pm(accounts={'1': HOT, '2': on(96), '3': on(97)})
+        self.assertEqual((d.action, d.word, d.detail), (U.HOLD, 'no-room', 'pm'))
+        self.assertEqual(U.pick_target({'1': HOT, '2': on(96)}, {'1'}, {}, {}, NOW, tier2=False), None)
+        self.assertEqual(U.pick_target({'1': HOT, '2': on(96)}, {'1'}, {}, {}, NOW)[0], '2')
+
+    def test_notify_says_what_it_would_do(self):
+        d = decide_pm(mode='notify')
+        self.assertEqual((d.action, d.word, d.detail), (U.WOULD, 'would-cross', 'pm:a2'))
+
+    def test_a_stall_is_pushed_on_normal_and_started_with_no_ask_on_full(self):
+        quiet = dict(stall=('1', NOW + 2 * DAY), quiet=600, accounts={'1': on(20), '2': on(20), '3': on(10)})
+        d = decide_pm(**quiet)
+        self.assertEqual((d.action, d.word, d.detail), (U.HOLD, 'stalled', 'pm'))
+        d = decide_pm(mode='full', **quiet)
+        self.assertEqual((d.action, d.word, d.detail), (U.START, 'stalled', 'pm:a2'))
+
+    def test_no_session_id_or_account_recorded_holds_as_pm_limit(self):
+        for rec in (U.Recorded(None, None, 1), U.Recorded('<PM session id>', None, 1),
+                    U.Recorded('pm-sid-1', None, None)):
+            d = decide_pm(recorded=rec)
+            self.assertEqual((d.action, d.word, d.detail), (U.HOLD, 'pm-limit', 'pm'), rec)
+
+    def test_no_or_several_pm_processes_hold(self):
+        self.assertEqual(decide_pm(pms=()).action, U.HOLD)
+        d = decide_pm(pms=(PM, U.PmLive('pm-x', 41, CREATED, '1')))
+        self.assertEqual((d.action, d.word), (U.HOLD, None))
+
+    def test_a_crossing_cleared_this_week_is_not_asked_again(self):
+        d = decide_pm(cleared={'account': '1', 'reset': NOW + 2 * DAY})
+        self.assertEqual(d.action, U.HOLD)
+
+    def test_asks_and_starts_have_their_caps(self):
+        d = decide_pm(asks=[NOW - 60] * U.ASK_CAP)
+        self.assertEqual((d.action, d.word, d.mark), (U.HOLD, 'cross-failed', 'ask-cap'))
+        d = decide_pm(starts={U.PM_DOC: [NOW - 60] * U.KEY_CAP})
+        self.assertEqual((d.action, d.word, d.mark), (U.HOLD, 'cross-failed', 'cap'))
+
+
+class PmPhases(unittest.TestCase):
+    def test_asked_waits_then_a_newer_ready_record_moves_on_with_its_path(self):
+        self.assertEqual(decide_pm(cross=pm_crossing(U.ASKED)).action, U.HOLD)
+        d = decide_pm(cross=pm_crossing(U.ASKED), newest=record(6, 'handoff'))
+        self.assertEqual((d.action, d.phase, d.fields), (U.ADVANCE, U.READY, {'state_path': 'Z:/note-6.md'}))
+
+    def test_asked_not_delivered_asks_again(self):
+        d = decide_pm(cross=pm_crossing(U.ASKED, delivered=False))
+        self.assertEqual((d.action, d.word), (U.ASK, None))
+
+    def test_asked_and_stalled_on_full_goes_to_ready_stalled(self):
+        d = decide_pm(cross=pm_crossing(U.ASKED), stall=('1', NOW + 2 * DAY), quiet=600, mode='full')
+        self.assertEqual((d.action, d.phase, d.fields), (U.ADVANCE, U.READY, {'stalled': True}))
+
+    def test_ready_starts_once_settled_and_a_stalled_one_at_once(self):
+        c = pm_crossing(U.READY, state_path='Z:/note-6.md')
+        self.assertEqual(decide_pm(cross=c, note_at=NOW - 200, quiet=600).action, U.HOLD)
+        d = decide_pm(cross=c, note_at=NOW - 30, quiet=600)
+        self.assertEqual((d.action, d.target), (U.START, '2'))
+        d = decide_pm(cross=pm_crossing(U.READY, stalled=True))
+        self.assertEqual((d.action, d.target), (U.START, '2'))
+        d = decide_pm(cross=pm_crossing(U.READY, stalled=True), accounts={'1': HOT, '2': on(96)})
+        self.assertEqual((d.action, d.word), (U.HOLD, 'no-room'))
+
+    def test_starting_is_done_once_coordinators_json_names_the_new_pm_on_the_target(self):
+        c = pm_crossing(U.STARTING)
+        d = decide_pm(cross=c, recorded=U.Recorded('pm-sid-2', 'pm-a2', 2), names={'pm-a2', 'pm-session'})
+        self.assertEqual((d.action, d.word, d.detail), (U.CLEAR, 'crossed', 'pm-a2'))
+
+    def test_coordinators_json_moved_by_someone_else_clears_it(self):
+        for phase in (U.ASKED, U.READY, U.STARTING):
+            d = decide_pm(cross=pm_crossing(phase), recorded=U.Recorded('pm-sid-9', 'pm-other', 3))
+            self.assertEqual((d.action, d.word, d.detail), (U.CLEAR, 'cross-cleared', 'pm'), phase)
+
+    def test_a_new_pm_up_and_not_named_fails_and_is_remembered(self):
+        d = decide_pm(cross=pm_crossing(U.STARTING), names={'pm-a2', 'pm-session'})
+        self.assertEqual((d.action, d.word, d.remember), (U.CLEAR, 'cross-failed', True))
+        self.assertEqual(d.fields, {'account': '1', 'reset': NOW + 2 * DAY})
+
+    def test_starting_backs_off_to_ready_with_no_new_pm_in_five_minutes(self):
+        self.assertEqual(decide_pm(cross=pm_crossing(U.STARTING)).action, U.HOLD)
+        d = decide_pm(cross=pm_crossing(U.STARTING, phase_at=NOW - U.START_WAIT_S - 1))
+        self.assertEqual((d.action, d.phase), (U.ADVANCE, U.READY))
+
+    def test_notify_drops_an_asked_or_ready_crossing(self):
+        d = decide_pm(cross=pm_crossing(U.READY), mode='notify')
+        self.assertEqual((d.action, d.word), (U.CLEAR, 'cross-cleared'))
+
+    def test_the_pm_key_is_the_hubs_pm_key(self):
+        self.assertEqual(U.PM_FROM, push.PM_KEY)
+
+
 class Asked(unittest.TestCase):
     def step(self, *args, **kwargs):
         kwargs.setdefault('cross', crossing(U.ASKED, *args))
@@ -960,7 +1115,7 @@ class Notifying(JobBase):
 
 
 class Others(JobBase):
-    def test_the_pm_session_is_never_moved_and_gets_one_push_a_window(self):
+    def test_a_launched_pm_with_no_session_id_recorded_is_not_moved_and_gets_one_push(self):
         self.write('sessions.json', {'pm': {'stem': 'pm-session', 'name': 'pm-session', 'state': 'x.md'}})
         self.write('coordinators.json', {'pm_account': 1})
         self.live = [U.Live('pm-session', 40, CREATED)]
@@ -984,13 +1139,22 @@ class Others(JobBase):
         self.run_job()
         self.assertEqual(len(self.sent), 1)
 
-    def test_a_stalled_pm_is_pushed_by_its_stall_read(self):
+    def test_a_stalled_pm_with_no_session_id_recorded_is_pushed_pm_limit(self):
         self.usage['1'] = reading(20)
         self.write('sessions.json', {})
         self.live = [U.Live('pm-session', 40, CREATED)]
         self.stall('pm-session', 40, '1')
         self.run_job()
         self.assertEqual(self.ctx.events, [('pm-limit', 'pm')])
+
+    def test_a_pm_that_is_no_launched_session_gets_one_push_a_window(self):
+        self.write('sessions.json', {})
+        self.write('coordinators.json', {'pm_session_id': 'desktop-sid', 'pm_account': 1})
+        self.live = []
+        self.run_job()
+        self.assertEqual(self.ctx.events, [('pm-limit', 'pm')])
+        self.run_job()
+        self.assertEqual((self.ctx.events, self.sent, self.calls), ([], [], []))
 
     def test_a_session_with_no_entry_is_pushed_and_left_alone(self):
         self.write('sessions.json', {})
@@ -1009,6 +1173,132 @@ class Others(JobBase):
         self.usage['1']['seven_day'] = {'used_percentage': 99, 'resets_at': iso(self.now + 2 * DAY)}
         self.run_job()
         self.assertEqual(self.ctx.events, [('unmanaged', 'stray-a1')])
+
+
+class PmJob(JobBase):
+    """The launched PM recorded in coordinators.json, on account 1 at 99% of its week."""
+
+    def setUp(self):
+        super().setUp()
+        self.write('sessions.json', {})
+        self.coords = {'pm_session_id': 'pm-sid-1', 'pm_account': 1, 'pm_folder': self.tmp}
+        self.write('coordinators.json', self.coords)
+        self.pm = U.Live('pm-session', 40, CREATED)
+        self.live = [self.pm]
+
+    def crossed(self):
+        """The first runs to the start, then launch.py pm-crossover's write."""
+        self.run_job()
+        self.newest = {'pm': self.note(7, NOW + 30)}
+        self.host.written['pm-session'] = NOW + 120
+        self.now += 300
+        self.run_job()
+        self.write('coordinators.json', dict(self.coords, pm_session_id='pm-sid-2', pm_name='pm-a2',
+                                             pm_account=2))
+        self.new = U.Live('pm-a2', 41, CREATED)
+        self.live = [self.pm, self.new]
+        self.now += 300
+
+    def test_the_pm_is_asked_then_started_fresh_on_the_target_then_recorded_as_crossed(self):
+        self.run_job()
+        self.assertEqual(self.ctx.events, [('crossing', 'pm:a2')])
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.sent[0][0], 'pm')
+        self.assertIn('HANDOFF.md', self.sent[0][1])
+        self.assertIn('from pm', self.sent[0][1])
+        self.assertEqual(self.calls, [])
+        c = self.crossing(U.PM_DOC)
+        self.assertEqual((c['phase'], c['old_sid'], c['target'], c['old_pid']), (U.ASKED, 'pm-sid-1', '2', 40))
+        self.newest = {'pm': self.note(7, NOW + 30)}
+        self.host.written['pm-session'] = NOW + 120
+        self.now += 300
+        self.run_job()
+        self.assertEqual(self.calls, [['pm-crossover', '--account', '2', '--name', 'pm-a2', '--state',
+                                       self.newest['pm']['state_path']]])
+        self.assertEqual(self.saved_at_child['crossings'][U.PM_DOC]['phase'], U.STARTING)
+        self.assertEqual(self.saved_at_child['starts'], {U.PM_DOC: [NOW + 300]})
+        self.write('coordinators.json', dict(self.coords, pm_session_id='pm-sid-2', pm_name='pm-a2',
+                                             pm_account=2))
+        self.live = [self.pm, U.Live('pm-a2', 41, CREATED)]
+        self.now += 300
+        self.run_job()
+        self.assertEqual(self.ctx.events, [('crossed', 'pm-a2')])
+        self.assertIsNone(self.crossing(U.PM_DOC))
+        self.assertEqual(self.doc()['pm_old'], {'name': 'pm-session', 'pid': 40, 'created': CREATED})
+        self.now += 300
+        self.run_job()
+        self.assertEqual((self.ctx.events, len(self.sent), len(self.calls)), ([], 1, 1))
+
+    def test_the_old_pm_is_never_pushed_unmanaged_and_its_mark_goes_when_it_ends(self):
+        self.crossed()
+        self.run_job()
+        self.now += 300
+        self.run_job()
+        self.assertEqual(self.ctx.events, [])
+        self.live = [self.new]
+        self.now += 300
+        self.run_job()
+        self.assertNotIn('pm_old', self.doc())
+
+    def test_no_room_on_tier_one_pushes_once_and_starts_nothing(self):
+        self.usage = {'1': reading(99), '2': reading(96), '3': reading(97)}
+        self.run_job()
+        self.assertEqual(self.ctx.events, [('no-room', 'pm')])
+        self.run_job()
+        self.assertEqual((self.ctx.events, self.sent, self.calls), ([], [], []))
+
+    def test_notify_runs_pm_crossover_what_if_and_changes_nothing(self):
+        self.mode = 'notify'
+        self.run_job()
+        self.assertEqual(self.ctx.events, [('would-cross', 'pm:a2')])
+        self.assertEqual(self.calls, [['pm-crossover', '--account', '2', '--name', 'pm-a2', '--what-if']])
+        self.assertEqual((self.sent, self.doc()['crossings']), ([], {}))
+
+    def test_a_stall_on_full_starts_at_once_with_no_ask_and_no_state_file(self):
+        self.mode = 'full'
+        self.usage['1'] = reading(20)
+        self.stall('pm-session', 40, '1')
+        self.run_job()
+        self.assertEqual(self.ctx.events, [('stalled', 'pm:a2')])
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.calls, [['pm-crossover', '--account', '2', '--name', 'pm-a2']])
+        self.assertTrue(self.crossing(U.PM_DOC)['stalled'])
+
+    def test_a_stall_on_normal_is_pushed_and_left(self):
+        self.usage['1'] = reading(20)
+        self.stall('pm-session', 40, '1')
+        self.run_job()
+        self.assertEqual((self.ctx.events, self.sent, self.calls), ([('stalled', 'pm')], [], []))
+
+    def test_an_unconfirmed_start_fails_the_run_and_a_new_pm_up_and_not_named_is_cross_failed(self):
+        self.run_job()
+        self.newest = {'pm': self.note(7, NOW + 30)}
+        self.host.written['pm-session'] = NOW + 120
+        self.now += 300
+        self.code = 1
+        with self.assertRaises(U.StepFailed):
+            self.run_job()
+        self.assertEqual(self.crossing(U.PM_DOC)['phase'], U.STARTING)
+        self.live = [self.pm, U.Live('pm-a2', 41, CREATED)]
+        self.now += 300
+        self.run_job()
+        self.assertEqual(self.ctx.events, [('cross-failed', 'pm')])
+        self.assertIsNone(self.crossing(U.PM_DOC))
+        self.assertEqual(self.doc()['cleared'][U.PM_DOC]['account'], '1')
+
+    def test_the_new_name_steps_past_a_taken_one(self):
+        self.write('sessions.json', {'kit': dict(ENTRY, account=2, name='pm-a2')})
+        self.mode = 'notify'
+        self.run_job()
+        self.assertEqual(self.calls[0][:5], ['pm-crossover', '--account', '2', '--name', 'pm-a2-2'])
+
+    def test_the_week_readings_are_kept_for_the_burn_rate(self):
+        self.usage = {'1': reading(50), '2': reading(20)}
+        self.run_job()
+        self.usage['1'] = dict(reading(51), updated_at=iso(NOW))
+        self.run_job()
+        self.run_job()
+        self.assertEqual(self.doc()['weeks']['1'], [[NOW - 60, 50], [NOW, 51]])
 
 
 class Claims(JobBase):
