@@ -159,6 +159,13 @@ class DocsOnlyBase(HintCase):
             'steps': [tg._step('unit'), tg._step('scrub', always=False, globs=['*.md'])]}
     KIT = dict(test_land.LandCase.KIT, owner={'email': tg.ScopedCase.OWNER})
 
+    def test_select_refusal_refuses_a_record_of_a_change_that_is_not_docs_only(self):
+        # the landing alone, green before and after the split: its outcome is unchanged
+        wt, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        self.gate(wt)
+        self.refused(wt, tip, 'without --full', 'the change is not docs-only, and the base %s '
+                     'sets no "gate".smoke_steps' % self.main[:10])
+
     def test_a_change_that_is_not_docs_only_needs_full_and_its_record_is_refused(self):
         wt, tip, out = self.plain({'a.py': 'x = 1\n'})
         says = 'the change is not docs-only, and the base %s sets no "gate".smoke_steps' % (
