@@ -19,7 +19,9 @@ from kitlib.host import registry
 from tests.pluginsource import Kit
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-PLUGIN = os.path.join(ROOT, *cc.HOOKS_PLUGIN_REL.split('/'))
+PLUGIN_REL = 'hosts/codex/shell/hooks-plugin'         # the adapter's HOOKS_PLUGIN_REL (test_the_paths_are_the_adapters)
+STUB_ENTRY = 'pm_kit_hook.py'                          # the adapter's STUB_ENTRY
+PLUGIN = os.path.join(ROOT, *PLUGIN_REL.split('/'))
 # sha256 of each file, line ends read as LF. A change here makes Codex ask the owner to trust the
 # four hooks once more: change the stub only for a reason worth that, and say so where it lands.
 PINNED = {
@@ -59,6 +61,10 @@ def child_env():
 
 
 class Bytes(unittest.TestCase):
+    def test_the_paths_are_the_adapters(self):
+        self.assertEqual((getattr(cc, 'HOOKS_PLUGIN_REL', None), getattr(cc, 'STUB_ENTRY', None)),
+                         (PLUGIN_REL, STUB_ENTRY))
+
     def test_the_four_files_are_pinned(self):
         got = {rel: hashlib.sha256(body).hexdigest() for rel, body in files(PLUGIN).items()}
         self.assertEqual(got, PINNED, 'pm-kit-hooks changed: Codex asks the owner to trust its hooks again')
@@ -87,10 +93,10 @@ class Bytes(unittest.TestCase):
 def load_stub():
     """The stub as a module, read without writing a __pycache__ beside it."""
     import types
-    with open(os.path.join(PLUGIN, cc.STUB_ENTRY), encoding='utf-8') as f:
+    with open(os.path.join(PLUGIN, STUB_ENTRY), encoding='utf-8') as f:
         source = f.read()
     module = types.ModuleType('pm_kit_hook')
-    module.__file__ = os.path.join(PLUGIN, cc.STUB_ENTRY)
+    module.__file__ = os.path.join(PLUGIN, STUB_ENTRY)
     exec(compile(source, module.__file__, 'exec'), module.__dict__)
     return module
 
@@ -116,7 +122,7 @@ class Stub(unittest.TestCase):
         return folder
 
     def run_stub(self, event, payload=None, env=None):
-        p = subprocess.run([sys.executable, '-B', os.path.join(self.stub, cc.STUB_ENTRY), 'codex', event],
+        p = subprocess.run([sys.executable, '-B', os.path.join(self.stub, STUB_ENTRY), 'codex', event],
                            input=json.dumps(payload or {}), capture_output=True, text=True,
                            env=env or child_env(), timeout=60)
         return p.returncode, p.stdout, p.stderr
@@ -216,18 +222,18 @@ class Export(unittest.TestCase):
         k = Kit(self)
         stub = files(PLUGIN)
         for rel, body in stub.items():
-            path = k.repo.path(cc.HOOKS_PLUGIN_REL + '/' + rel)
+            path = k.repo.path(PLUGIN_REL + '/' + rel)
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, 'wb') as f:
                 f.write(body)
-        k.repo.commit('hooks plugin', *[cc.HOOKS_PLUGIN_REL + '/' + rel for rel in stub])
+        k.repo.commit('hooks plugin', *[PLUGIN_REL + '/' + rel for rel in stub])
         k.repo.git('push', '-q', 'origin', 'main')
         sha = P.remote_main(k.kit, 'origin')
         for platform, root in (('windows', 'w'), ('linux', 'l')):
             with self.subTest(platform=platform):
                 folder, version = P.export(k.kit, sha, os.path.join(k.root, root), platform=platform)
                 self.assertNotEqual(version, '1.0.0')
-                got = files(os.path.join(folder, *cc.HOOKS_PLUGIN_REL.split('/')))
+                got = files(os.path.join(folder, *PLUGIN_REL.split('/')))
                 want = dict(stub)
                 if platform == 'linux':
                     want['hooks/hooks.json'] = stub['hooks/hooks.linux.json']
