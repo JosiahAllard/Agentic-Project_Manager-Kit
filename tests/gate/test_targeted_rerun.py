@@ -58,6 +58,44 @@ GATE = {'steps': [
      'pass': '^OK'},
     {'name': 'after', 'always': True, 'cmd': AFTER, 'pass': '^ok$'}]}
 
+# A repository gate's gradle step log, red on one test (2026-10-28), cut down and its worktree
+# path dropped: the class is a simple name, the method a display name, and no passing test shows.
+GRADLE_LOG = '''gate_tiers gradle: 31 changed path(s) against b857e2a660 (--all)
+gate_tiers: --- gradle-build: gradlew.bat build --offline --max-workers=4
+
+> Task :app-api:test
+
+ApiLayeringTest > api.errand <-> api.movement import files stay at or under their ceilings FAILED
+    org.opentest4j.AssertionFailedError at ApiLayeringTest.java:77
+
+> Task :worker:assemble
+
+
+> Task :app-api:test
+
+6000 tests completed, 1 failed
+
+> Task :app-api:test FAILED
+> Task :worldmap:test
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app-api:test'.
+> There were failing tests. See the report at: file:///build/reports/tests/test/index.html
+
+BUILD FAILED in 9m 27s
+81 actionable tasks: 47 executed, 34 up-to-date
+gate_tiers: --- gradle-build exited 1
+    test tasks: 7 ran, 1 UP-TO-DATE, 1 FAILED
+      FAILED     :app-api:test
+gate_tiers gradle: FAILED - gradle-build: exit 1
+'''
+GRADLE_GATE = {'steps': [
+    {'name': 'gradle', 'always': True, 'pass': '^gate_tiers gradle: OK',
+     'cmd': ['{python}', '-c', 'import sys; print(open("gradle_report.txt").read()); sys.exit(1)']}]}
+COVERS = 'gate.py --rerun covers kit_tests and unittest reports only, and this log is neither'
+
 
 def unittest_log(*blocks, summary='FAILED (failures=1)', ran=2):
     return '\n'.join(list(blocks) + ['-' * 70, 'Ran %d tests in 0.1s' % ran, '', summary, ''])
@@ -142,7 +180,13 @@ class ParseLog(unittest.TestCase):
 
     def test_any_other_log_is_uncovered(self):
         self.assertEqual(rerun.parse_log('lint: 3 problems\n'),
-                         ([], ['the log is neither a kit_tests nor a unittest report']))
+                         ([], [COVERS + ' (a gradle or dotnet log, say)']))
+
+    def test_a_gradle_log_gives_no_failing_id_and_says_what_the_rerun_covers(self):
+        failures, uncovered = rerun.parse_log(GRADLE_LOG)
+        self.assertEqual(failures, [])
+        self.assertEqual(len(uncovered), 1, uncovered)
+        self.assertIn(COVERS, uncovered[0])
 
     def test_a_step_failing_on_more_than_its_exit_is_uncovered(self):
         entry = rerun.cover_step({'name': 'unit', 'status': 'FAIL', 'log': None,
@@ -443,6 +487,23 @@ class Real(RerunCase):
         self.assertEqual(out.code, G.REFUSED, out.lines)
         self.assertIn('not clean', out.lines[0])
         self.assertEqual(self.loaded(tip)[1], [])
+
+
+class GradleStep(RerunCase):
+    GATE = GRADLE_GATE
+
+    def test_a_red_gradle_step_is_not_rerun_and_the_refusal_says_what_is_covered(self):
+        wt, tip = self.branch('feature', {'gradle_report.txt': GRADLE_LOG})
+        self.red(wt)
+        step = self.loaded(tip)[0][0]['steps'][0]
+        self.assertEqual((step['name'], step['failures']), ('gradle', []))
+        n = len(self.book_calls)
+        out = self.rerun(wt)
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+        self.assertIn('only a passing gate.py --full lands this tip', out.lines[0])
+        self.assertIn('  gradle: ' + COVERS, '\n'.join(out.lines))
+        self.assertEqual(self.book_calls[n:], [])
+        self.assertIn(COVERS, rerun.verify_flake(self.repo.root, tip))
 
 
 class Branch(RerunCase):

@@ -26,7 +26,8 @@ closed).
 
 Uncovered (the rerun refuses; only a passing `gate.py --full` lands the tip): a FAIL step whose
 reasons are more than its exit code and a missing pass pattern; one whose log is neither
-kit_tests' report nor unittest's; a kit_tests unit that is not FAILED (TIMEOUT, a runner
+kit_tests' report nor unittest's (a gradle or dotnet log, say); a kit_tests unit that is not
+FAILED (TIMEOUT, a runner
 failure); a test that could not be loaded (`unittest.loader._FailedTest`); FAIL/ERROR lines
 that do not add up to the FAILED summary; an unexpected success; an interrupted or refused
 kit_tests run; a step whose directory is outside the tree.
@@ -345,7 +346,8 @@ def parse_log(text):
         return _parse_kit_tests(lines)
     if any(RAN.match(line) for line in lines):
         return _parse_block(lines, {}, 'unittest')
-    return [], ['the log is neither a kit_tests nor a unittest report']
+    return [], ['gate.py --rerun covers kit_tests and unittest reports only, and this log is '
+                'neither (a gradle or dotnet log, say)']
 
 
 def _read(path):
