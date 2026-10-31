@@ -21,6 +21,9 @@ Events:
                                 successor (the launcher's stop.log), with no transcript activity
                                 since; once per stop, and never IDLE for it
                                 (docs/pm-watch.md "Stopped sessions")
+  LIMIT <name> account N stalled at the weekly limit until <iso> (pid P)
+                                a session stopped at its account's weekly limit, its process still
+                                running; once per stall, and never IDLE for it (docs/pm-watch.md)
   PLUGIN pm-kit plugin behind kit main <sha12>: python tools/plugin_refresh.py --apply
                                 the plugin export is not at the kit's refs/remotes/<remote>/main;
                                 once per main sha, reported on the first run too; with
@@ -32,7 +35,7 @@ Events:
                                 reported on the first run too (docs/pm-watch.md "Remote Control link")
   ERROR <what>                  a check failed 3 times running
 While the hub's session-watch job is up (GET health jobs: no failure, a run within 3 periods) and
-watches the same sessions file, alerts folder and notice folder, the session checks (USAGE, RESET, BGFAIL, LOCKNOTICE, IDLE, STOPPED, REMOTE and
+watches the same sessions file, alerts folder and notice folder, the session checks (USAGE, RESET, BGFAIL, LOCKNOTICE, IDLE, STOPPED, LIMIT, REMOTE and
 their ERRORs) print nothing: the job pushes them; the heartbeat says so ("yielded"), and BRANCH,
 PLUGIN and HUB stay here (docs/pm-watch.md "Hub session-watch job").
 State lives in the state file, so a relaunch never repeats an event it already reported. The first

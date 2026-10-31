@@ -43,6 +43,12 @@ class Decide(unittest.TestCase):
         self.assertEqual(d.account, '1')
         self.assertEqual(d.word, 'restarted-unchecked')   # no usage file: the limit not checked
 
+    def test_a_session_the_usage_crossover_is_moving_is_held(self):
+        d = decide(claimed=True)
+        self.assertFalse(d.start)
+        self.assertEqual(d.reason, 'the usage crossover is moving it')
+        self.assertEqual(decide(claimed=True, live=['kit-coord-a2']).reason, 'running')
+
     def test_the_account_last_seen_running_wins_over_sessions_json(self):
         d = decide(record={'seen_at': NOW - 900, 'account': '2'})
         self.assertEqual((d.start, d.account), (True, '2'))
@@ -291,6 +297,37 @@ class Job(JobBase):
         with mock.patch.object(lsettings, 'load', lambda home=None: self.settings):
             job = C.make(S())
         self.assertEqual((job.name, job.every_s, job.first_s), (C.NAME, C.EVERY_S, C.FIRST_S))
+
+    def down_twice(self):
+        self.live = ['kit-coord-a2']
+        self.run_job()
+        self.live = []
+        for _ in range(2):
+            self.now += 300
+            note = self.run_job()
+        return note
+
+    def test_a_crossing_on_the_entry_holds_the_start_until_its_claim_lapses(self):
+        crossing = {'phase': 'stall-stop', 'phase_at': NOW}
+        self.write('usage-crossover.json', {'crossings': {'kit': crossing}})
+        self.assertIn('kit: the usage crossover is moving it', self.down_twice().note)
+        self.assertEqual(self.calls, [])
+        crossing['phase_at'] = self.now - 2 * 3600
+        self.write('usage-crossover.json', {'crossings': {'kit': crossing}})
+        self.now += 300
+        self.assertIn('kit: started on account 2', self.run_job())
+
+    def test_a_bad_crossover_file_fails_the_run_and_starts_nothing(self):
+        self.live = ['kit-coord-a2']
+        self.run_job()
+        self.live = []
+        with open(os.path.join(self.state, 'usage-crossover.json'), 'w') as f:
+            f.write('{ not json')
+        for _ in range(2):
+            self.now += 300
+            with self.assertRaises(LaunchError):
+                self.run_job()
+        self.assertEqual(self.calls, [])
 
     def test_a_down_coordinator_starts_on_the_second_run_and_only_once(self):
         self.live = ['kit-coord-a2']

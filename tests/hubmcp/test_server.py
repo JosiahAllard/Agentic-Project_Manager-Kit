@@ -983,7 +983,7 @@ class HandoffReady(Case):
 
     def test_kind_is_the_ready_reply_word_and_every_argument_is_required(self):
         schema = srv.TOOLS["hub_handoff_ready"][1]
-        self.assertEqual(schema["properties"]["kind"]["enum"], ["handoff", "restart", "stop"])
+        self.assertEqual(schema["properties"]["kind"]["enum"], ["handoff", "restart", "stop", "checkin"])
         self.assertEqual(sorted(schema["required"]), ["from", "kind", "state_path"])
         payload, is_error = self.rpc(self.server(), "hub_handoff_ready",
                                      dict(self.ARGS, kind="pause"))

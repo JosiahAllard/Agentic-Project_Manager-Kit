@@ -90,7 +90,7 @@ FIELDS = {
     'handoffs': (('from', 'kind', 'state_path', 'at'), {
         'from': _STR, 'kind': _STR, 'state_path': _STR, 'at': _STR}),
 }
-KINDS = {'to_pm': ('question', 'fyi', 'act'), 'handoffs': ('handoff', 'restart', 'stop')}
+KINDS = {'to_pm': ('question', 'fyi', 'act'), 'handoffs': ('handoff', 'restart', 'stop', 'checkin')}
 # {collection: {kind: more required fields}}: a document of such a collection needs its kind's
 # fields too, None standing for a document with no kind; any other kind is an error
 BY_KIND = {'approvals': {None: ('head', 'files'), 'op': ('op', 'line', 'args_sha256')}}

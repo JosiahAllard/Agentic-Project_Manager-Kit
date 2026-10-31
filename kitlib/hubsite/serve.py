@@ -401,6 +401,8 @@ class Sources(object):
                    with kind, id, from, at). Set by build() once the Api exists, before the
                    jobs are made; None before. Read only: unlike GET pending it sets no handed/seen
                    marks (the routing's own clean-up of marks for items gone is not one).
+      handoffs     callable() -> {session key: its newest hand-off record} (api.newest_handoffs).
+                   Set by build() as `pending` is; None before. Read only.
     """
 
     def __init__(self, tokens=None, static_dir=STATIC_DIR, pm_data=None, notices=None, repos=None,
@@ -410,6 +412,7 @@ class Sources(object):
         self.jobs = list(jobs or [])
         self.home = home
         self.pending = None
+        self.handoffs = None
         self.findings = findings
         self.lock = lock
         self.push = push
@@ -1287,6 +1290,7 @@ def build(settings, sources, log=None):
             notes.append('push notifications on: the asking session and the PM hear of an answer '
                          'or a done to-do')
         sources.pending = api.pending
+        sources.handoffs = lambda: _api.newest_handoffs(store.docs('handoffs'))
         timed = _make_jobs(sources, pusher, notes, log)
         if timed is not None:
             api.jobs_status = timed.status   # GET health `jobs` (Api.jobs_seen)

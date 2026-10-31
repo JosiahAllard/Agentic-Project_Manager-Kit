@@ -45,6 +45,15 @@ class Check(unittest.TestCase):
         self.assertTrue(S.Settings({'pm_resume_beside_desktop': True}, '/h').pm_resume_beside_desktop)
         self.assertFalse(S.Settings({}, '/h').pm_resume_beside_desktop)
 
+    def test_usage_crossover_takes_its_three_values_and_defaults_to_notify(self):
+        for good in ('notify', 'normal', 'full'):
+            self.assertEqual(S.check({'usage_crossover': good}), [])
+            self.assertEqual(S.Settings({'usage_crossover': good}, '/h').usage_crossover, good)
+        for bad in ('on', '', True, 1, []):
+            self.assertIn('launcher.usage_crossover must be one of notify, normal, full',
+                          '\n'.join(S.check({'usage_crossover': bad})), bad)
+        self.assertEqual(S.Settings({}, '/h').usage_crossover, 'notify')
+
     def test_a_bad_object_raises_a_config_error(self):
         with self.assertRaises(ConfigError):
             S.Settings({'accounts': {}}, '/h')

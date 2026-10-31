@@ -70,13 +70,14 @@ Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role
 | `hub_inbox_post` | `text`; `title`, `ref`, `asked`, `repo`, `from`, `refs` | `POST /inbox` |
 | `hub_page_publish` | `id`, `title`, `html_file`; `summary`, `repo`, `from`, `refs`, `if_version` | `POST /pages` |
 | `hub_approval_request` | `checkout`, `title`, `files` (`[{path, content_file}]`); `repo`, `head`, `reason` | `POST /approvals` |
-| `hub_handoff_ready` | `kind` (`handoff`, `restart`, `stop`), `state_path`, `from` | `POST /handoffs` |
+| `hub_handoff_ready` | `kind` (`handoff`, `restart`, `stop`, `checkin`), `state_path`, `from` | `POST /handoffs` |
 
 `hub_handoff_ready` records a session's hand-off beside its ready reply to the PM (skill
 session-handoff), as `tools/hub.py handoffs add` does (docs/action-hub.md "handoffs/C-NNN"): `kind`
-is the reply's word, `state_path` its state note path and `from` the session's own launcher key
-(`pm` for the PM), which the hub checks as a question's `from`. The hub stamps the time; `GET
-/handoffs` reads each session's newest record.
+is the reply's word, or `checkin` from a successor that has read its note and taken over,
+`state_path` its state note path and `from` the session's own launcher key (`pm` for the PM), which
+the hub checks as a question's `from`. The hub stamps the time; `GET /handoffs` reads each session's
+newest record.
 
 `hub_approval_request` asks the owner to approve a change, as `tools/hub.py approvals add` does
 (docs/action-hub.md "approvals/A-NNN"): `kitlib.hubapprove.build` makes the body from the git
