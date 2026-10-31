@@ -249,13 +249,18 @@ class Target(unittest.TestCase):
         self.assertEqual(d.target, '3')
 
 
-PM = U.PmLive('pm-session', 40, CREATED, '1')
-REC = U.Recorded('pm-sid-1', None, 1)
+PM_NAME, PM_PID, PM_SID = 'pm-session', 40, 'pm-sid-1'
 
 
-def decide_pm(pms=(PM,), cross=None, stall=None, quiet=None, accounts=ACCOUNTS, newest=None, starts=None,
+def pm_live(name=PM_NAME, pid=PM_PID):
+    return U.PmLive(name, pid, CREATED, '1')
+
+
+def decide_pm(pms=None, cross=None, stall=None, quiet=None, accounts=ACCOUNTS, newest=None, starts=None,
               running=None, landed=None, mode='normal', now=NOW, note_at=None, cleared=None, asks=None,
-              points=None, recorded=REC, names=()):
+              points=None, recorded=None, names=()):
+    pms = [pm_live()] if pms is None else pms
+    recorded = U.Recorded(PM_SID, None, 1) if recorded is None else recorded
     return U.decide_pm(list(pms), cross, stall, quiet, accounts, newest, starts or {},
                        {'1': 1} if running is None else running, landed or {}, mode, now, note_at=note_at,
                        cleared=cleared, asks=asks, points=points, recorded=recorded, names=set(names))
@@ -263,7 +268,7 @@ def decide_pm(pms=(PM,), cross=None, stall=None, quiet=None, accounts=ACCOUNTS, 
 
 def pm_crossing(phase, **fields):
     c = {'phase': phase, 'phase_at': NOW - 60, 'asked_at': NOW - 120, 'account': '1', 'target': '2',
-         'old_name': PM.name, 'old_pid': PM.pid, 'old_created': PM.created, 'old_sid': REC.sid,
+         'old_name': PM_NAME, 'old_pid': PM_PID, 'old_created': CREATED, 'old_sid': PM_SID,
          'high_c': 5, 'delivered': True}
     if phase == U.STARTING:
         c['new_name'] = 'pm-a2'
@@ -338,7 +343,7 @@ class PmDecide(unittest.TestCase):
 
     def test_no_or_several_pm_processes_hold(self):
         self.assertEqual(decide_pm(pms=()).action, U.HOLD)
-        d = decide_pm(pms=(PM, U.PmLive('pm-x', 41, CREATED, '1')))
+        d = decide_pm(pms=(pm_live(), pm_live('pm-x', 41)))
         self.assertEqual((d.action, d.word), (U.HOLD, None))
 
     def test_a_crossing_cleared_this_week_is_not_asked_again(self):
