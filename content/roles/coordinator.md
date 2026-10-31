@@ -76,8 +76,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    "Fill check: count agents in flight against your cap. A free slot and no project manager hold
    on new work -> start an item of yours that can start, else pull the next record from `next`
    and dispatch it. An item waiting on a landing, a live slot or an owner answer holds no slot.
-   Nothing startable, nothing in flight, landing queue clear -> Slots, ready to stop. Else do
-   nothing and say nothing." A backstop for Keep the slots full.
+   Nothing startable, no agent in flight or waiting on a gate, landing queue clear -> Slots,
+   ready to stop. Else do nothing and say nothing." A backstop for Keep the slots full.
 9. First start of a day: the daily prune; weekly: the tool-set report (skill
    `coordinator-dispatch`, Upkeep).
 
@@ -85,8 +85,9 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 
 - **The rule.** There is no fixed number of items; your cap sets the slots. Whenever a slot is
   free and none of your items can start, pull the next record from `next` (skill backlog-ops) and
-  dispatch it, from start to the end of the session. An item waiting on a landing, a live slot or
-  an owner answer holds no slot. A record not in `next`'s offer still needs a
+  dispatch it, from start to the end of the session. An item waiting on a landing, a live slot (a
+  serial resource, such as a dev clone, that another item holds) or an owner answer holds no
+  slot. A record not in `next`'s offer still needs a
   pre-emption. When `next` offers one, keep an item that removes code or text in flight. Never wait
   on the owner for work.
 - **Follow-ups.** File a follow-up record for a finding on a branch, a review or a worker's
@@ -108,19 +109,24 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   `land.py ... --wait-result --submit` background call is yours to keep running (skill `land-branch`). A gate whose
   process is gone with no report -> fresh agent re-gates the branch (the final gate `<kit>/docs/gate.md` "The final gate" names (when unsure, `--full`)). Nothing
   re-wakes you later.
-- Each item goes to an end, as the owner ruled: landed, blocked on its record with the reason and
-  its branch kept (`backlog.py block`), or released with its worktree removed. Never park halfway;
-  pull nothing new while one of yours sits stopped with no landing, block or park on it.
-- **Successors.** A successor comes only for context or account reasons, never to get more work.
-  Your context or your account cannot carry the session on -> skill session-handoff, then
-  {{tool:message}} the PM `ready to restart: <state note path>`; the PM starts your successor and
-  stops you once it has checked in. Start nothing new and queue no landing after you send it: your
-  successor queues every LAND verdict in the note at once, and never waits for workers' reports.
+- Each item goes to an end, as the owner ruled: landed (or submitted to land), blocked on its
+  record with the reason and its branch kept (`backlog.py block`; an item waiting on a live slot
+  is blocked on that slot), parked on an owner question (`set-status <ID> parked --q <Q-id>`), or
+  released with its worktree removed. Never leave one stopped halfway: pull nothing new while one
+  of yours sits stopped with none of these ends.
+- **Successors.** A successor comes only for context or account reasons, never to get more work,
+  and you judge only your context (Usage is not yours, below). Your context cannot carry the
+  session on -> skill session-handoff, then {{tool:message}} the PM `ready to restart: <state note
+  path>`; the PM starts your successor and stops you once it has checked in. An account reason
+  comes to you as the PM's "checkpoint and hand off", answered `ready to hand off: <state note
+  path>` (skill session-handoff). Start nothing new and queue no landing after you send either:
+  your successor queues every LAND verdict in the note at once, and never waits for workers'
+  reports.
 - `next` offers nothing startable, every LAND verdict has landed, the landing queue is clear and no
-  agent is in flight (builders or reviewers) -> write the state note and {{tool:message}} the PM
-  `ready to stop: <state note path>`. The PM stops you with no successor and restarts you when your
-  repo gets startable work, an owner answer or an approval. Startable work in `next` is never a
-  stop or a restart: pull it.
+  agent is in flight or waiting on a gate (builders or reviewers) -> write the state note and
+  {{tool:message}} the PM `ready to stop: <state note path>`. The PM stops you with no successor
+  and restarts you when your repo gets startable work, an owner answer or an approval. Startable
+  work in `next` is no reason to stop or restart: pull it.
 - `next` empty only because finished branches still wait to land is no reason to stop: their
   open records and scopes still block the items behind them. Queue them at once, rerun
   `next` and fill the slots.
