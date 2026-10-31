@@ -712,7 +712,7 @@ def rerun_gate(root, slug=None, log_dir=None, say=None, book_kw=None):
         slot = lockrun.book(gate['kind'], name, slug or runner.slug_of(branch or head[:10]),
                             **dict(book_kw or {}, gate=True, tree=red['tree'], **mine))
     except LockError as e:
-        return runner.lock_refusal(e)
+        return runner.book_refusal(e, logs, base)
     done, results = [], []
     with slot:
         say(slot.held_text())
@@ -721,6 +721,8 @@ def rerun_gate(root, slug=None, log_dir=None, say=None, book_kw=None):
             say('control: no tree at the base %s (%s); the controls are not run' % (base[:10], why))
         try:
             for i, c in enumerate(classes):
+                if slot.stop_asked():
+                    break
                 env = runner.child_env(slot.launcher)
                 env.update(c['env'])
                 argv = [sys.executable, '-m', 'unittest', '-v', c['cls']]
@@ -729,7 +731,7 @@ def rerun_gate(root, slug=None, log_dir=None, say=None, book_kw=None):
                             c['cwd'] else top, env, log)
                 passed, got = judge_class(_read(log), rc, c['ids'])
                 control, clog = 'not run', None
-                if tw:
+                if tw and not slot.stop_asked():
                     clog = os.path.join(logs, 'class-%d.base.log' % (i + 1))
                     crc = _start(slot.launcher, argv, os.path.join(tw, *c['cwd'].split('/')) if
                                  c['cwd'] else tw, env, clog)
@@ -747,11 +749,15 @@ def rerun_gate(root, slug=None, log_dir=None, say=None, book_kw=None):
             if steps:
                 ctx = {'root': top, 'base': base, 'merged': False, 'changed': list(changed or []),
                        'options': options}
-                results = runner.run_steps(slot.launcher, steps, gate, ctx, logs, say, checks)
+                results = runner.run_steps(slot.launcher, steps, gate, ctx, logs, say, checks,
+                                           halted=slot.stop_asked)
             results += runner.window_results(slot, say)
         finally:
             if tw:
                 _drop_tree(main, tw, base, cfg, say)
+        if slot.stop_asked():       # no rerun record: the red run keeps its one rerun
+            slot.release(1, 'cancelled')
+            return runner.stopped_outcome('gate run %s was stopped' % slot.id, logs, base)
         flake = (all(c['tip'] == 'pass' for c in done) and
                  all(r['status'] in PASSING for r in results))
         slot.release(0 if flake else 1, 'done')
