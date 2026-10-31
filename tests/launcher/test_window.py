@@ -31,7 +31,7 @@ class ClaudeCommand(unittest.TestCase):
                          "claude --resume 'sid' --permission-mode default --remote-control 'n' -n 'n' 'p'")
 
     def test_an_unknown_mode_raises(self):
-        for bad in ('', 'yolo', 'AUTO'):
+        for bad in ('', 'yolo', 'AUTO', 'bypassPermissions', 'dontAsk'):
             with self.assertRaises(ValueError):
                 window.claude_command('n', 'p', permission_mode=bad)
 
