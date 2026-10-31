@@ -46,7 +46,8 @@ The record (SCHEMA 1), every key always present:
                   when it ended, or null while running (UTC, YYYY-MM-DDTHH:MM:SSZ)
   verdict         running; or final: pass, fail, refused, stuck, busy, usage, landed-ungated (an
                   old record's only: exit LANDED_UNGATED is retired, no landing writes it),
-                  not-run (a machine lock refusal), error (an exception or Ctrl+C ended the run)
+                  not-run (a machine lock refusal), error (an exception or Ctrl+C ended the run),
+                  stopped (a stop ended the gate before its verdict: kitlib.gate.stop)
   code            the exit code gate.py gives that outcome; null for running and error
   log             the run's log folder, or null
   summary         the outcome's verdict line, or the exception for error
@@ -130,7 +131,8 @@ LEDGER = 'land-ledger.jsonl'
 LEDGER_FIELDS = ('branch', 'tip', 'run_id', 'started_at', 'finished_at', 'verdict', 'code',
                  'summary', 'gate_once', 'escalated')
 VERDICTS = {G.OK: 'pass', G.FAILED: 'fail', G.USAGE: 'usage', G.STUCK: 'stuck',
-            G.REFUSED: 'refused', G.BUSY: 'busy', G.LANDED_UNGATED: 'landed-ungated'}
+            G.REFUSED: 'refused', G.BUSY: 'busy', G.LANDED_UNGATED: 'landed-ungated',
+            G.STOPPED: 'stopped'}
 
 
 class ResultError(Exception):
@@ -353,7 +355,7 @@ def append_ledger(root, record):
 
 def _summary(outcome):
     keys = ('LANDED ', 'NOT LANDED', 'CONFLICT ', 'STUCK:', 'REFUSED:', 'BUSY:', 'USAGE:',
-            'NOT RUN:')
+            'NOT RUN:', 'STOPPED:')
     for line in outcome.lines:      # a landing's verdict line (docs/gate.md "Exit codes")
         if line.startswith(keys):
             return line
@@ -544,6 +546,54 @@ def finish_dead(root, rec, why=None, unclaimed=False, path=None):
     except ResultError:
         return read_path(path)[0]
     return final
+
+
+def finish_stopped(rec, path, why):
+    """Finish the record `rec`, read from `path`, as `stopped` (exit G.STOPPED), its summary `why`:
+    a run a stop ended whose own process can no longer write it (kitlib.gate.stop). The record as
+    it is now, or None when it cannot be read. Only when the record on disk is still `rec`'s run
+    and running, or `error` (a waiter saw the process die first: finish_dead); anything else is
+    returned untouched. Read, judged and replaced under its lock, as finish_dead does, keeping the
+    run's run_id, started_at, tip, base, log, pid and ctime."""
+    try:
+        with _held(path):
+            now, _ = read_path(path)
+            if (not isinstance(now, dict) or now.get('verdict') not in (RUNNING, ERROR)
+                    or now.get('run_id') != rec.get('run_id')):
+                return now
+            final = build(now['branch'], now.get('tip'), now.get('base'), now['kind'], G.STOPPED,
+                          log=now.get('log'), summary=why, run_id=now.get('run_id'),
+                          started_at=now.get('started_at'), pid=now.get('pid'),
+                          ctime=now.get('ctime'))
+            _put(path, final)
+    except ResultError:
+        return read_path(path)[0]
+    return final
+
+
+def machine_records(kind):
+    """[(path, record)] of the `kind` records of every repository on this machine: how a run is
+    found from its process (pid, ctime) with no checkout to start from (kitlib.gate.stop). [] with
+    no result folder; a file that cannot be read is skipped, and the old folders are not read."""
+    try:
+        top = machine_root()
+        repos = sorted(os.listdir(top))
+    except (OSError, ResultError):
+        return []
+    found = []
+    for repo_name in repos:
+        folder = os.path.join(top, repo_name)
+        try:
+            names = sorted(os.listdir(folder))
+        except OSError:
+            continue
+        for name in names:
+            if name.endswith('.%s.json' % kind):
+                path = os.path.join(folder, name)
+                rec, _ = read_path(path)
+                if isinstance(rec, dict) and rec.get('kind') == kind:
+                    found.append((path, rec))
+    return found
 
 
 def running_records(root, kind, run_id):
