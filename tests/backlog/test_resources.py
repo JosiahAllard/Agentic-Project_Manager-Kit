@@ -70,6 +70,16 @@ class Offer(Base):
         self.assertIn('at capacity 2, taken by X (in flight on %s), A (offered above)' % HOLDER,
                       passed['B'].why)
 
+    def test_a_branchs_own_pulls_take_no_capacity_in_its_own_offer_but_fill_it_for_others(self):
+        self.ctx = pmod.Context(self.store, self.repo.root, branch=BRANCH, today=TODAY,
+                                resources={'dev-clone': 2})
+        self.seed(held('X', by=HOLDER), held('Y', by=HOLDER), mine('A', uses='dev-clone'))
+        ids, passed = self.offer(branch=OTHER)
+        self.assertEqual(ids, [])
+        self.assertIn('at capacity 2', passed['A'].why)
+        ids, _passed = self.offer(branch=HOLDER)
+        self.assertEqual(ids, ['A'])
+
     def test_a_capped_offer_is_not_filled_by_one_resource(self):
         self.seed(mine('A', '1', uses='dev-clone'), mine('B', '1', uses='dev-clone'),
                   mine('C', '1', uses='dev-clone'), mine('D', '2'))

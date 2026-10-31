@@ -548,6 +548,14 @@ class WholeRun(StoreCase):
                                broken):
             return self.run_lint()
 
+    def test_the_uses_hint_needs_a_uses_line_in_the_store(self):
+        kit_json_ref(self.repo, {'backlog': {'resources': {'gpu': 1}}})
+        self.seed(priced('AAA', summary='needs a live client'))
+        res = self.run_lint()
+        fixes = [f['fix'] for f in res['findings'] if f['check'] == 'keyword-hold']
+        self.assertEqual(len(fixes), 1, res)
+        self.assertNotIn('--uses', fixes[0])
+
     def test_no_uses_line_never_reads_the_resources_config(self):
         res = self._lint_with_unreadable_resources(priced('AAA'))
         self.assertFalse(any('backlog resources not read' in n for n in res['notes']), res['notes'])
