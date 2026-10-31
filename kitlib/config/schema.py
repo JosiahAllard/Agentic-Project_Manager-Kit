@@ -180,6 +180,8 @@ SECTIONS = {
         'id_grammar': Field(Enum('upper', 'mixed'), 'upper', 'item id spelling'),
         'code_main': Field(Str(), None, 'the branch code lands on, which `add --found-on` measures a branch\'s diff from; default repo.main_branch'),
         'cap': Field(Int(1, None), 5, 'most records `backlog.py next` offers and `pull` takes in order (`next --cap` overrides it for one call); every worktree reads the main checkout\'s value'),
+        'resources': Field(MapOf(Int(1, None), 'name', key=Str(pattern=r'[a-z0-9][a-z0-9-]*', what='a lower-case resource name')), {},
+                           'limited resources and how many live pulls may use each at once: a record names one with `uses:`, and `next` passes it over at capacity (docs/backlog.md "Resources"); every worktree reads the main checkout\'s value'),
     },
     'board': {
         'state_file': Field(RelPath(), None, 'the board state file, under the git dir (default <git common dir>/kit/board-state.md)'),

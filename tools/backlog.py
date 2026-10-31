@@ -6,7 +6,8 @@
           list [--blocked [--on M]] [--needs-priority] [--status S] [--area A]
           stale [--days N]       find TEXT      (open and closed records: id, summary, body)
   writes  add ID --summary S --scope P... --found-on BRANCH|none --why-not-folded T
-              [--effort s|m|l] [--ref R] [--reopen] [--body-file F]   (S: at most 120 characters)
+              [--uses NAME]... [--effort s|m|l] [--ref R] [--reopen] [--body-file F]
+              (S: at most 120 characters)
           set ID [--<field> V]... [--unset K]... [--body-file F]
           block ID --on M... [--reason T] [--owner-ask Q]   (adds; unblock removes)
               [--until C]   (one --on: the condition that ends it; docs/backlog.md "block --until")
@@ -153,6 +154,8 @@ def build_parser():
     v.add_argument('id')
     v.add_argument('--summary', required=True)
     v.add_argument('--scope', action='append', default=[])
+    v.add_argument('--uses', action='append', default=[],
+                   help='a resource .kit.json declares that the record needs while pulled')
     v.add_argument('--effort', default=None)
     v.add_argument('--ref', default=None)
     v.add_argument('--reopen', action='store_true')
@@ -282,6 +285,9 @@ def do_show(args, ctx, snap):
     say('%s  rank %s  %s  (%s)' % (rec.id, omod.rank_label(rec, ranks), bucket, rec.path))
     if rmod.is_owner_held(rec):
         say('OWNER HOLD (%s): %s' % (rmod.owner_hold_label(rec), rec.get('owner_ask')))
+    uses = pmod.uses_shown(snap, ctx, rec)
+    if uses:
+        say(uses)
     say('')
     say((rec.text or '').rstrip('\n'))
     return 0
@@ -353,7 +359,8 @@ def do_stale(args, ctx, snap):
 def do_check(args, ctx, snap):
     say('CHECK %s (%s)' % (snap.head_label(), snap.where))
     red = False
-    for res in checkmod.check_store(snap, implicit=getattr(ctx.store.backend, 'implicit', False)):
+    for res in checkmod.check_store(snap, implicit=getattr(ctx.store.backend, 'implicit', False),
+                                    resources=ctx.capacity(snap)):
         say(res.line())
         for f in res.findings:
             say('    FAIL %s:%s %s' % (f.path, f.line, f.message))

@@ -9,6 +9,7 @@ docs/backlog.md).
                        from a linked worktree naming no store, the PM data worktree's live store
                        (store.worktree_live_store)
   repo_cap(top)     -> the main checkout's `.kit.json` backlog.cap `next` and `pull` share
+  repo_resources(top) -> the main checkout's `.kit.json` backlog.resources, {name: capacity}
   planner(args, ctx) -> the plan `Store.write` runs for `args.verb` (one of WRITES, `retarget` or
                        `uncite`); Usage for any other verb, raised before a plan exists
   retarget_dry(args, ctx) -> the Change `retarget` would write, checked as a write would be;
@@ -20,6 +21,7 @@ docs/backlog.md).
 """
 import kitlib.config as kconfig
 from kitlib.config import ConfigError, load as load_config
+from kitlib.config.types import is_note
 from kitlib.git import repo as gitrepo
 
 from . import plan as pmod
@@ -72,7 +74,7 @@ def open_store(root, fetch=True, session=None, branch=None):
     ctx = pmod.Context(store, top, remote=cfg.remote, main_branch=cfg.main_branch,
                        branch=branch, code_main=code_main or cfg.main_branch,
                        code_remote=code_remote, liveness=lambda name: liveness(top, name),
-                       cap=lambda: repo_cap(top))
+                       cap=lambda: repo_cap(top), resources=lambda: repo_resources(top))
     return ctx
 
 
@@ -86,16 +88,30 @@ def repo_cap(top):
     (ERROR), never a silent default; the schema refuses a value that is not a whole number >= 1
     when the file loads (kitlib/config/schema.py), and checked_cap refuses one that reaches here
     otherwise."""
+    section, main = _main_backlog(top, 'the backlog cap')
+    return checked_cap(section['cap'], main)
+
+
+def repo_resources(top):
+    """`{name: capacity}` from `.kit.json` "backlog".resources of the main checkout, read as
+    repo_cap reads the cap and for the same reason (plan.Context.resources). No key: {}."""
+    section, _main = _main_backlog(top, 'the backlog resources')
+    return {k: v for k, v in section['resources'].items() if not is_note(k)}
+
+
+def _main_backlog(top, what):
+    """`(the "backlog" section of the main checkout's .kit.json, that checkout)`; Failure naming
+    `what` when it cannot be read."""
     wts, why = gitrepo.worktrees(top)
     if not wts:
-        raise Failure('cannot read the backlog cap: git cannot list the worktrees of %s, so its '
-                      'main checkout\'s .kit.json is unknown (%s)' % (top, why))
+        raise Failure('cannot read %s: git cannot list the worktrees of %s, so its main '
+                      'checkout\'s .kit.json is unknown (%s)' % (what, top, why))
     main = top if wts[0].bare else wts[0].path
     try:
         cfg = kconfig.load(main)
     except (kconfig.ConfigError, OSError) as exc:
-        raise Failure('cannot read the backlog cap from the main checkout %s: %s' % (main, exc))
-    return checked_cap(cfg.section('backlog')['cap'], main)
+        raise Failure('cannot read %s from the main checkout %s: %s' % (what, main, exc))
+    return cfg.section('backlog'), main
 
 
 def checked_cap(cap, where):
@@ -126,7 +142,7 @@ def planner(args, ctx):
         return lambda s: pmod.plan_add(s, ctx, args.id, args.summary, args.scope, args.effort,
                                        args.ref, args.reopen, session=ctx.session,
                                        found_on=args.found_on, why_not_folded=args.why_not_folded,
-                                       body=body, summary_max=pmod.SUMMARY_MAX)
+                                       body=body, summary_max=pmod.SUMMARY_MAX, uses=args.uses)
     if v == 'set':
         body = pmod.read_body_file(args.body_file) if args.body_file else None
         changes = set_changes(args)

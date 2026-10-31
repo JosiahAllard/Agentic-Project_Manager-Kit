@@ -80,7 +80,12 @@ def _backlog_checks(root, home, now, notes, questions):
     if snap.unreadable:
         notes.append('backlog: %d record(s) could not be read' % len(snap.unreadable))
     code_root = code_checkout(ctx.root)
-    out = holds.findings(snap, cmd)
+    try:
+        resources = ctx.resources
+    except (Refusal, OSError) as exc:
+        resources = None
+        notes.append('backlog resources not read: %s' % ' '.join(str(exc).split()))
+    out = holds.findings(snap, cmd, resources)
     for step in (lambda: backlog.unpriced(snap, cmd),
                  lambda: backlog.dead_pulls(snap, ctx, cmd),
                  lambda: backlog.dead_blockers(snap, cmd),

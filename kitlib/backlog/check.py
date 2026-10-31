@@ -188,9 +188,30 @@ def load_for_check(store):
                           % (backend.remote, backend.remote_ref, backend.local_ref))
 
 
-def check_store(snap, implicit=False):
+USES_NAMES = 'uses names'
+
+
+def check_uses(snap, resources):
+    """One FAIL per `uses:` line naming a resource `.kit.json` does not declare. Such a record is
+    never offered, and a live pull of one counts toward nothing (offer.next_offer)."""
+    subjects, found = 0, []
+    declared = ', '.join(sorted(resources)) or 'none'
+    for rec in snap.readable:
+        for n, key, value in rec.entries:
+            if key != 'uses':
+                continue
+            subjects += 1
+            if value not in resources and rmod._uses(value) is None:
+                found.append(rmod.Finding(USES_NAMES, rec.path, n, '`uses: %s` is not in .kit.json '
+                                          '"backlog".resources (declared: %s)' % (value, declared)))
+    return CheckResult(USES_NAMES, subjects, found, unit='`uses:` lines')
+
+
+def check_store(snap, implicit=False, resources=None):
     """Every check, each with its own denominator. `implicit`: `snap` is the implicit default
-    store's, which adds check_default_store when it holds any file."""
+    store's, which adds check_default_store when it holds any file. `resources` ({name: capacity},
+    the repository's; None: not read) adds check_uses when a record names one, so a store with no
+    `uses:` line reads as it always did, and a write, which passes none, meets no config."""
     by_name = {}
     for f in snap.all_findings():
         by_name.setdefault(f.check, []).append(f)
@@ -215,6 +236,8 @@ def check_store(snap, implicit=False):
     ]
     if implicit and snap.file_count:
         results.append(check_default_store(snap))
+    if resources is not None and any(r.has('uses') for r in readable):
+        results.append(check_uses(snap, resources))
     for r in results:
         r.population = snap.file_count
     return results

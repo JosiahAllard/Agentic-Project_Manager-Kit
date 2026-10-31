@@ -136,6 +136,7 @@ DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 QUESTION_RE = re.compile(r'^Q-[0-9]{3,}$')
 KEY_RE = re.compile(r'^[a-z][a-z0-9_]*$')
 SESSION_RE = re.compile(r'^[a-z][a-z0-9-]*$')
+RESOURCE_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
 
 
 def is_band(v):
@@ -215,6 +216,14 @@ def _session(v, rules=None):
     if SESSION_RE.match(v):
         return None
     return '`%s` is not a session name - lower-case `[a-z][a-z0-9-]*`' % v
+
+
+def _uses(v, rules=None):
+    """A resource the record needs while it is pulled (docs/backlog.md "Resources"). Only the
+    grammar: which names exist is the repository's `.kit.json`, which `check` reads."""
+    if RESOURCE_RE.match(v):
+        return None
+    return '`%s` is not a resource name - lower-case `[a-z0-9][a-z0-9-]*`' % v
 
 
 def _review(v, rules=None):
@@ -306,6 +315,7 @@ FIELDS = collections.OrderedDict([
     ('review', (AT_MOST_ONE, _review)),
     ('answer', (ANY, _answer)),
     ('scope', (ONE_PLUS, _scope)),
+    ('uses', (ANY, _uses)),
     ('files', (ANY, _path)),
     ('files_at', (AT_MOST_ONE, _free)),
     ('requires', (ANY, _free)),
