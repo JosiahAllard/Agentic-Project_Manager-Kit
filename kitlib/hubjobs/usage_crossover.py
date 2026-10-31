@@ -95,7 +95,9 @@ target is tier 1 only (no account under TARGET_LIMIT% of both windows: `no-room 
               ready with `stalled` set, since nothing is stopped first.
   ready       as a session's (the hand-off file written after the ask, the transcript quiet);
               then `launch.py pm-crossover --account N --name NEW [--state FILE]` (no --state when
-              stalled: the new PM reads the hand-off file as it is).
+              stalled: the new PM reads the hand-off file as it is). No room on tier 1: cleared
+              with `no-room pm`, so the PM resumes and a later trigger asks again. The week reset
+              (and no stall): cleared, as in asked.
   starting    coordinators.json naming NEW on account N: done (`crossed`), and the old PM's
               process is kept as pm_old, never counted unmanaged, until it ends; the owner closes
               its window. NEW running and not named: `cross-failed`, remembered. Nothing after
@@ -105,7 +107,9 @@ In every state, coordinators.json naming another PM session than the one asked c
 on normal is pushed `stalled` and left to the owner; on full the start goes ahead with no ask. The
 caps, holds and remembered clears are a session's. A PM that is not a launched process (the
 desktop app) is not moved: a `pm-limit` push, once per week window. A live session of no
-sessions.json entry gets an `unmanaged` push the same way and is left alone.
+sessions.json entry gets an `unmanaged` push the same way and is left alone. Every PM crossing
+that ends without `crossed` pushes cross-cleared, cross-failed, no-room or stalled with detail
+`pm`, and each of those texts tells the PM to resume its normal work.
 
 Pushes (ctx.event, push.JOB_EACH: owed once per detail, each with its own text): crossing,
 would-cross, crossed, cross-cleared, cross-failed, stalled, no-ready, no-checkin, no-room, pm-limit,
@@ -773,6 +777,10 @@ def _pm_ready(c, old, pms, stall_now, accounts, starts, running, landed, mode, n
         return _gone('the PM session ended before its successor started', detail=PM_DETAIL)
     if len(pms) > 1:
         return _hold('several PM processes')
+    st = accounts.get(str(c.get('account')))
+    week, _ = window(st.usage if st is not None else None, 'seven_day', now)
+    if week is not None and week < EARLY_FLOOR and not stall_now:
+        return _gone('the week reset: no crossing needed', detail=PM_DETAIL)
     if not c.get('stalled'):
         if stall_now and mode == FULL:
             return _advance(READY, 'stalled: start on the hand-off file as it is', stalled=True)
@@ -789,8 +797,8 @@ def _pm_ready(c, old, pms, stall_now, accounts, starts, running, landed, mode, n
     if _number(retry) and now < retry:
         return _hold('backoff after a failed start')
     pick = _pm_pick(c.get('account'), accounts, running, landed, now)
-    if pick is None:
-        return _no_room(PM_DETAIL)
+    if pick is None:            # the PM resumes; the trigger asks again once an account has room
+        return _gone('no account has room: the PM resumes', 'no-room', PM_DETAIL)
     return Decision(START, 'to account %s (%s)' % pick, pick[0])
 
 
@@ -810,7 +818,9 @@ PM_CHECKPOINT = ("The hub's usage crossover: the PM's account is near its weekly
                  'a fresh PM on account %s from your hand-off file (a conversation cannot move between '
                  'accounts). Checkpoint now, as role pm "Hand-off" says: update HANDOFF.md in place, post it '
                  'with hub_handoff_ready (kind handoff, from pm, state_path its absolute path), then send '
-                 'nothing more and start nothing. Once the new PM is confirmed you are told to stand down.')
+                 'nothing more and start nothing. Once the new PM is confirmed you are told to stand down. '
+                 'If the hub drops the crossing instead (a cross-cleared, cross-failed, no-room or stalled '
+                 'push with detail pm), resume your normal work.')
 CHECKPOINT = ("The hub's usage crossover: this session's account has reached the weekly limit, and "
               'the hub will move you to account %s. Checkpoint and stand down now with skill '
               'session-handoff: write your state note, post it with hub_handoff_ready (kind '

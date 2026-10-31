@@ -193,6 +193,9 @@ OUTBOX = 'push-outbox.json'
 # hear about (kitlib.hubjobs.unblock_conditions: one opened record each; usage_crossover: one
 # session or account each), so a second one in a round must not replace the first.
 _CROSSOVER = 'The hub usage crossover job (hub health jobs.usage-crossover, usage-crossover.log): '
+# the PM's way back from a checkpoint ask: a crossing of the PM that ends without `crossed`
+_PM_RESUMES = (' When detail is pm (you, the PM), no crossing of yours is open now: the '
+               'checkpoint message no longer holds, so resume your normal work.')
 JOB_EACH = {'unblocked': 'A hub timed job cleared a hold whose `until` condition was met: the '
                          'record named in detail (<repo>:<ID>) is unblocked; `backlog.py show '
                          '<ID>` gives the commit. No reply is needed.',
@@ -204,22 +207,25 @@ JOB_EACH = {'unblocked': 'A hub timed job cleared a hold whose `until` condition
                            'launcher.usage_crossover is notify: nothing was stopped or started. '
                            'For your information; no reply is needed.',
             'stalled': _CROSSOVER + 'detail stands stopped at the weekly limit. On `full` the hub '
-                       'stops it and starts a successor on its state note; otherwise it is yours.',
+                       'stops it and starts a successor on its state note; otherwise it is yours.'
+                       + _PM_RESUMES,
             'crossed': _CROSSOVER + 'the session in detail has taken over and its old session has '
                        'gone. For your information; no reply is needed. When detail is the PM, '
                        'coordinators.json names it and the old PM window stays until the owner '
                        'closes it.',
             'cross-cleared': _CROSSOVER + 'dropped the crossing of detail before it finished; the '
                              'log says why and what it had done. For your information; no reply '
-                             'is needed.',
-            'cross-failed': _CROSSOVER + 'gave up on detail: it needs you. The log says why.',
+                             'is needed.' + _PM_RESUMES,
+            'cross-failed': _CROSSOVER + 'gave up on detail: it needs you. The log says why.'
+                            + _PM_RESUMES,
             'no-ready': _CROSSOVER + 'detail has not replied ready to its checkpoint message, or '
                         'has not gone quiet on a state note written since, in 30 minutes; the hub '
                         'still waits. Check on it.',
             'no-checkin': _CROSSOVER + 'the successor of detail has not recorded its check-in in '
                           '30 minutes; its old session stays idle. Check on the successor.',
             'no-room': _CROSSOVER + 'detail needs moving and no account has room: nothing was '
-                       'stopped or started. A stalled session wakes at its reset.',
+                       'stopped or started. A stalled session wakes at its reset.'
+                       + _PM_RESUMES,
             'pm-limit': _CROSSOVER + 'the PM session is at the weekly limit and this job cannot '
                         'move it: it is not a launched session (the desktop app), or '
                         'coordinators.json records no pm_session_id or pm_account. It is yours to '

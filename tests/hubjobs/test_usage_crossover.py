@@ -379,7 +379,7 @@ class PmPhases(unittest.TestCase):
         d = decide_pm(cross=pm_crossing(U.READY, stalled=True))
         self.assertEqual((d.action, d.target), (U.START, '2'))
         d = decide_pm(cross=pm_crossing(U.READY, stalled=True), accounts={'1': HOT, '2': on(96)})
-        self.assertEqual((d.action, d.word), (U.HOLD, 'no-room'))
+        self.assertEqual((d.action, d.word, d.detail, d.remember), (U.CLEAR, 'no-room', 'pm', False))
 
     def test_starting_is_done_once_coordinators_json_names_the_new_pm_on_the_target(self):
         c = pm_crossing(U.STARTING)
@@ -407,6 +407,55 @@ class PmPhases(unittest.TestCase):
 
     def test_the_pm_key_is_the_hubs_pm_key(self):
         self.assertEqual(U.PM_FROM, push.PM_KEY)
+
+    def test_ready_clears_on_a_week_reset_unless_still_stalled(self):
+        reset = {'1': on(20), '2': on(20)}
+        for c in (pm_crossing(U.READY, state_path='Z:/note-6.md'), pm_crossing(U.READY, stalled=True)):
+            d = decide_pm(cross=c, accounts=reset)
+            self.assertEqual((d.action, d.word, d.detail), (U.CLEAR, 'cross-cleared', 'pm'), c)
+        d = decide_pm(cross=pm_crossing(U.READY, stalled=True), accounts=reset,
+                      stall=('1', NOW + 2 * DAY), quiet=600, mode='full')
+        self.assertEqual((d.action, d.target), (U.START, '2'))
+
+    def test_ready_with_no_room_then_a_week_reset_clears_and_is_asked_again_once_there_is_room(self):
+        full = {'1': HOT, '2': on(96)}
+        d = decide_pm(cross=pm_crossing(U.READY, state_path='Z:/note-6.md'), accounts=full,
+                      note_at=NOW - 30, quiet=600)
+        self.assertEqual((d.action, d.word, d.detail, d.remember), (U.CLEAR, 'no-room', 'pm', False))
+        self.assertEqual((decide_pm(accounts=full).action, decide_pm(accounts=full).word), (U.HOLD, 'no-room'))
+        self.assertEqual(decide_pm().action, U.ASK)
+        d = decide_pm(cross=pm_crossing(U.READY, state_path='Z:/note-6.md'),
+                      accounts={'1': on(20), '2': on(96)}, note_at=NOW - 30, quiet=600)
+        self.assertEqual((d.action, d.word), (U.CLEAR, 'cross-cleared'))
+
+    def test_every_way_a_pm_crossing_ends_short_tells_the_pm_to_resume(self):
+        moved = U.Recorded('pm-sid-9', 'pm-other', 3)
+        ends = {
+            'asked, the week reset': decide_pm(cross=pm_crossing(U.ASKED), accounts={'1': on(20), '2': on(20)}),
+            'asked, coordinators.json moved': decide_pm(cross=pm_crossing(U.ASKED), recorded=moved),
+            'ready, coordinators.json moved': decide_pm(cross=pm_crossing(U.READY), recorded=moved),
+            'ready, the week reset': decide_pm(cross=pm_crossing(U.READY), accounts={'1': on(20), '2': on(20)}),
+            'ready, the start cap': decide_pm(cross=pm_crossing(U.READY, stalled=True),
+                                              starts={U.PM_DOC: [NOW - 60] * U.KEY_CAP}),
+            'ready, no room': decide_pm(cross=pm_crossing(U.READY, stalled=True),
+                                        accounts={'1': HOT, '2': on(96)}),
+            'ready, the PM ended': decide_pm(cross=pm_crossing(U.READY), pms=()),
+            'starting, up and not named': decide_pm(cross=pm_crossing(U.STARTING), names={'pm-a2'}),
+            'asked, stalled on normal': decide_pm(cross=pm_crossing(U.ASKED), stall=('1', NOW + 2 * DAY),
+                                                  quiet=600),
+            'notify': decide_pm(cross=pm_crossing(U.READY), mode='notify'),
+            'no crossing, no room': decide_pm(accounts={'1': HOT, '2': on(96)}),
+            'no crossing, the ask cap': decide_pm(asks=[NOW - 60] * U.ASK_CAP),
+        }
+        for why, d in ends.items():
+            self.assertEqual(d.detail, 'pm', why)
+            self.assertIn(d.word, push.JOB_EACH, why)
+            text = push.JOB_EACH[d.word]
+            self.assertIn('When detail is pm (you, the PM)', text, why)
+            self.assertIn('resume your normal work', text, why)
+        self.assertIn('resume your normal work', U.pm_checkpoint_text('2'))
+        for word in ('crossing', 'crossed', 'no-ready', 'pm-limit'):
+            self.assertNotIn('resume your normal work', push.JOB_EACH[word], word)
 
 
 class Asked(unittest.TestCase):
@@ -1251,6 +1300,26 @@ class PmJob(JobBase):
         self.assertEqual(self.ctx.events, [('no-room', 'pm')])
         self.run_job()
         self.assertEqual((self.ctx.events, self.sent, self.calls), ([], [], []))
+
+    def test_no_room_once_ready_clears_the_crossing_and_the_pm_is_asked_again_once_there_is_room(self):
+        self.run_job()
+        self.newest = {'pm': self.note(7, NOW + 30)}
+        self.host.written['pm-session'] = NOW + 120
+        self.usage = {'1': reading(99), '2': reading(96), '3': reading(97)}
+        self.now += 300
+        self.run_job()
+        self.assertEqual((self.ctx.events, self.calls), ([('no-room', 'pm')], []))
+        self.assertIsNone(self.crossing(U.PM_DOC))
+        self.assertNotIn(U.PM_DOC, self.doc()['cleared'])
+        self.now += 300
+        self.run_job()
+        self.assertEqual((self.ctx.events, len(self.sent)), ([], 1))
+        self.usage['2'] = dict(reading(20), updated_at=iso(self.now))
+        self.now += 300
+        self.run_job()
+        self.assertEqual(self.ctx.events, [('crossing', 'pm:a2')])
+        self.assertEqual(len(self.sent), 2)
+        self.assertEqual(self.crossing(U.PM_DOC)['phase'], U.ASKED)
 
     def test_notify_runs_pm_crossover_what_if_and_changes_nothing(self):
         self.mode = 'notify'
