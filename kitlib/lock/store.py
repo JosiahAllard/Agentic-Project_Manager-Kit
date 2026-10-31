@@ -86,6 +86,7 @@ class Settings:
         "bg_resume_s": 180.0, "bg_free_s": 30.0, "bg_keep_s": 600.0, "bg_stop_grace_s": 50.0,
         "bg_yield_s": 120.0, "bg_yield_margin_s": 15.0, "game_poll_s": 5.0, "game_roll_s": 120.0,
         "gpu_use_cache_s": 5.0, "wait_change_poll_s": 0.25, "child_poll_s": 1.0,
+        "stale_scale": 3.0, "stale_min_s": 3600.0, "stale_check_s": 60.0,
     }
 
     def __init__(self, pauses=None, **overrides):
@@ -268,6 +269,29 @@ def chain_host(chain, names, hosts=None):
     return None
 
 
+
+def booking_hosts(pairs, snap=None, hosts=None, live=None):
+    """[[pid, ctime]] of the agent hosts among pairs ([pid, ctime], a run's ancestors at its
+    booking, run.run_ancestors): each one the process listing (snap, default process.snapshot())
+    names as an agent host image (hosts, default agent_hosts()). The stale-run reap reads them
+    (kitlib.lock.stale): a run all of whose hosts are gone has lost the sessions that booked it.
+    Every one must be live at booking (live, default wrapper_state, is True): the ancestor walk
+    can end at an exited process that can still be opened, and a host already gone at booking
+    would make the run stale while its agent lives. So [] when any is not surely live, when there
+    is none, and when the listing or the host registry cannot be read: such a run is never taken
+    as stale."""
+    try:
+        snap = process.snapshot() if snap is None else snap
+        hosts = agent_hosts() if hosts is None else hosts
+        live = wrapper_state if live is None else live
+        names = {int(p): (n or "").lower() for p, _pp, n in snap}
+        found = sorted([int(p), int(c)] for p, c in pairs if names.get(int(p)) in hosts)
+        if any(live(p, c) is not True for p, c in found):
+            return []
+        return found
+    except Exception:
+        return []
+
 # WMI's provider host: the parent of every process Win32_Process.Create starts (kitlib.lock.detach,
 # a detached lock run or a submitted landing). It is listed, but this user cannot open it, so a
 # walk ends below it at a running process, the same end as the owner's desktop chain; what
@@ -384,6 +408,28 @@ def write_json(path, data, replace_s=2.0):
             time.sleep(0.05)
 
 
+def create_json(path, data):
+    """Writes path only when nothing is there: a temp file moved into place by a move that fails
+    when path exists, so a reader never sees it half
+    written and a file another process wrote first is never replaced (os.rename on Windows; os.link
+    on Linux). True when written, False when path was already there."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = "%s.%d.new.tmp" % (path, os.getpid())
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(data, f, indent=1)
+    try:
+        if kitlib.platform.NAME == "linux":
+            os.link(tmp, path)
+        else:
+            os.rename(tmp, path)
+        return True
+    except FileExistsError:
+        return False
+    finally:
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+
+
 def read_json(path):
     """A JSON object from path, or None (missing, unreadable or not an object)."""
     try:
@@ -438,6 +484,26 @@ def record_state(d):
             return None
     return wrapper_state(d.get("pid", 0), d.get("ctime"))
 
+
+
+def hosts_gone(d):
+    """Has run record d lost every agent host it was booked under? True only when d names one or
+    more (`hosts`, booking_hosts) and each is surely gone (wrapper_state False). False when it
+    names none, when any is live or cannot be told, and on Linux when d names a pid namespace
+    other than this process's (record_state)."""
+    hs = d.get("hosts")
+    if not isinstance(hs, list) or not hs:
+        return False
+    if kitlib.platform.NAME == "linux":
+        ns = d.get("pidns")
+        if ns is not None and ns != procfs.pidns():
+            return False
+    for h in hs:
+        if not (isinstance(h, (list, tuple)) and len(h) == 2):
+            return False
+        if wrapper_state(h[0], h[1]) is not False:
+            return False
+    return True
 
 def wrapper_state(pid, ctime):
     """Is the wrapper (pid, ctime) of a run record live? True when pid names a running process

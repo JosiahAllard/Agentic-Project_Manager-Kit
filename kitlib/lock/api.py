@@ -27,6 +27,7 @@ from kitlib.lock import holds as hl
 from kitlib.lock import kinds as kinds_mod
 from kitlib.lock import layout as lay
 from kitlib.lock import queue as qm
+from kitlib.lock import stale as stale_mod
 from kitlib.lock import status as st
 from kitlib.lock.run import expected_end, request_stop
 from kitlib.lock.store import (EXIT_BUSY, EXIT_HOLD, EXIT_REQUIRE, EXIT_RESERVED, EXIT_USAGE,
@@ -249,6 +250,7 @@ def snapshot(store=None, history_days=7, since=None, until=None):
                    gpu_mem_mb=None if gpu is None else sum(gpu.get(p, 0) for p in tree),
                    expected_end=expected_end(start_at, r.get("expect_s")),
                    background=bool(r.get("background")),
+                   stale=stale_mod.reason(store, r, now),
                    overrun=None)
         if r.get("state") == "held" and r.get("held_since") and r.get("expect_s"):
             try:
