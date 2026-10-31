@@ -186,6 +186,7 @@ add --pid-hold to any run: the opt-in pid hold (section "The pid shield")
 - **Exit codes.** 0 for all passed, nothing selected, or `--plan`; 1 when a unit failed or timed out.
 - **Refusals (exit 2).** A checkout without its tools folder. A `--select` whose change list git could not read: no test runs, and the last line is `pytests FAILED | no test ran: git could not read the change list`.
 - **`--select`.** Takes `git diff --name-only --no-renames` from the merge-base with `--base` (default: gate.md "Default base"), plus untracked files, or the `--changed` list. These go through kitlib.tooldeps' selection.
+- **`--merged`** (a landing's merged-tree gate, a step's `merged_args`). The selection is the same one, over base..merge on the merged tree. When a tools path made it, the `whole_tree` classes are added as `module.Class` names, except a class whose module is already selected (kitlib/tooldeps/deps.py `selection`). It does not run every module for a tools change: a test the derived graph does not connect to the change runs in `--full` and the daily full run, through the step's `full_cmd`.
 - **`--audit`.** Fails a unit (`[FAIL] audit:` lines) for any read under the checkout that the tool_tests tables do not map to its module.
 
 Keys, all in "tool_tests":
@@ -207,11 +208,13 @@ Keys, all in "tool_tests":
 {"name": "tools-tests",
  "globs": ["tools/**"],
  "cmd": ["{python}", "{here}/pytests.py", "-C", "{root}", "--select", "--base", "{base}"],
+ "full_cmd": ["{python}", "{here}/pytests.py", "-C", "{root}", "--all"],
  "merged_args": ["--merged"],
  "pass": ["^OK$", "^Ran ([5-9]\d|\d{3,}) tests in "]}
 ```
 
 - `{here}` is the kit's tools folder (kitlib/gate/steps.py `mapping`).
+- `full_cmd` is the only place every module runs: `gate.py --full`, a `--full` landing and the daily full run take it. Without it the daily run's `--select`, on an unchanged tree, selects nothing (docs/gate.md "Full command").
 - The second `pass` pattern is a floor of 50 tests. Set it to the repository's own count.
 - A run that selects nothing prints no `Ran` line. With a floor, that run fails the step, so give the step `globs` that match only when tests would be selected.
 
