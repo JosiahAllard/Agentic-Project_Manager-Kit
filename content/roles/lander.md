@@ -145,8 +145,8 @@ one `--reviewed-by` per branch in the same order; it ends with a `RESULT` line f
 The tool merges each with its own merge commit, gates the result once, and pushes
 once; a conflict or a red gate undoes the whole batch and lands nothing. Verify
 each branch tip is an ancestor of the remote main. Not landed: report; the
-coordinator re-queues the branches one at a time. A brief never batches a branch it
-marks high-risk.
+coordinator re-queues the branches one at a time. A strict-path or gate-config (`.kit.json`)
+branch never goes in a batch.
 
 ## Report
 
