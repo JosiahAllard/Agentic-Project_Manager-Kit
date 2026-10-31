@@ -22,6 +22,21 @@ own session id, so an unconfirmed fork waits or asks the owner instead of being 
 Refused (LaunchError, nothing started or written): no PM recorded in coordinators.json, the recorded
 PM not running, a --name that is empty, a PM name (stop's test), or names a running session or a
 sessions.json entry.
+
+PM crossover (crossover; docs/launcher.md "PM crossover"): the hub's usage crossover moves the PM
+to another account. A conversation cannot resume on another account, so the new PM starts fresh in
+pm_folder with that account's config folder and reads the hand-off file (`state_path`, the PM's
+HANDOFF.md, else the one its start-up routine finds):
+
+  claude --agent pm-kit:pm --remote-control '<new>' -n '<new>' '<prompt>'
+
+No --permission-mode: the PM's own starts (the desktop app, the after-reboot resume) pass none, so
+neither does this one. Then the same confirm as pm-relaunch: the new session id from the registry,
+the stand-down pushed to the old PM, and coordinators.json's pm_session_id, pm_name and pm_account
+written. Unlike pm-relaunch, an unconfirmed start or a failed write is a LaunchError (exit 1), the
+lines so far kept: the hub job reads the exit code. Refused as pm-relaunch is, and also for the
+account the PM is on and an account with no sign-in. The default name is pm-a<N>, pm-a<N>-<k> when
+that one is taken.
 """
 import json
 import os
@@ -49,6 +64,23 @@ STAND_DOWN = ("Stand down: launch.py pm-relaunch started '%s' (session %s), a fo
               "Control name '%s', and coordinators.json now names it the PM. From now on do nothing: no sends, "
               "dispatches, landings or hub writes; delete your crons and stop your monitors and loops, then stay idle. "
               "The owner closes this window by hand.")
+CROSS_PROMPT = ("You are the new PM, started fresh by the hub's usage crossover (launch.py pm-crossover) as '%s' on "
+                "account %s (Remote Control name '%s') because the old PM's account neared its weekly limit; a "
+                "conversation cannot move between accounts, so you start from the hand-off file. Act as the PM "
+                "only once %s has pm_session_id equal to your own session id (the launcher writes it, with pm_name "
+                "'%s' and pm_account %s, once it sees your id, and then tells the old session to stand down). Until "
+                "then send nothing, dispatch nothing and write nothing: check that file again every minute, and if "
+                "it still names another session after 10 minutes, ask the owner whether you are the PM. Once it "
+                "names you: run your start-up routine, %s; the owner closes the old window by hand, so never send it "
+                "work. Re-arm the usage watch and any dead-man checks, then tell the owner briefly that you are the "
+                "PM under Remote Control name '%s' on account %s.")
+CROSS_READ = 'reading the hand-off file %s at its hand-off step'
+CROSS_READ_DEFAULT = 'reading the hand-off file it names'
+CROSS_STAND_DOWN = ("Stand down: the hub's usage crossover started '%s' (session %s), a fresh PM on account %s that "
+                    "starts from your hand-off file, and coordinators.json now names it the PM. From now on do "
+                    "nothing: no sends, dispatches, landings or hub writes; delete your crons and stop your monitors "
+                    "and loops, then stay idle. The owner closes this window by hand.")
+CROSS_NAME = 'pm-a%s'
 OWNER_STEP = ("Owner step: close the old PM window by hand once '%s' has checked in; the launcher never stops the "
               "PM (launch.py stop refuses it).")
 
@@ -146,15 +178,23 @@ def _write_coordinators(p, cfg):
         raise
 
 
-def record_pm(settings, host, new_sid, name):
-    """Set coordinators.json's pm_session_id and pm_name, read again so only the two keys change;
-    retried WRITE_TRIES times. None when written, else the error's text."""
+def _account_value(account):
+    """pm_account as coordinators.json keeps it: a number for an account number."""
+    return int(account) if str(account).isdigit() else account
+
+
+def record_pm(settings, host, new_sid, name, account=None):
+    """Set coordinators.json's pm_session_id and pm_name (and pm_account when `account` is given),
+    read again so only those keys change; retried WRITE_TRIES times. None when written, else the
+    error's text."""
     err = None
     for i in range(WRITE_TRIES):
         try:
             p = state.path(settings, state.COORDINATORS)
             cfg = state.read_coordinators(settings) or {}
             cfg['pm_session_id'], cfg['pm_name'] = new_sid, name
+            if account is not None:
+                cfg['pm_account'] = _account_value(account)
             _write_coordinators(p, cfg)
             return None
         except (LaunchError, ValueError, OSError) as e:
@@ -209,14 +249,15 @@ def relaunch(settings, host, name, delivery=None, wait_s=WAIT_S):
     return out + [OWNER_STEP % name]
 
 
-def stand_down(delivery, name, new_sid, old_sid):
+def stand_down(delivery, name, new_sid, old_sid, text=None):
     """Tell the old PM to stand down; the line to say. Sent while coordinators.json still names
-    the old session, so the hub's PM resolution reaches it."""
+    the old session, so the hub's PM resolution reaches it. `text`: the message, by default
+    pm-relaunch's."""
+    text = text or STAND_DOWN % (name, new_sid, name)
     if delivery is None:
-        return ('Stand-down not sent: this host has no push delivery. Tell the old PM yourself: %s'
-                % (STAND_DOWN % (name, new_sid, name)))
+        return 'Stand-down not sent: this host has no push delivery. Tell the old PM yourself: %s' % text
     try:
-        sent = delivery.deliver(push.PM_KEY, STAND_DOWN % (name, new_sid, name))
+        sent = delivery.deliver(push.PM_KEY, text)
     except Exception as e:                          # noqa: BLE001 - the fork runs; say it and go on
         return 'Stand-down not sent (%s: %s): tell the old PM to stand down yourself.' % (type(e).__name__, e)
     if sent.state != push.WRITTEN:
@@ -226,3 +267,95 @@ def stand_down(delivery, name, new_sid, old_sid):
         return ('WARNING: the stand-down reached %s (session %s), not the old PM session %s: tell the old PM to '
                 'stand down yourself.' % (sent.name, sent.session, old_sid))
     return 'Told the old PM (%s, session %s) to stand down.' % (sent.name, sent.session or old_sid)
+
+
+def _taken(settings, procs, records):
+    """The names a new session may not take: running sessions, live records, sessions.json entries."""
+    out = {lookup.rc_name(p.get('CommandLine')) for p in lookup.launched(procs)}
+    out.update(r.get('name') for r in records)
+    try:
+        sessions = state.read_sessions(settings)
+    except LaunchError:
+        sessions = {}
+    out.update(entry.get('name') for _key, entry in state.entries(sessions))
+    return {n for n in out if n}
+
+
+def crossover_name(account, taken):
+    """pm-a<N>, or pm-a<N>-<k> (k from 2) when that name is taken."""
+    base = CROSS_NAME % account
+    if base not in taken:
+        return base
+    k = 2
+    while '%s-%d' % (base, k) in taken:
+        k += 1
+    return '%s-%d' % (base, k)
+
+
+def crossover_prompt(name, account, coordinators_path, state_path=None):
+    """The new PM's first message: it acts as the PM only once coordinators.json names its session."""
+    read = CROSS_READ % state_path if state_path else CROSS_READ_DEFAULT
+    return CROSS_PROMPT % (name, account, name, coordinators_path, name, account, read, name, account)
+
+
+def crossover_command(name, prompt):
+    """The new PM's claude command line: a fresh session, no --resume and no --permission-mode."""
+    return ' '.join(['claude', '--agent', S.run_as(PM_AGENT), '--remote-control', window.q(name),
+                     '-n', window.q(name), window.q(prompt)])
+
+
+def crossover(settings, host, account, name=None, state_path=None, delivery=None, wait_s=WAIT_S,
+              what_if=False):
+    """Start a fresh PM on `account` from the hand-off file and make it the PM; the lines it says
+    (module docstring "PM crossover"). LaunchError, with the lines so far, when it was not
+    confirmed or coordinators.json was not written."""
+    account = str(account)
+    sid, folder, acct = recorded_pm(settings)
+    if str(acct) == account:
+        raise LaunchError('the PM is already on account %s; nothing was started.' % account)
+    if not os.path.isdir(folder):
+        raise LaunchError('pm_folder %s in coordinators.json is not a folder; nothing was started.' % folder)
+    if state_path is not None and not os.path.isfile(state_path):
+        raise LaunchError('--state %s is not a file; nothing was started.' % state_path)
+    d = A.launch_dir(settings, account)
+    procs, records = host.processes(), _live_records(settings, host)
+    if not pm_running(procs, records, sid):
+        raise LaunchError('the PM session %s that coordinators.json records is not running; nothing was started. '
+                          'Resume it with launch.py after-reboot.' % sid)
+    if name is None:
+        name = crossover_name(account, _taken(settings, procs, records))
+    check_name(settings, procs, records, name)
+    config_dir = None if settings.is_default(d) else d
+    coords = state.path(settings, state.COORDINATORS)
+    cmd = crossover_command(name, crossover_prompt(name, account, coords, state_path))
+    if what_if:
+        return ['Would start %s, a fresh PM on account %s (the PM session %s is on account %s), in %s with config '
+                'folder %s: %s' % (name, account, sid, acct, folder, config_dir or 'the default', cmd)]
+    text = window.script(name, window.PM, folder, cmd, config_dir, host.env('AGENT_TEMP'))
+    after_ms = pipes.launch_ms(host.now())
+    kw = window.open_args(name, settings)
+    host.open_window(text, **kw)
+    out = ['Started %s, a fresh PM on account %s (the PM session %s is on account %s), in %s. Remote Control '
+           'name: %s' % (name, account, sid, acct, window.opened_in(name, kw.get('terminal')), name)]
+    try:            # the window is open: a fault here must not read as a failed launch
+        rec, said = await_fork(settings, host, name, after_ms, sid, wait_s)
+    except (OSError, ValueError, LaunchError) as e:
+        rec, said = None, 'the registry could not be read (%s)' % e
+    if rec is None:
+        raise LaunchError("the new PM was not confirmed (%s): coordinators.json still names %s and the old PM was not "
+                          "told to stand down; the new PM waits until coordinators.json names it. Check the '%s' "
+                          "window; if it runs as its own session, tell the old PM to stand down and set pm_session_id "
+                          "to its session id, pm_name to %s and pm_account to %s in %s."
+                          % (said, sid, name, name, account, coords), out + [OWNER_STEP % name])
+    new_sid = rec['sessionId']
+    if said:
+        out.append(said)
+    out.append(stand_down(delivery, name, new_sid, sid, CROSS_STAND_DOWN % (name, new_sid, account)))
+    err = record_pm(settings, host, new_sid, name, account)
+    if err:
+        raise LaunchError('coordinators.json was NOT updated (%s). Manual step: set pm_session_id to %s, pm_name to %s '
+                          'and pm_account to %s in %s.' % (err, new_sid, name, account, coords),
+                          out + [OWNER_STEP % name])
+    out.append('coordinators.json: pm_session_id %s -> %s, pm_name %s, pm_account %s -> %s'
+               % (sid, new_sid, name, acct, account))
+    return out + [OWNER_STEP % name]
