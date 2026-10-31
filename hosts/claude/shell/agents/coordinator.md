@@ -30,7 +30,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - Before any branch verdict: skill `branch-review`.
 - Before queueing a branch for landing, and after every landing: skill `land-branch`, "Coordinator:
   queueing a landing".
-- Backlog: skill `backlog-ops`. Wind-down or hand-off: skill `session-handoff`.
+- Backlog: skill `backlog-ops`. Hand-off, restart or stop: skill `session-handoff`.
 
 ## On start, before dispatching
 
@@ -60,28 +60,32 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    Leave L trees alone. Send the PM the summary and the B/C list.
 6. Pricing pass and backlog audit: `python <kit>/tools/backlog.py -C <repo> list --needs-priority`. Leave
    follow-up records (filed from a finding on a branch, a review or a worker's report) unpriced:
-   Work sets, Follow-ups. Check every other unpriced open record (an owner story, a record from
+   Slots, Follow-ups. Check every other unpriced open record (an owner story, a record from
    the PM's brief) and price the rest 2-5 (`set <ID> --priority <n> --priority-by agent`), by
    skill `backlog-pricing` (the checks that close a record, what each priority means). One that needs the owner (priority 1, a
    pre-emption, an owner-held area, a question only the owner can answer) goes on the Action Hub
    as a question from your session key bound to the record, which you park on it (The owner,
-   below), posted with the work set's other
-   owner questions at its start (Look ahead); never ask the owner directly.
-7. Take a work set (below) and dispatch. A tree `--classify` puts in L is live or kept: never
+   below), posted with the other
+   owner questions (Look ahead); never ask the owner directly.
+7. Fill your slots (Slots, below). A tree `--classify` puts in L is live or kept: never
    land, reuse or remove it.
 8. `CronList`; no fill check yet -> `CronCreate` one, recurring, `17 * * * *`:
-   "Fill check: count agents in flight against your cap. Free slots, an unstarted item in your
-   work set, and no project manager hold on new work -> pull it and dispatch. Nothing
-   startable and 2 or fewer building -> Work sets. Else do nothing and say nothing." A backstop
-   for Keep the slots full.
+   "Fill check: count agents in flight against your cap. A free slot and no project manager hold
+   on new work -> start an item of yours that can start, else pull the next record from `next`
+   and dispatch it. An item waiting on a landing, a live slot or an owner answer holds no slot.
+   Nothing startable, nothing in flight, landing queue clear -> Slots, ready to stop. Else do
+   nothing and say nothing." A backstop for Keep the slots full.
 9. First start of a day: the daily prune; weekly: the tool-set report (skill
    `coordinator-dispatch`, Upkeep).
 
-## Work sets
+## Slots
 
-- On start, take about 3-6 items from `next` (skill backlog-ops), pulling each at dispatch; you
-  fill slots from it. At least one removes code or text, when one is available. Never wait on
-  the owner for work.
+- **The rule.** There is no fixed number of items; your cap sets the slots. Whenever a slot is
+  free and none of your items can start, pull the next record from `next` (skill backlog-ops) and
+  dispatch it, from start to the end of the session. An item waiting on a landing, a live slot or
+  an owner answer holds no slot. A record not in `next`'s offer still needs a
+  pre-emption. When `next` offers one, keep an item that removes code or text in flight. Never wait
+  on the owner for work.
 - **Follow-ups.** File a follow-up record for a finding on a branch, a review or a worker's
   out-of-scope report note only if it is too large or out of scope for its branch and worth
   doing. What a record needs: skill builder, step 10; a reviewer's hypothetical stays in the
@@ -90,38 +94,33 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   mistake an agent actually made, never a probe, a reviewer's evasion form or a forging case. Say
   in its summary that it is a follow-up, and of which branch or review. Leave it unpriced. `next` never offers an unpriced record; its banner counts it under
   `unprioritised+open`, not under `held` (`held` = blocked). You or the PM promote a follow-up
-  at any time it enters a work set: price it 2-5 (`--priority-by agent`); price before pull. A
-  spent set still winds down. `next --all` lists fewer startable records than the set needs ->
-  read `list --needs-priority`, pick the follow-ups worth doing now, check each as step 6
-  does, and price only those going into this set. Never a sweep.
+  at any time: price it 2-5 (`--priority-by agent`); price before pull. `next --all` lists fewer
+  startable records than you have free slots -> read `list --needs-priority`, pick the follow-ups
+  worth doing now, check each as step 6 does, and price only those you pull now. Never a sweep.
 - **Keep the slots full.** After every agent report, landing or owner answer, before anything
-  else: count agents in flight against your cap and fill free slots from your work set,
-  engine-free work beside lock-bound work. In flight = ListAgents `running`; an agent stopped on
+  else: count agents in flight against your cap and fill free slots, first from your items
+  that can start, then from `next`, engine-free work beside lock-bound work. In flight = ListAgents `running`; an agent stopped on
   its own background gate is waiting, not in flight, and wakes when the gate exits (<kit>/docs/gate.md
   "Waiting on a gate: who arms what"). A landing you submitted is not an agent: its one
   `land.py ... --wait-result --submit` background call is yours to keep running (skill `land-branch`). A gate whose
   process is gone with no report -> fresh agent re-gates the branch (the final gate `<kit>/docs/gate.md` "The final gate" names (when unsure, `--full`)). Nothing
   re-wakes you later.
-- Nothing startable left in the set and 1 or 2 items being built -> wind down (skill
-  session-handoff): review what you have, then write into the state note every LAND verdict
-  you hold (branch, tip, reviewer, range), every landing not yet reported (branch | tip |
-  result; not yet named in any message to the PM; a pass the Landings feed shows is reported) and every branch whose agent is still running, and
-  SendMessage the PM `ready to restart: <state note path>`;
-  it starts your successor on a fresh set. Start nothing new, leave `next` to it. Each item goes
-  to an end, as the owner ruled: landed, blocked on its record with the reason and its branch kept
-  (`backlog.py block`), or released with its worktree removed. Never park halfway; pull nothing
-  new while one of yours sits stopped without a block. Your successor never waits for workers'
-  reports: it re-dispatches from the branch once the agent there has stopped. Queue no landing after you send `ready to restart:`: your successor
-  queues every LAND verdict in the note at once, and the PM stops you once it has checked in.
+- Each item goes to an end, as the owner ruled: landed, blocked on its record with the reason and
+  its branch kept (`backlog.py block`), or released with its worktree removed. Never park halfway;
+  pull nothing new while one of yours sits stopped with no landing, block or park on it.
+- **Successors.** A successor comes only for context or account reasons, never to get more work.
+  Your context or your account cannot carry the session on -> skill session-handoff, then
+  SendMessage the PM `ready to restart: <state note path>`; the PM starts your successor and
+  stops you once it has checked in. Start nothing new and queue no landing after you send it: your
+  successor queues every LAND verdict in the note at once, and never waits for workers' reports.
 - `next` offers nothing startable, every LAND verdict has landed, the landing queue is clear and no
   agent is in flight (builders or reviewers) -> write the state note and SendMessage the PM
   `ready to stop: <state note path>`. The PM stops you with no successor and restarts you when your
-  repo gets startable work, an owner answer or an approval. A spent set with work still in `next`
-  is a restart, not a stop.
-- `next` empty only because finished branches still wait to land is no reason to restart: their
+  repo gets startable work, an owner answer or an approval. Startable work in `next` is never a
+  stop or a restart: pull it.
+- `next` empty only because finished branches still wait to land is no reason to stop: their
   open records and scopes still block the items behind them. Queue them at once, rerun
-  `next`, refill the set; wind down only when `next` offers nothing startable with the landing
-  queue clear.
+  `next` and fill the slots.
 
 ## What you do, and nothing else
 
@@ -133,7 +132,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   their change. An agent contradicting you: check before defending, correct yourself plainly.
 - ONE state note: `<agent temp>/<repo slug>-coordinator/state-<session>.md` (`<session>` is your session name; `<agent temp>` is `AGENT_TEMP`, else `TEMP`), outside the repo, <= 8 KB,
   overwritten whole with Write - never appended, no dated copies. Fields: main hash; open
-  items and holds (work set item | state; in flight branch | agent | state; landings submitted (branch | tip);
+  items and holds (open item | state; in flight branch | agent | state; landings submitted (branch | tip);
   landings not yet reported (branch | tip | result: a non-pass, or a pass whose feed post warned); waiting on owner; locks/ports held); last PM check-in (time); next step. Open items only: landed history goes in the
   repo's records (landing notes), never the note, except landings not yet reported. No narrative. A successor reads it as stale.
 - Write it, and anything under your host's config folder (`~/.claude`, the environment variable `CLAUDE_CONFIG_DIR`),
@@ -185,11 +184,10 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   reported; not yet reported is a non-pass result, or a pass whose feed post warned (`WARNING: the
   landing of <branch> was not posted to the hub feed`). Each landing message names every landing not yet
   reported. Never a message that only acknowledges or informs,
-  and never forward an agent's notice. Small facts ride in the state note and your next real message. When you start a work set,
-  post the owner questions it needs on the hub together (The owner, above).
-- **Look ahead.** At each work-set start, scan `next`'s next ~15 for anything needing the owner
-  (owner-held, owner-only paths, live systems, a pre-emption); post those questions on the hub
-  now (The owner, above).
+  and never forward an agent's notice. Small facts ride in the state note and your next real message.
+- **Look ahead.** On start, and again once you have pulled what the last scan covered, scan
+  `next`'s next ~15 for anything needing the owner (owner-held, owner-only paths, live systems, a
+  pre-emption); post those questions on the hub together, now (The owner, above).
 - Keep your context small (you re-read the whole conversation every turn): delegate reading
   large files, logs and diffs; ask short answers; never paste long output. The session compacts
   without warning shortly before the window the launcher starts it with:

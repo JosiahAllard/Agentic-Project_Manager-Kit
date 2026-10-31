@@ -65,16 +65,17 @@ class RenderTest(unittest.TestCase):
                      "Check every other unpriced open record (an owner story, a record from the PM's brief) "
                      "for duplicates, size and fit",
                      "--priority-by agent",
-                     "Promote a follow-up at any time it enters a work set", "price before pull",
-                     "When `next --all` lists fewer startable records than the set needs",
-                     "price only those going into this set; never a sweep",
+                     "Promote a follow-up at any time: price it 2-5", "price before pull",
+                     "When `next --all` lists fewer startable records than you have free slots",
+                     "price only those you pull now; never a sweep",
                      "`next` never offers an unpriced record",
                      "under `unprioritised+open`, not under `held` (`held` = blocked)",
                      "goes to the PM", "never ask the owner directly"):
             self.assertIn(want, line)
         # Withdrawn wording: no pass at all, unpriced called held, the capped-offer and duplicate triggers.
         for gone in ("No start-up pricing pass", "is held", "stay held", "held is not waiting",
-                     "`next` offers fewer items", "duplicates or replaces a priced one", "each unpriced"):
+                     "`next` offers fewer items", "duplicates or replaces a priced one", "each unpriced",
+                     "work set", "this set"):
             self.assertNotIn(gone, line)
         # "held" only where it is true: the banner's group, twice, and "owner-held".
         self.assertEqual(line.count("held"), 3, line)
@@ -273,7 +274,7 @@ class OthersTest(unittest.TestCase):
     def test_lists_predecessor(self):
         out = coordinatorstart.others(ENTRY, self.procs(), {}, 4)
         self.assertEqual(len(out), 1)
-        self.assertIn("also running: alpha-coordinator-a2-n5; if one is your winding-down", out[0])
+        self.assertIn("also running: alpha-coordinator-a2-n5; if one is your predecessor handing off", out[0])
         self.assertNotIn("beta", out[0])
 
     def test_unknown_self_is_newest_and_alone_prints_nothing(self):

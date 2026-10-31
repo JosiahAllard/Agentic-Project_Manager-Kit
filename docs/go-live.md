@@ -21,7 +21,7 @@ Keys in the machine config are in docs/kit-json.md "Machine config keys" (`scrub
 
 - `"eng_filing": true` under `coordinator_start` (the coordinator ENG standing line).
 - `eng_review` under `pm_start` (the owner's flags; the PM-start line appears only once non-empty).
-- `"pricing_pass": true` under `coordinator_start` (`PRICING_LINE` in `kitlib/coordinatorstart/__init__.py`: at start it tells the coordinator to price the other unpriced open records 2-5 and leave follow-up records unpriced until promoted into a work set).
+- `"pricing_pass": true` under `coordinator_start` (`PRICING_LINE` in `kitlib/coordinatorstart/__init__.py`: at start it tells the coordinator to price the other unpriced open records 2-5 and leave follow-up records unpriced until promoted).
 - `"gate_cap": {"<repo>": n}` under `coordinator_start` (docs/gate.md "The session gate cap": at most n gate runs of one repo in flight per agent session; unset, 0 or null: no cap).
 - `machine_lock.daemons` `"stop"` or `"leave"` (otherwise a Gradle or Kotlin daemon is stopped only after a gate run that ends "done", and only when it serves nothing outside that run's job; MSBuild nodes and the compiler server are always left: docs/gate.md "Build daemons").
 - `guard_mcp_tools` (with `guard_mcp_prefix`).
