@@ -38,6 +38,8 @@ MCP server and the hub MCP server exit.
   tool (TodoWrite, WebFetch...: one its host's `hosts.json` `hook.guarded_tools` leaves out) before it boots,
   so those calls never pay for a release check. Every host's plugin root is laid out as the kit
   (Codex's is the whole export), so its `boot/` is the kit's own; no host ships a copy of it.
+  Codex reaches it through the hooks plugin `pm-kit-hooks`, whose stub runs the installed
+  export's `boot/hook.py` (docs/plugin-source.md "Codex hooks plugin").
 - `mcp/lock_server.py` and `mcp/hub_server.py`.
 - The Codex shell's entry scripts (`hosts/codex/shell/scripts/`, for example `kit.py` and `launch.py`) and its MCP servers, through the kit's own `boot/kitboot.py` four folders above each.
 

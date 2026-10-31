@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/bin/sh -c 'python3 \"$@\" || echo \"PM kit: the kit did not load: python3 failed or is not on PATH (exit $?)\"' kit-hook \"${PLUGIN_ROOT}/boot/hook.py\" codex SessionStart",
+            "command": "/bin/sh -c 'python3 \"$@\" || echo \"PM kit: the kit did not load: python3 failed or is not on PATH (exit $?)\"' kit-hook \"${PLUGIN_ROOT}/pm_kit_hook.py\" codex SessionStart",
             "timeout": 10,
             "statusMessage": "Loading the PM kit header"
           }
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/bin/sh -c 'python3 \"$@\" || echo \"PM kit: the kit did not load: python3 failed or is not on PATH (exit $?)\"' kit-hook \"${PLUGIN_ROOT}/boot/hook.py\" codex PostCompact",
+            "command": "/bin/sh -c 'python3 \"$@\" || echo \"PM kit: the kit did not load: python3 failed or is not on PATH (exit $?)\"' kit-hook \"${PLUGIN_ROOT}/pm_kit_hook.py\" codex PostCompact",
             "timeout": 10
           }
         ]
@@ -31,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/bin/sh -c 'python3 \"$@\" || echo \"PM kit: the kit did not load: python3 failed or is not on PATH (exit $?)\"' kit-hook \"${PLUGIN_ROOT}/boot/hook.py\" codex SubagentStart",
+            "command": "/bin/sh -c 'python3 \"$@\" || echo \"PM kit: the kit did not load: python3 failed or is not on PATH (exit $?)\"' kit-hook \"${PLUGIN_ROOT}/pm_kit_hook.py\" codex SubagentStart",
             "timeout": 10
           }
         ]
@@ -43,7 +43,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/bin/sh -c 'python3 \"$@\" || exit 2' kit-hook \"${PLUGIN_ROOT}/boot/hook.py\" codex PreToolUse",
+            "command": "/bin/sh -c 'python3 \"$@\" || exit 2' kit-hook \"${PLUGIN_ROOT}/pm_kit_hook.py\" codex PreToolUse",
             "timeout": 10,
             "statusMessage": "Checking the PM kit guard"
           }

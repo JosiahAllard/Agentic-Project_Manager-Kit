@@ -575,7 +575,8 @@ store's git push (the `push` setting).
   times), never in a push.
   `usage-crossover` (`kitlib/hubjobs/usage_crossover.py`, every 300 s, first at 60 s, before
   `coord-restart`'s first run) moves a session to another account as its account nears the weekly
-  limit (docs/launcher.md "Usage crossover"). It is on `notify` until the owner sets
+  limit, the PM included: a fresh PM on the target through `launch.py pm-crossover`
+  (docs/launcher.md "Usage crossover"). It is on `notify` until the owner sets
   `launcher.usage_crossover`. Its words are all in `push.JOB_EACH`: `crossing`, `would-cross`,
   `crossed`, `cross-cleared`, `cross-failed`, `stalled`, `no-ready`, `no-checkin`, `no-room`,
   `pm-limit`, `unmanaged`. It reads the hub's own hand-off records through `Sources.handoffs`, which

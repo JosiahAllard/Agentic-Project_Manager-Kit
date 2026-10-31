@@ -247,8 +247,26 @@ class Selection(Fixture):
                 self.write(name, 'Z = 0\n')
                 self.assertEqual(self.select('tools/' + name), tool_deps.ALL)
 
-    def test_merged_with_any_tools_path_selects_all(self):
-        self.assertEqual(self.select('tools/b.py', merged=True), tool_deps.ALL)
+    def test_merged_selects_the_branch_selection_plus_the_whole_tree_classes(self):
+        # A landing's merged gate is no longer the whole suite for any tools path: the change's own
+        # selection over base..merge, and the whole_tree classes, which no edge can map.
+        self.write('test_ex_gate.py', 'import unittest\n\nclass GraphOracle(unittest.TestCase):\n'
+                                      '    def test_x(self):\n        pass\n')
+        self.assertEqual(self.select('tools/b.py'), ['test_b', 'test_tool_deps'])
+        self.assertEqual(self.select('tools/b.py', merged=True),
+                         ['test_b', 'test_tool_deps', 'test_ex_gate.GraphOracle'])
+
+    def test_merged_adds_no_whole_tree_class_its_module_already_runs_or_that_is_gone(self):
+        self.write('test_ex_gate.py', 'import unittest\nimport c\n\nclass GraphOracle(unittest.TestCase):\n'
+                                      '    def test_x(self):\n        pass\n')
+        self.assertEqual(self.select('tools/c.py', merged=True), ['test_c', 'test_ex_gate', 'test_tool_deps'])
+        os.remove(os.path.join(self.dir, 'test_ex_gate.py'))
+        self.assertEqual(self.select('tools/b.py', merged=True), ['test_b', 'test_tool_deps'])
+
+    def test_merged_still_selects_all_for_a_selector_file_or_an_unknown_tools_path(self):
+        self.write('tool_deps.py', 'Z = 0\n')
+        self.assertEqual(self.select('tools/tool_deps.py', merged=True), tool_deps.ALL)
+        self.assertEqual(self.select('tools/sub/x.py', merged=True), tool_deps.ALL)
 
     def test_merged_with_only_a_pinned_path_selects_its_modules(self):
         self.assertEqual(self.select('docs/ex/STORE.md', merged=True),
@@ -637,6 +655,7 @@ class Config(Fixture):
         with self.assertRaises(ConfigError):
             tool_deps.pinned(cfg)
         g = tool_deps.Graph({}, set(), cfg=cfg)
+        # An unmapped tools path is ALL before any pin is read.
         self.assertEqual(tool_deps.select({'tools/x.py'}, g, merged=True), tool_deps.ALL)  # not read
         with self.assertRaises(ConfigError):
             tool_deps.select({'docs/x.md'}, g)

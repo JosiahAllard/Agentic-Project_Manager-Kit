@@ -1,0 +1,6 @@
+{
+  "name": "pm-kit-hooks",
+  "version": "1.0.0",
+  "description": "The PM kit's Codex hooks: each runs boot/hook.py of the installed pm-kit plugin. Its bytes never change with the kit, so Codex asks the owner to trust them once (docs/plugin-source.md, Codex hooks plugin).",
+  "hooks": "./hooks/hooks.json"
+}

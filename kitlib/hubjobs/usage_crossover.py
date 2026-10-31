@@ -6,7 +6,12 @@ the weekly limit (docs/launcher.md "Usage crossover", docs/action-hub.md "Timed 
   decide(key, entry, crossing, live, stall, quiet_s, accounts, newest, starts, running, landed,
          mode, now, note_at, cleared, asks) -> Decision
                                      one session's next step, pure: no file, process or clock read
-  pick_target(accounts, current, running, landed, now) -> (account, why) | None
+  decide_pm(pms, crossing, stall, quiet_s, accounts, newest, starts, running, landed, mode, now,
+            note_at, cleared, asks, points, recorded, names) -> Decision
+                                     the PM's next step, pure (module docstring "The PM")
+  burn_eta(points, now) -> seconds | None
+                                     when a week reaches 100% at its current burn rate, pure
+  pick_target(accounts, current, running, landed, now, tier2) -> (account, why) | None
   claims(settings, now) -> {key}     the sessions the job is moving now (kitlib.hubjobs.coord_restart
                                      holds them); LaunchError for a bad state file
   CrossoverJob(load, ...)            its run(ctx)
@@ -75,8 +80,36 @@ that account: an idle account's reading does not refresh. An unknown reading nev
 One acting step per run across all keys, stop-stalled first, then stop-old, finish, start, ask,
 would-cross; the rest wait for the next run. Every key is decided on each run.
 
-The PM session is skipped: it gets a `pm-limit` push, once per week window, and no crossing here.
-A live session of no sessions.json entry gets an `unmanaged` push the same way and is left alone.
+The PM (decide_pm; docs/launcher.md "PM crossover") moves too, under the state key PM_DOC and the
+push detail `pm`. Its process is the launched session coordinators.json names (pm_name, else
+pm-session or its pm_session_id on the command line); its account is pm_account. With no
+pm_session_id or pm_account recorded, pm-crossover cannot move it: `pm-limit` once per change. A conversation
+cannot resume on another account, so its successor starts fresh from its hand-off file through
+`launch.py pm-crossover`, which confirms the new session and writes coordinators.json. The trigger
+is TRIGGER_WEEK% of a fresh reading, or earlier: a fresh week at EARLY_FLOOR% or more that
+burn_eta, from the account's readings of the last BURN_SPAN_S, puts at 100% within LEAD_S. The
+target is tier 1 only (no account under TARGET_LIMIT% of both windows: `no-room pm`). Its states:
+
+  asked       the PM is pushed a checkpoint message (PM_CHECKPOINT: update HANDOFF.md, post
+              hub_handoff_ready from pm with its path); as a session's, but a stall on full goes to
+              ready with `stalled` set, since nothing is stopped first.
+  ready       as a session's (the hand-off file written after the ask, the transcript quiet);
+              then `launch.py pm-crossover --account N --name NEW [--state FILE]` (no --state when
+              stalled: the new PM reads the hand-off file as it is). No room on tier 1: cleared
+              with `no-room pm`, so the PM resumes and a later trigger asks again. The week reset
+              (and no stall): cleared, as in asked.
+  starting    coordinators.json naming NEW on account N: done (`crossed`), and the old PM's
+              process is kept as pm_old, never counted unmanaged, until it ends; the owner closes
+              its window. NEW running and not named: `cross-failed`, remembered. Nothing after
+              START_WAIT_S: backoff, then ready.
+
+In every state, coordinators.json naming another PM session than the one asked clears it. A stall
+on normal is pushed `stalled` and left to the owner; on full the start goes ahead with no ask. The
+caps, holds and remembered clears are a session's. A PM that is not a launched process (the
+desktop app) is not moved: a `pm-limit` push, once per week window. A live session of no
+sessions.json entry gets an `unmanaged` push the same way and is left alone. Every PM crossing
+that ends without `crossed` pushes cross-cleared, cross-failed, no-room or stalled with detail
+`pm`, and each of those texts tells the PM to resume its normal work.
 
 Pushes (ctx.event, push.JOB_EACH: owed once per detail, each with its own text): crossing,
 would-cross, crossed, cross-cleared, cross-failed, stalled, no-ready, no-checkin, no-room, pm-limit,
@@ -85,12 +118,12 @@ unmanaged. A word goes out once per change, kept in the state file as `told`.
 State in <launcher.state_dir>/usage-crossover.json: {crossings: {key: {phase, phase_at, ...}},
 starts: {key: [epoch]}, asks: {key: [epoch]}, landed: {account: epoch of the last start there},
 told: {key: mark}, windows: {name: reset of the window already told}, readings: {account: text},
-cleared: {key: {account, reset}}}. The same file is the
+cleared: {key: {account, reset}}, weeks: {account: [[updated epoch, week %]] of the last
+BURN_SPAN_S}, pm_old: {name, pid, created} of the PM's old process}. The same file is the
 claim: coord-restart holds a key whose crossing moved phase less than CLAIM_TTL_S ago. A bad file
 is a failure, here and in coord-restart, never read as empty.
 
-usage-crossover.log, same folder: one line per reading change (the history a burn-rate trigger
-would need; none is built) and one per changed decision.
+usage-crossover.log, same folder: one line per reading change and one per changed decision.
 """
 import collections
 import datetime
@@ -106,7 +139,7 @@ from kitlib.hubjobs import coord_restart as C
 from kitlib.hubjobs import session_watch
 from kitlib.hubsite import jobs
 from kitlib.launcher import accounts as A
-from kitlib.launcher import handoff, lookup, pipes, state
+from kitlib.launcher import handoff, lookup, pipes, relaunch, state
 from kitlib.launcher import stop as lstop
 from kitlib.launcher.settings import LaunchError, NOTIFY, FULL
 
@@ -131,6 +164,13 @@ CAP_WINDOW_S = C.CAP_WINDOW_S
 STATE_FILE = 'usage-crossover.json'
 LOG = 'usage-crossover.log'
 WEEK_S = 7 * 24 * 3600
+PM_DOC = '_pm'                 # the PM's key in the state file (no sessions.json key starts with _)
+PM_DETAIL = 'pm'               # its push detail
+PM_FROM = 'pm'                 # the `from` of its hand-off records (push.PM_KEY)
+EARLY_FLOOR = 95               # % of the week: the PM's early trigger needs at least this
+LEAD_S = 20 * 60               # the PM crosses early when its week would reach 100% this soon
+BURN_SPAN_S = 2 * 3600         # the readings burn_eta reads
+BURN_MIN_S = 10 * 60           # fewer minutes of readings than this: no burn rate
 
 ASKED, READY, STARTING, STARTED, STOPPING, STALL_STOP = (
     'asked', 'ready', 'starting', 'started', 'stopping', 'stall-stop')
@@ -142,6 +182,8 @@ ACTS = (STOP_STALLED, STOP_OLD, FINISH, START, ASK, WOULD)
 READY_KINDS = ('handoff', 'restart')
 
 Live = collections.namedtuple('Live', 'name pid created')
+PmLive = collections.namedtuple('PmLive', 'name pid created account')
+Recorded = collections.namedtuple('Recorded', 'sid name account')     # coordinators.json's PM
 _C_NO = re.compile(r'^C-(\d+)\Z')
 
 
@@ -233,10 +275,11 @@ def cap_reached(key, starts, now):
     return None
 
 
-def pick_target(accounts, current, running, landed, now):
+def pick_target(accounts, current, running, landed, now, tier2=True):
     """(account, why) of the account to move a session to, or None. `accounts`: {account:
     AccountState}; `current`: the accounts to leave out; `running`: {account: live sessions};
-    `landed`: {account: epoch of the job's last start there}. Module docstring "The target"."""
+    `landed`: {account: epoch of the job's last start there}; `tier2` False: tier 1 only (the PM).
+    Module docstring "The target"."""
     rows = []
     for acct in sorted(accounts, key=int):
         st = accounts[acct]
@@ -257,9 +300,9 @@ def pick_target(accounts, current, running, landed, now):
     if tier1:
         pick = min(tier1, key=lambda r: r[3])
         return pick[0], 'under %d%%, its week resets first' % TARGET_LIMIT
-    tier2 = [r for r in rows if r[1] < TARGET_LIMIT and r[2] < TIER2_WEEK]
-    if tier2:
-        pick = min(tier2, key=lambda r: r[2])
+    second = [r for r in rows if r[1] < TARGET_LIMIT and r[2] < TIER2_WEEK] if tier2 else []
+    if second:
+        pick = min(second, key=lambda r: r[2])
         return pick[0], 'the lowest week under %d%%' % TIER2_WEEK
     return None
 
@@ -562,6 +605,203 @@ def _stall_stop(args, stalled, now):
     return _advance(READY, 'the stalled session has gone: start on its own note', stalled=True)
 
 
+def burn_eta(points, now):
+    """Seconds until a week reaches 100% at its current burn rate, or None: no rise, or under
+    BURN_MIN_S of readings. `points` [(epoch, week %)] of its readings; those of the last
+    BURN_SPAN_S since the last drop (a reset) count, the rate their first-to-last rise. Pure."""
+    pts = sorted((float(pt[0]), float(pt[1])) for pt in (points or [])
+                 if isinstance(pt, (list, tuple)) and len(pt) == 2 and _number(pt[0]) and _number(pt[1])
+                 and now - BURN_SPAN_S <= pt[0] <= now)
+    run = []
+    for t, pct in pts:
+        if run and pct < run[-1][1]:
+            run = []
+        run.append((t, pct))
+    if len(run) < 2:
+        return None
+    (t0, p0), (t1, p1) = run[0], run[-1]
+    if t1 - t0 < BURN_MIN_S or p1 <= p0:
+        return None
+    rate = (p1 - p0) / (t1 - t0)
+    return max(0.0, (100.0 - p1) / rate - (now - t1))
+
+
+def decide_pm(pms, crossing, stall, quiet_s, accounts, newest, starts, running, landed, mode, now,
+              note_at=None, cleared=None, asks=None, points=None, recorded=None, names=()):
+    """The PM's next step (module docstring "The PM"). `pms` [PmLive] of its launched processes;
+    `crossing` its open crossing or None; `newest` its newest hand-off record; `points` its
+    account's week readings (burn_eta); `recorded` coordinators.json's PM (Recorded); `names` the
+    names of the live launched sessions; the rest as decide. Reads nothing itself."""
+    if crossing:
+        d = _pm_phase(pms, crossing, stall, quiet_s, accounts, newest, starts, running, landed, mode,
+                      now, note_at, recorded, names)
+        if d.action == CLEAR and d.remember:
+            acct = str(crossing.get('account'))
+            st = accounts.get(acct)
+            reset = stall[1] if stall is not None and stall[1] > now else window(
+                st.usage if st is not None else None, 'seven_day', now)[1]
+            d.fields = {} if reset is None else {'account': acct, 'reset': reset}
+        return d
+    return _pm_trigger(pms, stall, quiet_s, accounts, starts, running, landed, mode, now, cleared,
+                       asks, points, recorded)
+
+
+def _pm_pick(acct, accounts, running, landed, now):
+    return pick_target(accounts, {str(acct)}, running, landed, now, tier2=False)
+
+
+def _recorded_sid(recorded):
+    """coordinators.json's pm_session_id when pm-crossover can use it (relaunch.recorded_pm), else None."""
+    sid = recorded.sid if recorded is not None else None
+    return sid if isinstance(sid, str) and sid and not sid.startswith('<') else None
+
+
+def _pm_trigger(pms, stall, quiet_s, accounts, starts, running, landed, mode, now, cleared, asks,
+                points, recorded=None):
+    if not pms:
+        return _hold('no launched PM session')
+    if len(pms) > 1:
+        return _hold('several PM processes: %s' % ', '.join(sorted(p.name for p in pms)))
+    stalled = is_stalled(stall, quiet_s, now)
+    acct = (stall[0] if stall and stall[0] else None) or pms[0].account
+    st = accounts.get(acct)
+    data = st.usage if st is not None else None
+    week, week_reset = window(data, 'seven_day', now)
+    fresh = week is not None and is_fresh(data, now)
+    eta = burn_eta(points, now) if fresh and week >= EARLY_FLOOR else None
+    high = fresh and week >= TRIGGER_WEEK
+    early = not high and eta is not None and eta < LEAD_S
+    if not stalled and not high and not early:
+        if week is not None and week >= TRIGGER_WEEK:
+            return _hold('account %s: %d%% of its week, a stale reading, no stall read' % (acct, week))
+        if stall is not None and stall[1] > now:
+            return _hold('a stall read, but active under %d s ago' % QUIET_S)
+        return _hold('under the trigger')
+    reset = stall[1] if stalled else week_reset
+    if reset - now < RESET_NEAR_S:
+        return _hold('the week resets within %d min' % (RESET_NEAR_S // 60))
+    if _recorded_sid(recorded) is None or recorded.account in (None, ''):
+        return _hold('coordinators.json records no PM session id or account: pm-crossover cannot move it',
+                     'pm-limit', PM_DETAIL)
+    if stalled and mode not in (FULL, NOTIFY):
+        return _hold('stalled, left to the owner (usage_crossover is not full)', 'stalled', PM_DETAIL)
+    if _cleared_now(cleared, acct, reset):
+        return _hold('its crossing cleared on account %s this week: not asked again before the '
+                     'week resets' % acct)
+    why = cap_reached(PM_DOC, starts, now)
+    if why:
+        return _hold(why, 'cross-failed', PM_DETAIL, 'cap')
+    pick = _pm_pick(acct, accounts, running, landed, now)
+    if pick is None:
+        return _no_room(PM_DETAIL)
+    target, reason = pick
+    how = ('stalled' if stalled else '%d%% of its week' % week if high
+           else '%d%% of its week, 100%% in %d min at its burn rate' % (week, eta // 60))
+    note = 'the PM: account %s %s: to account %s (%s)' % (acct, how, target, reason)
+    detail = '%s:a%s' % (PM_DETAIL, target)
+    if mode == NOTIFY:
+        return Decision(WOULD, note, target, 'would-cross', detail,
+                        'would-cross:%s:%s' % (target, 'stall' if stalled else 'week'))
+    if stalled:                 # full: it cannot reply to a checkpoint message, and nothing is stopped
+        return Decision(START, note, target, 'stalled', detail)
+    n = len(recent(asks, now))
+    if n >= ASK_CAP:
+        return _hold('%d asks in %d h for it already' % (n, CAP_WINDOW_S // 3600), 'cross-failed',
+                     PM_DETAIL, 'ask-cap')
+    return Decision(ASK, note, target, 'crossing', detail)
+
+
+def _pm_phase(pms, c, stall, quiet_s, accounts, newest, starts, running, landed, mode, now, note_at,
+              recorded, names):
+    phase = c.get('phase')
+    new = c.get('new_name')
+    rec = recorded or Recorded(None, None, None)
+    if (phase == STARTING and new and rec.name == new and str(rec.account) == str(c.get('target'))
+            and rec.sid != c.get('old_sid')):
+        return _gone('coordinators.json names %s on account %s: done' % (new, c.get('target')),
+                     'crossed', new)
+    if rec.sid != c.get('old_sid'):
+        return _gone('coordinators.json names another PM session: moved by someone else',
+                     detail=PM_DETAIL)
+    if mode == NOTIFY:
+        if phase in (ASKED, READY):
+            return _gone('usage_crossover is notify: crossing dropped', detail=PM_DETAIL)
+        return _hold('usage_crossover is notify: %s left as it is' % phase)
+    old = [p for p in pms if p.pid == c.get('old_pid') and p.created == c.get('old_created')]
+    stall_now = bool(old) and is_stalled(stall, quiet_s, now)
+    if phase == ASKED:
+        return _pm_asked(c, old, pms, stall_now, accounts, newest, mode, now)
+    if phase == READY:
+        return _pm_ready(c, old, pms, stall_now, accounts, starts, running, landed, mode, now, quiet_s,
+                         note_at, names)
+    if phase == STARTING:
+        if new and new in names:
+            return _gone('its successor %s is up but coordinators.json does not name it' % new,
+                         'cross-failed', PM_DETAIL, remember=True)
+        return _starting((PM_DETAIL, None, c, [], old, [], False), c, now)
+    return _gone('unknown state %r' % (phase,), 'cross-failed', PM_DETAIL, remember=True)
+
+
+def _pm_asked(c, old, pms, stall_now, accounts, newest, mode, now):
+    if not old:
+        return _gone('the PM session ended before its hand-off', detail=PM_DETAIL)
+    if len(pms) > 1:
+        return _hold('several PM processes')
+    rec = newer(newest, c.get('high_c'))
+    if rec is not None and rec.get('kind') == 'stop':
+        return _gone('it replied ready to stop: no crossing', detail=PM_DETAIL, remember=True)
+    if rec is not None and rec.get('kind') in READY_KINDS:
+        return _advance(READY, 'hand-off record %s' % rec.get('id'), state_path=rec.get('state_path'))
+    if stall_now and mode == FULL:
+        return _advance(READY, 'stalled before its hand-off: start on the hand-off file as it is',
+                        stalled=True)
+    if stall_now:
+        return _gone('stalled before its hand-off: left to the owner (usage_crossover is not full)',
+                     'stalled', PM_DETAIL)
+    st = accounts.get(str(c.get('account')))
+    week, _ = window(st.usage if st is not None else None, 'seven_day', now)
+    if week is not None and week < EARLY_FLOOR:
+        return _gone('the week reset: no crossing needed', detail=PM_DETAIL)
+    if not c.get('delivered'):
+        return Decision(ASK, 'the checkpoint message again: not delivered', c.get('target'))
+    if now - c.get('phase_at', now) >= WAIT_READY_S:
+        return _hold('no hand-off record in %d min' % (WAIT_READY_S // 60), 'no-ready', PM_DETAIL)
+    return _hold('waiting for its hand-off record')
+
+
+def _pm_ready(c, old, pms, stall_now, accounts, starts, running, landed, mode, now, quiet_s, note_at,
+              names):
+    if c.get('new_name') and c['new_name'] in names:
+        return _advance(STARTING, 'its successor is up')
+    if not old:
+        return _gone('the PM session ended before its successor started', detail=PM_DETAIL)
+    if len(pms) > 1:
+        return _hold('several PM processes')
+    st = accounts.get(str(c.get('account')))
+    week, _ = window(st.usage if st is not None else None, 'seven_day', now)
+    if week is not None and week < EARLY_FLOOR and not stall_now:
+        return _gone('the week reset: no crossing needed', detail=PM_DETAIL)
+    if not c.get('stalled'):
+        if stall_now and mode == FULL:
+            return _advance(READY, 'stalled: start on the hand-off file as it is', stalled=True)
+        if stall_now:
+            return _gone('stalled before its successor started: left to the owner '
+                         '(usage_crossover is not full)', 'stalled', PM_DETAIL)
+        wait = _settled(PM_DETAIL, c, quiet_s, note_at, now)
+        if wait is not None:
+            return wait
+    why = cap_reached(PM_DOC, starts, now)
+    if why:
+        return _gone(why, 'cross-failed', PM_DETAIL)
+    retry = c.get('retry_at')
+    if _number(retry) and now < retry:
+        return _hold('backoff after a failed start')
+    pick = _pm_pick(c.get('account'), accounts, running, landed, now)
+    if pick is None:            # the PM resumes; the trigger asks again once an account has room
+        return _gone('no account has room: the PM resumes', 'no-room', PM_DETAIL)
+    return Decision(START, 'to account %s (%s)' % pick, pick[0])
+
+
 def claims(settings, now):
     """The keys of the crossings whose last phase change is under CLAIM_TTL_S old. LaunchError for
     a bad file: read as empty it would drop the hold."""
@@ -574,6 +814,13 @@ def claims(settings, now):
     return out
 
 
+PM_CHECKPOINT = ("The hub's usage crossover: the PM's account is near its weekly limit, and the hub will start "
+                 'a fresh PM on account %s from your hand-off file (a conversation cannot move between '
+                 'accounts). Checkpoint now, as role pm "Hand-off" says: update HANDOFF.md in place, post it '
+                 'with hub_handoff_ready (kind handoff, from pm, state_path its absolute path), then send '
+                 'nothing more and start nothing. Once the new PM is confirmed you are told to stand down. '
+                 'If the hub drops the crossing instead (a cross-cleared, cross-failed, no-room or stalled '
+                 'push with detail pm), resume your normal work.')
 CHECKPOINT = ("The hub's usage crossover: this session's account has reached the weekly limit, and "
               'the hub will move you to account %s. Checkpoint and stand down now with skill '
               'session-handoff: write your state note, post it with hub_handoff_ready (kind '
@@ -583,6 +830,10 @@ CHECKPOINT = ("The hub's usage crossover: this session's account has reached the
 
 def checkpoint_text(key, target):
     return CHECKPOINT % (target, key)
+
+
+def pm_checkpoint_text(target):
+    return PM_CHECKPOINT % target
 
 
 def launch_argv(kit, verb, *args):
@@ -600,6 +851,12 @@ def stop_argv(kit, name, pid, successor=None, dry_run=False):
             + (['--successor', successor] if successor else [])
             + ['--pid', str(pid)]
             + (['--dry-run'] if dry_run else []))
+
+
+def pm_crossover_argv(kit, target, name, state_path=None, what_if=False):
+    return (launch_argv(kit, 'pm-crossover', '--account', target, '--name', name)
+            + (['--state', state_path] if state_path else [])
+            + (['--what-if'] if what_if else []))
 
 
 def make(sources):
@@ -655,9 +912,13 @@ class CrossoverJob(object):
         coordinators = state.read_coordinators(settings) or {}
         rows = [(lookup.rc_name(p.get('CommandLine')), p) for p in lookup.launched(self.procs())]
         lives = [Live(n, p.get('ProcessId'), p.get('Created')) for n, p in rows if n]
-        pm = {n for n, p in rows if n and _pm_row(n, p, coordinators)}
+        had_old = 'pm_old' in doc
+        pm_old = _old_pm(doc, lives)
+        pm = {n for n, p in rows if n and _pm_row(n, p, coordinators)} | ({pm_old.name} if pm_old else set())
+        pms = _pm_processes(rows, coordinators, pm_old)
         accounts = self._accounts(settings)
         run = _Run(self, ctx, settings, doc, now)
+        run.dirty = had_old and pm_old is None
         run.log_readings(accounts)
         stalls = self._stalls(settings, lives)
         olds = [c.get('old_name') for c in doc['crossings'].values() if isinstance(c, dict)]
@@ -676,6 +937,8 @@ class CrossoverJob(object):
 
         steps, known = [], set()
         for key in sorted(set(entries) | set(doc['crossings'])):
+            if key == PM_DOC:
+                continue
             entry = entries.get(key)
             stem = (entry or {}).get('stem')
             live = [l for l in lives if C.of_stem(l.name, stem)]
@@ -688,22 +951,37 @@ class CrossoverJob(object):
                 d = step(key, entry, live)
             run.settle(key, d)
             steps.append((key, entry, live, d))
-        self._others(run, lives, known, pm, stalls, accounts, coordinators)
+        run.names = {l.name for l in lives} | {e.get('name') for e in entries.values() if isinstance(e, dict)}
+        if pms or doc['crossings'].get(PM_DOC):
+
+            def pm_step():
+                c = doc['crossings'].get(PM_DOC)
+                name = (c or {}).get('old_name') or (pms[0].name if len(pms) == 1 else None)
+                acct = (c or {}).get('account') or (pms[0].account if pms else None)
+                return decide_pm(pms, c, stalls.get(name), quiet.get(name), accounts, newest.get(PM_FROM),
+                                 doc['starts'], running, doc['landed'], settings.usage_crossover, now,
+                                 note_at=_mtime((c or {}).get('state_path')), cleared=doc['cleared'].get(PM_DOC),
+                                 asks=doc['asks'].get(PM_DOC), points=doc['weeks'].get(str(acct)),
+                                 recorded=_recorded(coordinators), names={l.name for l in lives})
+            steps.append(run.pm_settle(pm_step, pm, pms))
+        self._others(run, lives, known, pm, accounts, coordinators, stalls)
         run.act(steps, newest, sessions, coordinators)
         return run.finish()
 
-    def _others(self, run, lives, known, pm, stalls, accounts, coordinators):
-        """The `pm-limit` and `unmanaged` pushes, once per week window."""
+    def _others(self, run, lives, known, pm, accounts, coordinators, stalls=None):
+        """The `unmanaged` pushes, and `pm-limit` for a PM that is not a launched process (the
+        desktop app; a launched one is moved, decide_pm), once per week window."""
         now = run.now
-        acct = coordinators.get('pm_account')
-        reset = _hot_reset(None if acct in (None, '') else str(acct), None, accounts, now)
+        stalls = stalls or {}
         for l in lives:
-            if l.name in pm:
-                reset = reset or _hot_reset(None, stalls.get(l.name), accounts, now)
-            elif l.name not in known:
+            if l.name not in pm and l.name not in known:
                 hot = _hot_reset(C.name_account(l.name), stalls.get(l.name), accounts, now)
                 if hot is not None:
                     run.once_a_window(l.name, hot, 'unmanaged', l.name)
+        if pm:
+            return
+        acct = coordinators.get('pm_account')
+        reset = _hot_reset(None if acct in (None, '') else str(acct), None, accounts, now)
         if reset is not None:
             run.once_a_window('pm', reset, 'pm-limit', 'pm')
 
@@ -712,9 +990,11 @@ class CrossoverJob(object):
         mark whose week has reset is dropped."""
         data = state.read_json(state.path(settings, STATE_FILE)) or {}
         for part in ('crossings', 'starts', 'landed', 'told', 'windows', 'readings', 'cleared',
-                     'asks'):
+                     'asks', 'weeks'):
             if not isinstance(data.get(part), dict):
                 data[part] = {}
+        if not isinstance(data.get('pm_old'), dict):
+            data.pop('pm_old', None)
         data['cleared'] = {k: v for k, v in data['cleared'].items()
                            if isinstance(v, dict) and _number(v.get('reset')) and v['reset'] > now}
         return data
@@ -784,6 +1064,39 @@ def _pm_row(name, row, coordinators):
                                             and pm_id in (row.get('CommandLine') or ''))
 
 
+def _recorded(coordinators):
+    return Recorded(coordinators.get('pm_session_id'), coordinators.get('pm_name'),
+                    coordinators.get('pm_account'))
+
+
+def _old_pm(doc, lives):
+    """The PM's old process after a crossover (doc pm_old) while it runs, else None; dropped from
+    the document once it has ended."""
+    old = doc.get('pm_old')
+    if not isinstance(old, dict):
+        return None
+    for l in lives:
+        if l.name == old.get('name') and l.pid == old.get('pid') and l.created == old.get('created'):
+            return l
+    doc.pop('pm_old', None)
+    return None
+
+
+def _pm_processes(rows, coordinators, pm_old=None):
+    """[PmLive] of the launched processes of coordinators.json's PM: the one named pm_name when it
+    is set, else _pm_row's; never the old process after a crossover."""
+    want = coordinators.get('pm_name')
+    acct = coordinators.get('pm_account')
+    out = []
+    for n, p in rows:
+        if not n or (pm_old is not None and p.get('ProcessId') == pm_old.pid and n == pm_old.name):
+            continue
+        if (n == want) if want else _pm_row(n, p, coordinators):
+            out.append(PmLive(n, p.get('ProcessId'), p.get('Created'),
+                              None if acct in (None, '') else str(acct)))
+    return out
+
+
 def _running(lives, coordinators):
     """{account: live sessions on it}: by each session's name, and the PM's account."""
     out = collections.Counter(a for a in (C.name_account(l.name) for l in lives) if a is not None)
@@ -815,6 +1128,7 @@ class _Run(object):
         self.notes = []
         self.acted = False
         self.dirty = False
+        self.names = set()              # the names a new PM may not take (the live and the entries')
 
     def save(self):
         state.write_json(state.path(self.settings, STATE_FILE), self.doc)
@@ -824,17 +1138,31 @@ class _Run(object):
         state.log(self.settings, LOG, line, datetime.datetime.fromtimestamp(self.now))
 
     def log_readings(self, accounts):
+        """Log each account's reading on a change, and keep its week history (burn_eta)."""
         for acct, st in sorted(accounts.items(), key=lambda t: int(t[0])):
             five, _ = window(st.usage, 'five_hour', self.now)
             week, reset = window(st.usage, 'seven_day', self.now)
             if week is None:
                 continue
+            self._history(acct, _epoch((st.usage or {}).get('updated_at')), week)
             text = 'five=%s week=%s' % ('?' if five is None else int(five), int(week))
             if self.doc['readings'].get(acct) != text:
                 self.doc['readings'][acct] = text
                 self.dirty = True
                 self.log('reading account %s %s updated=%s' % (acct, text,
                                                                (st.usage or {}).get('updated_at')))
+
+    def _history(self, acct, updated, week):
+        pts = [pt for pt in (self.doc['weeks'].get(acct) or [])
+               if isinstance(pt, list) and len(pt) == 2 and _number(pt[0]) and self.now - pt[0] <= BURN_SPAN_S]
+        if updated is not None and self.now - updated <= BURN_SPAN_S and (not pts or updated > pts[-1][0]):
+            pts.append([updated, week])
+        if pts != self.doc['weeks'].get(acct):
+            if pts:
+                self.doc['weeks'][acct] = pts
+            else:
+                self.doc['weeks'].pop(acct, None)
+            self.dirty = True
 
     def tell(self, key, d):
         """Push d.word once per change of its mark: told[key] keeps the last one."""
@@ -878,6 +1206,22 @@ class _Run(object):
         elif d.action == HOLD:
             self.tell(key, d)
 
+    def pm_settle(self, decide_now, pm, pms):
+        """The PM's step, decided again after a state change; `crossed` keeps its old process as
+        pm_old (and in `pm`, so this run pushes it nothing): its window stays until the owner closes
+        it."""
+        d = decide_now()
+        if d.action == ADVANCE:
+            self.advance(PM_DOC, d)
+            d = decide_now()
+        if d.action == CLEAR and d.word == 'crossed':
+            c = self.doc['crossings'][PM_DOC]
+            self.doc['pm_old'] = {'name': c.get('old_name'), 'pid': c.get('old_pid'),
+                                  'created': c.get('old_created')}
+            pm.add(c.get('old_name'))
+        self.settle(PM_DOC, d)
+        return PM_DOC, None, pms, d
+
     def act(self, steps, newest, sessions, coordinators):
         """The first step in ACTS order: this run's one acting step. A would-cross already told
         is no step: it would keep the others out."""
@@ -890,6 +1234,9 @@ class _Run(object):
             self.notes.append('%s: left for the next run (the hub is closing)' % key)
             return
         self.acted = True
+        if key == PM_DOC:
+            getattr(self, '_pm_' + d.action)(live, d, newest.get(PM_FROM), coordinators)
+            return
         step = getattr(self, '_' + d.action.replace('-', '_'))
         step(key, entry, live, d, newest.get(key), sessions, coordinators)
 
@@ -975,6 +1322,58 @@ class _Run(object):
             self.log('%s: would run %s: exit %s: %s' % (key, argv[2], code,
                                                         (lines or ['no output'])[-1]))
         self.tell(key, d)
+
+    def _pm_crossing(self, pm, target, high, phase, coordinators):
+        c = {'phase': phase, 'phase_at': self.now, 'asked_at': self.now, 'target': target,
+             'account': pm.account, 'old_name': pm.name, 'old_pid': pm.pid, 'old_created': pm.created,
+             'old_sid': coordinators.get('pm_session_id'), 'high_c': high, 'delivered': False}
+        self.doc['crossings'][PM_DOC] = c
+        return c
+
+    def _pm_ask(self, pms, d, newest, coordinators):
+        c = self.doc['crossings'].get(PM_DOC)
+        if c is None:
+            c = self._pm_crossing(pms[0], d.target, c_number(newest), ASKED, coordinators)
+            kept = {k: recent(v, self.now) for k, v in self.doc['asks'].items()}
+            self.doc['asks'] = {k: v for k, v in kept.items() if v}
+            self.doc['asks'].setdefault(PM_DOC, []).append(self.now)
+        self.save()
+        c['delivered'] = bool(self.job.deliver(PM_FROM, pm_checkpoint_text(d.target)))
+        self.dirty = True
+        if d.word:
+            self.tell(PM_DOC, d)
+        self.notes.insert(0, '%s: the PM asked to checkpoint for account %s' % (PM_DOC, d.target))
+
+    def _pm_start(self, pms, d, newest, coordinators):
+        """`launch.py pm-crossover`; a new crossing (a stall on full) starts here with no ask."""
+        c = self.doc['crossings'].get(PM_DOC)
+        if c is None:
+            c = self._pm_crossing(pms[0], d.target, c_number(newest), STARTING, coordinators)
+            c['stalled'] = True
+            if d.word:
+                self.tell(PM_DOC, d)
+        if not c.get('new_name') or c.get('target') != d.target:
+            c['new_name'] = relaunch.crossover_name(d.target, self.names)
+        c.update(phase=STARTING, phase_at=self.now, target=d.target, high_c=c_number(newest))
+        kept = {k: recent(v, self.now) for k, v in self.doc['starts'].items()}
+        self.doc['starts'] = {k: v for k, v in kept.items() if v}
+        self.doc['starts'].setdefault(PM_DOC, []).append(self.now)
+        self.doc['landed'][d.target] = self.now
+        self.save()                     # before the child: a crash mid-start still counts
+        path = None if c.get('stalled') else c.get('state_path')
+        self.notes.insert(0, '%s: starting the PM %s on account %s' % (PM_DOC, c['new_name'], d.target))
+        self._child(pm_crossover_argv(self.job.kit, d.target, c['new_name'], path))
+
+    def _pm_would(self, pms, d, newest, coordinators):
+        """A dry run on a change: nothing starts."""
+        argv = pm_crossover_argv(self.job.kit, d.target, relaunch.crossover_name(d.target, set(self.names)),
+                                 what_if=True)
+        try:
+            code, lines = self.job.child(argv, self.job.kit)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            code, lines = -1, [type(e).__name__]
+        self.log('%s: would run %s: exit %s: %s' % (PM_DOC, argv[2], code, (lines or ['no output'])[-1]))
+        self.tell(PM_DOC, d)
 
     def _child(self, argv):
         what = ' '.join(argv[2:])

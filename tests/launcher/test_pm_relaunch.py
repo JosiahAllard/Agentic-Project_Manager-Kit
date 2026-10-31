@@ -1,6 +1,6 @@
-"""launch.py pm-relaunch (kitlib/launcher/relaunch.py, docs/launcher.md "PM relaunch"): the fork's
-exact command line and environment, coordinators.json's update, the stand-down sent to the old PM,
-and every refusal. No window opens and no claude starts: FakeHost records the window's script."""
+"""launch.py pm-relaunch and pm-crossover (kitlib/launcher/relaunch.py, docs/launcher.md "PM relaunch",
+"PM crossover"): the new session's exact command line and environment, coordinators.json's update,
+the stand-down sent to the old PM, and every refusal. No window opens and no claude starts: FakeHost records the window's script."""
 import json
 import os
 import unittest
@@ -283,6 +283,129 @@ class AfterTheRelaunch(Base):
         self.assertEqual(got['pm_session_id'], FORK)
 
 
+class Crossover(Base):
+    """launch.py pm-crossover (relaunch.crossover): a fresh PM on another account."""
+
+    def setUp(self):
+        self.h = Home(self, accounts=('1', '2', '3'), signed_out=('3',), repos=('alpha', 'pm'))
+        self.folder = self.h.repos['pm']
+        self.coords = {'alpha': 1, 'pm_session_id': OLD, 'pm_folder': self.folder, 'pm_account': 2}
+        self.h.write_state('coordinators.json', dict(self.coords))
+        self.h.write_state('sessions.json', {'alpha': {'repo': 'alpha', 'agent': True, 'stem': 'alpha-coord',
+                                                        'account': 1, 'name': 'alpha-coord-a1'}})
+        self.reg = os.path.join(self.h.root, '.claude', pipes.REGISTRY)
+        os.makedirs(self.reg)
+        self.handoff = os.path.join(self.folder, 'HANDOFF.md')
+        with open(self.handoff, 'w') as f:
+            f.write('hand-off')
+
+    def run_it(self, host=None, delivery=None, account='1', name=NEW, **kw):
+        self.host = host or ForkHost(self.h.root, procs=[self.pm_process()], env={'AGENT_TEMP': r'C:\agent-temp'})
+        self.delivery = delivery if delivery is not None else Delivery()
+        return relaunch.crossover(self.h.settings, self.host, account, name, delivery=self.delivery, **kw)
+
+    def test_the_window_runs_a_fresh_pm_with_no_permission_mode_on_the_target_account(self):
+        out = self.run_it(state_path=self.handoff)
+        self.assertEqual(len(self.host.opened), 1, out)
+        text = self.host.opened[0]
+        prompt = relaunch.crossover_prompt(NEW, '1', self.coords_path(), self.handoff)
+        cmd = "claude --agent pm-kit:pm --remote-control '%s' -n '%s' %s" % (NEW, NEW, window.q(prompt))
+        self.assertTrue(text.endswith('; ' + cmd), text)
+        self.assertNotIn('--resume', text)
+        self.assertNotIn('--permission-mode', text)
+        self.assertEqual(role_of(text), 'pm')
+        self.assertIn("$env:CLAUDE_CONFIG_DIR = '%s'" % self.h.accounts['1'][0], text)
+        self.assertIn("Set-Location '%s'" % self.folder, text)
+        self.assertIn(self.handoff, prompt)
+        self.assertIn('only once %s has pm_session_id equal to your own session id' % self.coords_path(), prompt)
+        self.assertIn('ask the owner', prompt)
+
+    def test_coordinators_json_names_the_new_pm_on_its_account_and_keeps_every_other_key(self):
+        out = self.run_it()
+        self.assertEqual(self.h.read_state('coordinators.json'),
+                         dict(self.coords, pm_session_id=FORK, pm_name=NEW, pm_account=1))
+        self.assertIn('coordinators.json: pm_session_id %s -> %s, pm_name %s, pm_account 2 -> 1' % (OLD, FORK, NEW),
+                      out)
+        self.assertEqual(out[-1], relaunch.OWNER_STEP % NEW)
+
+    def test_the_old_pm_is_told_to_stand_down_before_coordinators_json_moves(self):
+        seen = []
+
+        class Watch(Delivery):
+            def deliver(inner, recipient, text):
+                seen.append(self.h.read_state('coordinators.json')['pm_session_id'])
+                return Delivery.deliver(inner, recipient, text)
+
+        out = self.run_it(delivery=Watch())
+        self.assertEqual(self.delivery.calls, [(push.PM_KEY, relaunch.CROSS_STAND_DOWN % (NEW, FORK, '1'))])
+        self.assertEqual(seen, [OLD])
+        self.assertIn('Told the old PM (pm-session, session %s) to stand down.' % OLD, out)
+        self.assertEqual(self.host.killed, [])
+
+    def test_an_unconfirmed_start_exits_1_and_changes_nothing(self):
+        host = ForkHost(self.h.root, said=pipes.NOT_YET, procs=[self.pm_process()])
+        with self.assertRaises(LaunchError) as c:
+            self.run_it(host=host, wait_s=4)
+        self.assertIn('the new PM was not confirmed', str(c.exception))
+        self.assertTrue(c.exception.lines[0].startswith('Started %s' % NEW), c.exception.lines)
+        self.assertEqual(len(host.opened), 1)
+        self.assertEqual(self.delivery.calls, [])
+        self.assertEqual(self.h.read_state('coordinators.json'), self.coords)
+
+    def test_a_failing_coordinators_write_exits_1_with_the_manual_step(self):
+        from unittest import mock
+        with mock.patch.object(relaunch, 'WRITE_WAIT', 0), \
+                mock.patch('os.replace', side_effect=PermissionError(13, 'in use')):
+            with self.assertRaises(LaunchError) as c:
+                self.run_it()
+        self.assertIn('set pm_session_id to %s, pm_name to %s and pm_account to 1' % (FORK, NEW), str(c.exception))
+        self.assertEqual(self.h.read_state('coordinators.json'), self.coords)
+
+    def test_what_if_opens_nothing_and_writes_nothing(self):
+        out = self.run_it(name=None, what_if=True)
+        self.assertEqual((self.host.opened, self.delivery.calls), ([], []))
+        self.assertIn('Would start pm-a1, a fresh PM on account 1', out[0])
+        self.assertNotIn('--permission-mode', out[0])
+        self.assertEqual(self.h.read_state('coordinators.json'), self.coords)
+
+    def test_the_default_name_is_pm_a_n_and_steps_past_a_taken_one(self):
+        self.assertEqual(relaunch.crossover_name('1', set()), 'pm-a1')
+        self.assertEqual(relaunch.crossover_name('1', {'pm-a1', 'pm-a1-2'}), 'pm-a1-3')
+        host = ForkHost(self.h.root, procs=[self.pm_process(), session(72, 'pm-a1')])
+        out = self.run_it(host=host, name=None, what_if=True)
+        self.assertIn('Would start pm-a1-2', out[0])
+
+    def refused(self, said, account='1', name=NEW, **kw):
+        host = ForkHost(self.h.root, procs=[self.pm_process()])
+        delivery = Delivery()
+        with self.assertRaises(LaunchError) as c:
+            relaunch.crossover(self.h.settings, host, account, name, delivery=delivery, **kw)
+        self.assertIn(said, str(c.exception))
+        self.assertEqual((host.opened, delivery.calls), ([], []))
+        self.assertEqual(self.h.read_state('coordinators.json'), self.coords)
+
+    def test_refusals(self):
+        self.refused('the PM is already on account 2', account='2')
+        self.refused('Account 3 is not signed in', account='3')
+        self.refused('--state', state_path=os.path.join(self.folder, 'none.md'))
+        self.refused("--name 'pm-session' is a PM name", name='pm-session')
+        self.refused("sessions.json entry 'alpha' has that name", name='alpha-coord-a1')
+        self.h.write_state('coordinators.json', dict(self.coords, pm_session_id='<PM session id>'))
+        self.coords = self.h.read_state('coordinators.json')
+        self.refused('names no running PM')
+
+    def test_the_recorded_pm_not_running(self):
+        host = ForkHost(self.h.root, procs=[session(71, 'alpha-coord-a1')])
+        with self.assertRaises(LaunchError) as c:
+            relaunch.crossover(self.h.settings, host, '1', NEW)
+        self.assertIn('is not running', str(c.exception))
+        self.assertEqual(host.opened, [])
+
+    def test_relaunch_still_writes_only_its_two_keys(self):
+        self.assertIsNone(relaunch.record_pm(self.h.settings, FakeHost(self.h.root), FORK, NEW))
+        self.assertEqual(self.h.read_state('coordinators.json'), dict(self.coords, pm_session_id=FORK, pm_name=NEW))
+
+
 class Cli(unittest.TestCase):
     def test_the_parser_takes_pm_relaunch_name(self):
         from tools import launch
@@ -306,6 +429,31 @@ class Cli(unittest.TestCase):
         with mock.patch.dict(sys.modules, {'_host': fake(RuntimeError('broken'))}):
             with self.assertRaises(RuntimeError):
                 launch.push_delivery(None)
+
+
+    def test_the_parser_takes_pm_crossover(self):
+        from tools import launch
+        a = launch.parser().parse_args(['pm-crossover', '--account', '1'])
+        self.assertEqual((a.cmd, a.account, a.name, a.state, a.wait, a.what_if),
+                         ('pm-crossover', '1', None, None, relaunch.WAIT_S, False))
+        import io as _io
+        from unittest import mock
+        for argv in (['pm-crossover'], ['pm-crossover', '--account', '1', '--state', r'Z:\no\such\file.md']):
+            with mock.patch('sys.stderr', _io.StringIO()), self.assertRaises(SystemExit) as c:
+                launch.parser().parse_args(argv)
+            self.assertEqual(c.exception.code, launch.USAGE, argv)
+
+    def test_pm_crossover_exits_1_on_a_refusal(self):
+        import io as _io
+        from unittest import mock
+        from tools import launch
+        h = Home(self, repos=('alpha', 'pm'))
+        h.write_state('coordinators.json', {'pm_session_id': OLD, 'pm_folder': h.repos['pm'], 'pm_account': 2})
+        with mock.patch('sys.stderr', _io.StringIO()) as err, mock.patch.object(launch.S, 'load',
+                                                                               lambda home=None: h.settings):
+            code = launch.main(['pm-crossover', '--account', '2'], host=FakeHost(h.root))
+        self.assertEqual(code, 1)
+        self.assertIn('the PM is already on account 2', err.getvalue())
 
 
 if __name__ == '__main__':

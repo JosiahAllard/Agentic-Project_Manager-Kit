@@ -70,7 +70,7 @@ hosts.json             {"claude": {...}, "codex": {...}}
 hosts/claude/adapter/  Python adapter
 hosts/claude/shell/    hooks/hooks.json, agents/ (rendered)
 hosts/codex/adapter/
-hosts/codex/shell/     plugin.json, mcp.json, hooks/hooks.json, agents/ and skills/ (rendered)
+hosts/codex/shell/     plugin.json, mcp.json, agents/ (rendered); hooks-plugin/ (pm-kit-hooks, fixed bytes)
 optional/bridge/       bridge core, service, frontend; hosts' bridge halves under
                        optional/bridge/hosts/<name>/
 kit.json               the one version and release identity (§2.5)

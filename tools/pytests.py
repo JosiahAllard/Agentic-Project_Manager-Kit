@@ -13,8 +13,8 @@ untracked files, B = --base, default docs/gate.md "Default base": <remote>/<main
 resolves, else the main branch, a line saying when the local one differs; or the --changed
 list) go through kitlib.tooldeps' selection (its `always_run` included); prints `pytests: <why>` and
 `pytests: <names>`, then runs them (--plan: stops there). When git cannot say what changed it
-REFUSES and no test runs. --merged (a landing's merged-tree gate, a step's merged_args) makes
---select run every module when a tools file changed; with --all it changes nothing. The log, units, kill and shield: kitlib/pytests/runner.py.
+REFUSES and no test runs. --merged (a landing's merged-tree gate, a step's merged_args) adds the
+"tool_tests" whole_tree classes to a --select that a tools file changed; with --all it changes nothing. The log, units, kill and shield: kitlib/pytests/runner.py.
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.pytests, prints and exits.
 Exit codes: 0 every unit passed (or nothing selected, or --plan), 1 a unit failed or timed out,

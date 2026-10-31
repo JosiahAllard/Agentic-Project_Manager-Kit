@@ -142,7 +142,10 @@ The package exports `ADAPTER`, a `kitlib.host.HostAdapter`:
   and calls `kitlib.host.hookmain.dispatch`: the guard through `hookmain.run` for the tool event,
   which fails closed (any error becomes the host's deny), and `ADAPTER.context` for a start event.
   When the kit will not boot, a tool call exits 2 (a block on every host so far) and a start event
-  says so in plain text. The fake host's `plugin.json` runs it this way.
+  says so in plain text. The fake host's `plugin.json` runs it this way. One exception: a host
+  whose hook trust covers the plugin's every byte (Codex) registers its hooks in a second,
+  fixed-bytes plugin whose stub runs `boot/hook.py` of the installed kit (docs/plugin-source.md
+  "Codex hooks plugin"), so a new kit version asks no new trust.
 - The rendered files. Run `python tools/render_content.py --write` and commit what it writes.
   `--check` fails on drift. Never edit them by hand.
 

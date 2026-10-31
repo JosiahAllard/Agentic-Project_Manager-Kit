@@ -115,7 +115,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   and you judge only your context (Usage is not yours, below). Your context cannot carry the
   session on -> skill session-handoff, then SendMessage the PM `ready to restart: <state note
   path>`; the PM starts your successor and stops you once it has checked in. An account reason
-  comes to you as the PM's "checkpoint and hand off", answered `ready to hand off: <state note
+  comes to you as the PM's "checkpoint and stand down", answered `ready to hand off: <state note
   path>` (skill session-handoff). Start nothing new and queue no landing after you send either:
   your successor queues every LAND verdict in the note at once, and never waits for workers'
   reports.
@@ -151,7 +151,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   pushes is delegated. Doc-writing rules: skill `specialty-docs`.
 - **Usage is not yours.** The PM alone watches it: read none, run no watcher, never hold, slow
   or size work by it. When the PM says stop new strongest-model work, stop new work, or
-  checkpoint and hand off, do it at once and nothing more.
+  checkpoint and stand down, do it at once and nothing more.
 - **Exclusive windows.** When the PM declares one, pause every gate, build, heavy test and
   landing, locked or not, until the PM or the window's owner says it is closed; plans, reviews
   and docs-only records continue.

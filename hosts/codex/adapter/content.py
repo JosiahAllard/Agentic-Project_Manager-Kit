@@ -11,15 +11,17 @@ role, else the role's `sandbox`: sandbox_mode) and
 string. Codex agent files carry no tool list, so `capabilities` and `cache` are not rendered; the
 sandbox is what limits a role. Lines end as the role file's do. The skills are not copied: the plugin
 root is the whole export, and plugin.json names the kit's own `content/skills/`. `retired()` names
-the folders the old plugin copy needed (`hosts/codex/shell/skills`, `hosts/codex/shell/boot`), so
-any file left there is stale.
+the folders the renderer no longer writes (`hosts/codex/shell/skills` and `hosts/codex/shell/boot`,
+the old plugin copy's; `hosts/codex/shell/hooks`, the hooks before they moved to the hooks plugin),
+so any file left there is stale.
 
 manifests(kit, content) writes the plugin's files, each JSON with indent 2 and a final newline:
 - `hosts/codex/shell/plugin.json`: Codex's plugin manifest, which the plugin export
   (kitlib.pluginsource.export) writes, version stamped, at `.codex-plugin/plugin.json` of the
   export folder: the plugin root is the whole export, as the default host's is. kit.json's name and version,
-  the skills (PLUGIN_SKILLS_REL, the kit's own `content/skills/`), the hooks file (HOOKS_REL) and the MCP
-  servers file (MCP_REL), each a path from that root (docs/plugin-source.md "Codex").
+  the skills (PLUGIN_SKILLS_REL, the kit's own `content/skills/`) and the MCP servers file (MCP_REL),
+  each a path from that root (docs/plugin-source.md "Codex"). No hooks: Codex asks the owner to trust
+  a plugin's hooks again whenever any byte of that plugin changes, so they are a second plugin's.
 - `hosts/codex/shell/mcp.json`: the machine-lock MCP server, read-only on Codex
   (hosts/codex/shell/mcp/lock_server.py, hosts.codex.adapter.lock), and the hub MCP server
   (hosts/codex/shell/mcp/hub_server.py, docs/hub-mcp.md), nested under mcpServers, each run with
@@ -28,15 +30,17 @@ manifests(kit, content) writes the plugin's files, each JSON with indent 2 and a
   platform hosts.json gives Codex gets the same servers with that platform's MCP interpreter
   (mcp_servers) in mcp_rel(platform), `mcp.<platform>.json`, which the plugin export writes in its
   place.
-- `hosts/codex/shell/hooks/hooks.json`: every hosts.json hook event, each running the kit's one
-  hook entry, boot/hook.py, as ${PLUGIN_ROOT}/boot/hook.py (the plugin root: the export) with `codex` and the
-  event's name. Codex reads a hook's command as one string, so it is
-  kitlib.host.hookmain.manifest_command's command line joined, the script quoted (command_text).
-  Each other platform hosts.json gives Codex gets the same hooks with that platform's command
-  line, as a POSIX shell line, in hooks_rel(platform), `hooks/hooks.<platform>.json`; plugin.json
-  names hooks.json alone, and the plugin export (kitlib.pluginsource) writes the platform's file
-  in its place.
 The JSON files carry no generated-file line: JSON holds no comment.
+
+hooks(registry_path, platform) is not rendered: it is what the hooks plugin's hand-written
+HOOKS_REL (and hooks_rel(platform) for each other platform) must hold, byte for byte once dumped
+(tests/pluginsource/test_codex_hooks.py). The hooks plugin, HOOKS_PLUGIN_REL, is a fixed folder
+whose bytes never change with the kit (docs/plugin-source.md "Codex hooks plugin"): every hosts.json
+hook event, each running its STUB_ENTRY as ${PLUGIN_ROOT}/pm_kit_hook.py (the plugin root: its cache
+folder) with `codex` and the event's name; the stub runs boot/hook.py of the installed pm-kit.
+Codex reads a hook's command as one string, so it is kitlib.host.hookmain.manifest_command's
+command line joined, the script quoted (command_text); elsewhere than Windows, a POSIX shell line,
+which the plugin export (kitlib.pluginsource) writes in hooks.json's place.
 """
 import json
 import re
@@ -50,18 +54,23 @@ from kitlib.host.content import ContentError, banner, role_source, substitute
 HOST = 'codex'
 SHELL_REL = 'hosts/codex/shell'
 AGENTS_REL = SHELL_REL + '/agents'
-# Folders the old plugin copy (pm-kit-local) needed and the renderer no longer writes.
-RETIRED = (SHELL_REL + '/skills', SHELL_REL + '/boot')
+# Folders the renderer no longer writes: the old plugin copy's (pm-kit-local), and the hooks the
+# pm-kit plugin carried before the hooks plugin.
+RETIRED = (SHELL_REL + '/skills', SHELL_REL + '/boot', SHELL_REL + '/hooks')
 MANIFEST_REL = SHELL_REL + '/plugin.json'
 MCP_REL = SHELL_REL + '/mcp.json'
-HOOKS_REL = SHELL_REL + '/hooks/hooks.json'
-ENTRY = 'boot/hook.py'
+# The hooks plugin pm-kit-hooks: hand-written, fixed bytes (docs/plugin-source.md "Codex hooks plugin").
+HOOKS_PLUGIN_REL = SHELL_REL + '/hooks-plugin'
+HOOKS_REL = HOOKS_PLUGIN_REL + '/hooks/hooks.json'
+STUB_ENTRY = 'pm_kit_hook.py'
+ENTRY = 'boot/hook.py'               # the kit's one hook entry, which STUB_ENTRY runs from pm-kit's cache folder
 PLUGIN_ROOT = '${PLUGIN_ROOT}'
 # The plugin's skills: the kit's content folder itself, as for the default host (Codex loads them from the
 # plugin root, the export; docs/plugin-source.md "Codex").
 PLUGIN_SKILLS_REL = 'content/skills'
-DESCRIPTION = ('The PM kit as a Codex plugin (ARCHITECTURE.md, Packaging; hosts/codex/README.md): its hooks, '
-               'skills, the read-only machine lock MCP server and the hub MCP server. Rendered from kit.json and content/ by '
+DESCRIPTION = ('The PM kit as a Codex plugin (ARCHITECTURE.md, Packaging; hosts/codex/README.md): its '
+               'skills, the read-only machine lock MCP server and the hub MCP server; its hooks are the '
+               'pm-kit-hooks plugin. Rendered from kit.json and content/ by '
                'tools/render_content.py; never edit it by hand.')
 # (event, matcher, status message or None). Every event in hosts.json's capabilities, no other.
 HOOKS = (
@@ -290,7 +299,7 @@ class CodexContent:
             raise ContentError('%s: HOOKS must cover exactly the hook events hosts.json declares' % HOOKS_REL)
         events = {}
         for event, matcher, status in HOOKS:
-            command = hookmain.manifest_command('%s/%s' % (PLUGIN_ROOT, ENTRY), platform, HOST, event,
+            command = hookmain.manifest_command('%s/%s' % (PLUGIN_ROOT, STUB_ENTRY), platform, HOST, event,
                                                 blocking=event == entry.hook.tool_event)
             hook = {'type': 'command', 'command': self.command_text(command, platform), 'timeout': HOOK_TIMEOUT}
             if status:
@@ -299,16 +308,19 @@ class CodexContent:
         return {'hooks': events}
 
     def manifests(self, kit, content, registry_path=None):
-        """{path: bytes} of plugin.json, and mcp.json and hooks.json once for each platform
-        hosts.json gives Codex, for `kit` ({"name", "version"})."""
+        """{path: bytes} of plugin.json, and mcp.json once for each platform hosts.json gives
+        Codex, for `kit` ({"name", "version"}). No hooks file: the hooks plugin's are hand-written."""
         plugin = {'name': kit['name'], 'version': kit['version'], 'description': DESCRIPTION,
-                  'skills': './%s/' % PLUGIN_SKILLS_REL, 'hooks': './' + HOOKS_REL, 'mcpServers': './' + MCP_REL}
-        dump = lambda data: (json.dumps(data, indent=2) + '\n').encode('utf-8')     # noqa: E731
+                  'skills': './%s/' % PLUGIN_SKILLS_REL, 'mcpServers': './' + MCP_REL}
         out = {MANIFEST_REL: dump(plugin)}
         for platform in registry.host(HOST, registry_path).platforms:
             out[mcp_rel(platform)] = dump({'mcpServers': mcp_servers(platform)})
-            out[hooks_rel(platform)] = dump(self.hooks(registry_path, platform))
         return out
+
+
+def dump(data):
+    """`data` as a manifest's bytes: JSON with indent 2 and a final newline."""
+    return (json.dumps(data, indent=2) + '\n').encode('utf-8')
 
 
 def mcp_rel(platform):
@@ -318,8 +330,9 @@ def mcp_rel(platform):
 
 
 def hooks_rel(platform):
-    """The hooks file for `platform`: HOOKS_REL on Windows, the one plugin.json names; beside it
-    `hooks.<platform>.json` elsewhere, which kitlib.pluginsource.export writes in its place."""
+    """The hooks plugin's hooks file for `platform`: HOOKS_REL on Windows, the one its plugin.json
+    names; beside it `hooks.<platform>.json` elsewhere, which kitlib.pluginsource.export writes in
+    its place."""
     return HOOKS_REL if platform == 'windows' else HOOKS_REL[:-len('.json')] + '.%s.json' % platform
 
 
