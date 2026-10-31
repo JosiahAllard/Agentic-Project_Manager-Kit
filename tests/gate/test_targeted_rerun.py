@@ -9,10 +9,12 @@ import json
 import os
 import re
 import unittest
+from unittest import mock
 
 from kitlib import gate as G
 from kitlib.backlog import plan as pmod
 from kitlib.gate import rerun, runner
+from kitlib.lock import run as lockrun
 from kitlib.records import gate_ok
 from tests.gate import fixtures, test_land
 
@@ -331,6 +333,50 @@ class RedRun(RerunCase):
         self.assertEqual(out.code, G.REFUSED, out.lines)
         self.assertIn('no red gate.py --full run', out.lines[0])
         self.assertEqual(self.book_calls, [])
+
+
+class Stopped(RerunCase):
+    def ask_stop(self):
+        for d in self.store.live_runs():
+            lockrun.request_stop(self.store, d['id'], 'test')
+
+    def test_a_stop_before_the_first_class_starts_none(self):
+        wt, _ = self.work('once')
+        self.red(wt)
+        real, started = rerun._control_tree, []
+
+        def control(*args):
+            self.ask_stop()
+            return real(*args)
+        with mock.patch.object(rerun, '_control_tree', control), \
+                mock.patch.object(rerun, '_start', lambda *args: started.append(args)):
+            out = self.rerun(wt)
+        self.assertEqual(out.code, G.STOPPED, out.lines + out.said)
+        self.assertEqual(started, [])
+
+    def test_a_stopped_rerun_runs_nothing_more_and_the_red_run_keeps_its_rerun(self):
+        wt, tip = self.work('once')
+        self.red(wt)
+        real, real_steps, started, ran = rerun._start, runner.run_steps, [], []
+
+        def start(launcher, argv, cwd, env, log):
+            started.append(log)
+            self.ask_stop()
+            return real(launcher, argv, cwd, env, log)
+
+        def run_steps(*args, **kw):
+            ran.extend(real_steps(*args, **kw))
+            return list(ran)
+        with mock.patch.object(rerun, '_start', start), \
+                mock.patch.object(runner, 'run_steps', run_steps):
+            out = self.rerun(wt)
+        self.assertEqual(out.code, G.STOPPED, out.lines + out.said)
+        self.assertTrue(out.lines[0].startswith('STOPPED: '), out.lines)
+        self.assertEqual(len(started), 1, started)      # the tip's class, no control
+        self.assertEqual(ran, [])                       # and not the step it never reached
+        self.assertEqual(self.loaded(tip)[1], [])       # no rerun record
+        out = self.rerun(wt)
+        self.assertEqual(out.code, G.OK, out.lines + out.said)
 
 
 class Flake(RerunCase):
