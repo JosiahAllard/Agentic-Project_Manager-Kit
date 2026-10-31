@@ -280,6 +280,9 @@ class _Slot(object):
     def release(self, code, why):
         pass
 
+    def stop_asked(self):
+        return False            # no lock, so nothing can ask
+
     def stop_daemons(self):
         pass
 
