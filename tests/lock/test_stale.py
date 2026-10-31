@@ -212,6 +212,7 @@ class Races(Base):
         self.assertEqual(self.notices(), [])
 
     def test_a_stray_stop_is_pruned(self):
+        os.makedirs(self.store.path("active"), exist_ok=True)
         with open(self.store.path("active", RID + ".stop"), "w", encoding="utf-8") as f:
             json.dump({"by": stale.BY}, f)
         self.store.live_runs(prune=True)
@@ -299,8 +300,10 @@ class Shown(Base):
         self.assertEqual(sorted(os.listdir(self.store.path("active"))), before)
         self.assertIsNone(self.stop_of())
         self.assertEqual(self.notices(), [])
-        text = st.render(snap)
-        self.assertIn("stale: run %s" % RID, text)
+        lines = [x for x in st.render(snap) if x.startswith("stale: ")]
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("stale: run %s (kit/t, engine-test): its booking session has ended" % RID,
+                      lines[0])
 
 
 class EndToEnd(Base):

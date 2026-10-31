@@ -175,6 +175,11 @@ def render(snap):
             out.append("resource %s: held by %s/%s (run %s%s)" % (
                 r["resource"], r["repo"], r["slug"], r["id"],
                 ", priority %s" % r["priority"] if r.get("priority") else ""))
+    for r in snap["runs"]:
+        if r.get("stale"):
+            out.append("stale: run %s (%s/%s, %s): %s; the next booking's look asks it to stop "
+                       "(docs/lock-api.md \"Stale runs\")" % (
+                           r["id"], r["repo"], r["slug"], r["kind"], r["stale"]))
     for w in snap["queue"]["entries"] or []:
         if w.get("position"):
             plan = "queue position %s, expected to start %s%s" % (

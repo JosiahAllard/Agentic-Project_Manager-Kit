@@ -848,7 +848,10 @@ lock`), kind (`lock-window`), run and phase. The lock writes each as a file in t
 stored in the hub. The server lists them (`GET /api/v1/notices`, `kitlib.hubsite.derived.notices`) and the
 PM watcher prints `LOCKNOTICE <id> <title>` for each new one. The page shows them under Info, Lock notices
 (`#notices`), from the snapshot's `views.notices`: newest first, the latest 100, read only. The tab's count
-is the runs with a start notice and no end notice yet, marked while any is open.
+is the runs with a start notice and no end notice yet, marked while any is open. A run the lock asks to stop
+because it is stale (docs/lock-api.md "Stale runs") also gets `L-<run id>-stale` (phase `stale`, file
+`<run id>-stale.json`), whatever its kind, whenever the folder is set; it is listed and printed like the
+others and does not change the count.
 
 ## to_pm/P-NNN
 The owner's questions and FYIs to the PM. Inbox is PM -> owner and To PM is owner -> PM; replies to To PM

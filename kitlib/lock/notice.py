@@ -18,6 +18,10 @@ A notice that cannot be written is said and never fails the run. A start notice 
 stays: its end notice follows from the wrapper even when the run's record on disk cannot be
 updated. A background run (it yields to others) writes none, and a wrapper killed outright writes
 no end notice: its slots free when the next look finds it gone.
+
+A run the lock itself asks to stop because it is stale (kitlib.lock.stale) gets a third notice,
+<run id>-stale.json (phase "stale"), whenever the folder is set, whatever its kind: the owner hears
+that the lock ended a run nobody had stopped. Its end notice follows only when it wrote a start one.
 """
 import os
 
@@ -87,6 +91,14 @@ def end_doc(rec):
             "at": iso(), "repo": rec["repo"], "from": FROM, "kind": KIND}
 
 
+def stale_doc(rec, why):
+    return {"id": "L-%s-stale" % rec["id"], "phase": "stale", "run": rec["id"],
+            "title": "Lock ended a stale run: %s/%s (%s)" % (rec["repo"], rec["slug"], rec["kind"]),
+            "text": "Run %s: %s. The lock asked it to stop; its wrapper ends its process tree and "
+                    "its slots free when it ends." % (rec["id"], why),
+            "at": iso(), "repo": rec["repo"], "from": FROM, "kind": KIND}
+
+
 def _path(d, doc):
     return os.path.join(d, "%s-%s.json" % (doc["run"], doc["phase"]))
 
@@ -129,3 +141,14 @@ def ended(store, rec):
             _write(store, rec["notice"], end_doc(rec))
     except Exception as e:
         store.say("WARNING: run %s: no lock-window end notice: %s" % ((rec or {}).get("id"), e))
+
+
+def stale(store, rec, why):
+    """When the lock asked stale run rec to stop (kitlib.lock.stale.reap): its stale notice, when
+    the notice folder is set (whatever the run's kind). Never raises."""
+    try:
+        n = site.notice(store)
+        if n is not None:
+            _write(store, n[0], stale_doc(rec, why))
+    except Exception as e:
+        store.say("WARNING: run %s: no stale-run notice: %s" % ((rec or {}).get("id"), e))

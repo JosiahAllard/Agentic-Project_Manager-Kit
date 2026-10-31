@@ -43,10 +43,11 @@ from kitlib.lock import layout as lay
 from kitlib.lock import queue as qm
 from kitlib.lock import notice
 from kitlib.lock import site
+from kitlib.lock import stale
 from kitlib.lock.store import (EXIT_BUSY, EXIT_HOLD, EXIT_REQUIRE, EXIT_RESERVED, EXIT_TIMEOUT,
-                               EXIT_USAGE, LockError, Store, caller, iso, local_text,
-                               new_id, parse_iso, read_record, remove, session_of, tree_role,
-                               utc_now, write_json)
+                               EXIT_USAGE, LockError, Store, booking_hosts, caller, iso,
+                               local_text, new_id, parse_iso, read_record, remove, session_of,
+                               tree_role, utc_now, write_json)
 from kitlib.platform.linux import process as procfs
 from kitlib.proc import bash, cpu, daemons, process, win32, winwatch
 from kitlib.proc.job import Job, JobError, cores_text
@@ -335,12 +336,14 @@ class Run:
                  env=None, log=None):
         env = os.environ if env is None else env
         self.store = store
+        ancestors = run_ancestors(detached, env)
         self.rec = {"id": rid or new_id("r"), "state": state, "repo": repo, "slug": slug,
                     "kind": kind, "note": note, "pid": os.getpid(), "ctime": process.own_ctime(),
                     "since": iso(), "cmd": [str(c) for c in cmd or ()][:20],
                     "detached": bool(detached), "holding": [], "slots": {}, "cores": [],
                     "gpus": [], "shares": {}, "session": session_of(env),
-                    "ancestors": run_ancestors(detached, env), "role": run_role(detached, env),
+                    "ancestors": ancestors, "hosts": booking_hosts(ancestors),
+                    "role": run_role(detached, env),
                     "layout": lay.slot_key(L),
                     "log": getattr(log, "name", None) if log is not None else None}
         if kitlib.platform.NAME == "linux":
@@ -364,6 +367,8 @@ class Run:
         stop, _ = read_record(self.store.path("active", self.id + ".stop"))
         if stop:
             self.ended["stopped_by"] = {"by": stop.get("by"), "session": stop.get("session")}
+            if stop.get("why"):
+                self.ended["stopped_by"]["why"] = stop["why"]
         with contextlib.suppress(OSError):
             write_json(self.store.path("ended", self.id + ".json"), self.ended)
         remove(self.store.path("active", self.id + ".json"))
@@ -439,7 +444,7 @@ def acquire(store, run, L, need, wait_s, no_wait, prefer=None, within=None):
     deadline = time.monotonic() + (0 if no_wait else math.inf if wait_s is None else wait_s)
     span, hid = run.rec["expect_s"], run.rec.get("hold")
     whole = run.rec.get("hold_scope") == "whole"
-    told = said = seen = yielding = ypool = qbad = hbad = None
+    told = said = seen = yielding = ypool = qbad = hbad = stale_at = None
     joined = back = reaped = False
     while True:
         now = utc_now()
@@ -622,6 +627,15 @@ def acquire(store, run, L, need, wait_s, no_wait, prefer=None, within=None):
             reaped = True
             with contextlib.suppress(OSError):
                 store.live_runs(prune=True)
+        if stale_at is None or time.monotonic() >= stale_at:
+            # Then, and every stale_check_s while it waits: a held run whose booking sessions
+            # are gone and that has held far past its guide is asked to stop (kitlib.lock.stale).
+            # Outside the queue mutex; a reap that fails never fails this booking.
+            stale_at = time.monotonic() + s.stale_check_s
+            try:
+                stale.reap(store, request_stop)
+            except Exception as err:        # noqa: BLE001
+                say("run %s: the stale-run look failed (%s: %s)" % (run.id, type(err).__name__, err))
         if qbad is not None:
             say("run %s: the queue reads again%s" % (
                 run.id, "; its entry was gone, so it joined again at the back" if back else ""))
@@ -1160,7 +1174,13 @@ class Slot:
             if self.offer is not None:
                 self.serve_give_back()
             if self.stop_asked():
-                self.store.say("run %s was cancelled by stop; its process tree is ended" % self.id)
+                req, _there = read_record(self.store.path("active", self.id + ".stop"))
+                if isinstance(req, dict) and req.get("by") == stale.BY and req.get("why"):
+                    self.store.say("run %s was ended by the lock: %s; its process tree is ended"
+                                   % (self.id, req["why"]))
+                else:
+                    self.store.say("run %s was cancelled by stop; its process tree is ended"
+                                   % self.id)
                 found = escaped(p.pid, self.job.contains)   # read while their parents live
                 self.end_tree()
                 try:                        # the command itself may be a daemon it spared
@@ -1564,6 +1584,7 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
                        else k["warn_min"] * 60,
                        expect_from="--expect" if expect_s is not None else "history"
                        if hist is not None else "guide",
+                       warn_s=k["warn_min"] * 60 * store.settings.warn_scale,
                        need=own, has={p: n for p, n in has.items() if n}, hold=hold,
                        parent=parent["id"] if parent else None, gpu_share=gpu_share,
                        **({"gate": True} if gate else {}),
@@ -2008,13 +2029,16 @@ def expected_end(since, expect_s, max_s=10 * 365 * 86400):
         return None
 
 
-def request_stop(store, rid, by, session=None):
-    """Writes run rid's stop request (active/<id>.stop: {by_pid, at, by, session}; session is the
-    asker's session id or None). False when no such run is live."""
+def request_stop(store, rid, by, session=None, why=None):
+    """Writes run rid's stop request (active/<id>.stop: {by_pid, at, by, session}, and why when
+    given; session is the asker's session id or None, why the stale-run reap's reason,
+    kitlib.lock.stale). False when no such run is live."""
     if not os.path.exists(store.path("active", rid + ".json")):
         return False
-    write_json(store.path("active", rid + ".stop"), {"by_pid": os.getpid(), "at": iso(), "by": by,
-                                                     "session": session})
+    doc = {"by_pid": os.getpid(), "at": iso(), "by": by, "session": session}
+    if why:
+        doc["why"] = why
+    write_json(store.path("active", rid + ".stop"), doc)
     store.bump()
     return True
 

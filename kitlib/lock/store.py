@@ -86,6 +86,7 @@ class Settings:
         "bg_resume_s": 180.0, "bg_free_s": 30.0, "bg_keep_s": 600.0, "bg_stop_grace_s": 50.0,
         "bg_yield_s": 120.0, "bg_yield_margin_s": 15.0, "game_poll_s": 5.0, "game_roll_s": 120.0,
         "gpu_use_cache_s": 5.0, "wait_change_poll_s": 0.25, "child_poll_s": 1.0,
+        "stale_scale": 3.0, "stale_min_s": 3600.0, "stale_check_s": 60.0,
     }
 
     def __init__(self, pauses=None, **overrides):
@@ -268,6 +269,24 @@ def chain_host(chain, names, hosts=None):
     return None
 
 
+
+def booking_hosts(pairs, snap=None, hosts=None, ctime=None):
+    """[[pid, ctime]] of the agent hosts among pairs ([pid, ctime], a run's ancestors at its
+    booking, run.run_ancestors): each one the process listing (snap, default process.snapshot())
+    names as an agent host image (hosts, default agent_hosts()) and still made at that time
+    (ctime, default process.proc_ctime). The stale-run reap reads them (kitlib.lock.stale): a run
+    all of whose hosts are gone has lost the sessions that booked it. [] when there is none, and
+    when the listing or the host registry cannot be read: such a run is never taken as stale."""
+    try:
+        snap = process.snapshot() if snap is None else snap
+        hosts = agent_hosts() if hosts is None else hosts
+        ctime = process.proc_ctime if ctime is None else ctime
+        names = {int(p): (n or "").lower() for p, _pp, n in snap}
+        return sorted([int(p), int(c)] for p, c in pairs
+                      if names.get(int(p)) in hosts and ctime(int(p)) == int(c))
+    except Exception:
+        return []
+
 # WMI's provider host: the parent of every process Win32_Process.Create starts (kitlib.lock.detach,
 # a detached lock run or a submitted landing). It is listed, but this user cannot open it, so a
 # walk ends below it at a running process, the same end as the owner's desktop chain; what
@@ -438,6 +457,26 @@ def record_state(d):
             return None
     return wrapper_state(d.get("pid", 0), d.get("ctime"))
 
+
+
+def hosts_gone(d):
+    """Has run record d lost every agent host it was booked under? True only when d names one or
+    more (`hosts`, booking_hosts) and each is surely gone (wrapper_state False). False when it
+    names none, when any is live or cannot be told, and on Linux when d names a pid namespace
+    other than this process's (record_state)."""
+    hs = d.get("hosts")
+    if not isinstance(hs, list) or not hs:
+        return False
+    if kitlib.platform.NAME == "linux":
+        ns = d.get("pidns")
+        if ns is not None and ns != procfs.pidns():
+            return False
+    for h in hs:
+        if not (isinstance(h, (list, tuple)) and len(h) == 2):
+            return False
+        if wrapper_state(h[0], h[1]) is not False:
+            return False
+    return True
 
 def wrapper_state(pid, ctime):
     """Is the wrapper (pid, ctime) of a run record live? True when pid names a running process
