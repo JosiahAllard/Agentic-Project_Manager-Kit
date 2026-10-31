@@ -110,7 +110,7 @@ class NeverReaped(Base):
     def test_a_releasing_run(self):
         self.assert_kept(releasing=True)
 
-    def test_a_detached_run_when_detached_runs_are_left_out(self):
+    def test_the_constant_off_leaves_a_detached_run_alone(self):
         with mock.patch.object(stale, "INCLUDE_DETACHED", False):
             self.assert_kept(detached=True)
 
@@ -159,10 +159,11 @@ class Reaped(Base):
         self.assertEqual(self.reap(), [RID])
         self.assertEqual(self.notices(), [])
 
-    def test_a_detached_run_when_detached_runs_are_included(self):
-        with mock.patch.object(stale, "INCLUDE_DETACHED", True):
-            self.stale_record(detached=True)
-            self.assertEqual(self.reap(), [RID])
+    def test_a_detached_run_is_reaped_as_shipped(self):
+        # Owner decision: detached runs are included; the shipped constant says so.
+        self.assertIs(stale.INCLUDE_DETACHED, True)
+        self.stale_record(detached=True)
+        self.assertEqual(self.reap(), [RID])
 
     def test_finish_names_the_lock_and_why(self):
         self.stale_record()

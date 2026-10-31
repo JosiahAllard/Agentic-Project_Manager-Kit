@@ -28,8 +28,8 @@ from kitlib.lock import notice
 from kitlib.lock.store import hosts_gone, parse_iso, read_record, utc_now
 
 BY = "lock"
-# Whether a detached run (machine_lock.py run --detach, land.py --submit) can be stale. The owner
-# decides (hub Q-1646): True takes them as any run; False never does.
+# Whether a detached run (machine_lock.py run --detach, land.py --submit) can be stale. Owner
+# decision: they are included, taken as any run (True); False would never take one.
 INCLUDE_DETACHED = True
 
 
