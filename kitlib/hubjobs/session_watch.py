@@ -5,8 +5,8 @@ the PM as job pushes (docs/action-hub.md "Timed jobs").
   make(sources) -> jobs.Job      the job, or None when the default host has no watcher readers
   SessionWatch(host, ...)        its run(ctx): one Watcher poll, and the push of its events
 
-Checks: BGFAIL, LOCKNOTICE, USAGE and RESET, IDLE and STOPPED, REMOTE, and the Watcher's own
-ERROR (a check that failed three times running). Left to pm_watch: PLUGIN (the plugin-refresh job
+Checks: BGFAIL, LOCKNOTICE, USAGE and RESET, IDLE and STOPPED, REMOTE, LIMIT, and the Watcher's
+own ERROR (a check that failed three times running). Left to pm_watch: PLUGIN (the plugin-refresh job
 owns the refresh), HUB (the hub would ask its own health) and BRANCH (its refs are pm_watch
 --branch arguments, in no config key). Config is the machine config's "pm_watch" keys, as
 pm_watch reads them: sessions_file (unset: every run is a Skip), alerts_dir, state_file.
@@ -17,7 +17,7 @@ first run is silent (REMOTE excepted, as in pm_watch); a hub restart reads it ba
 reported twice. An unreadable one is a fresh baseline.
 
 Push: at most one per run, through ctx.event: one event gives its kind as the word (idle,
-stopped, usage, reset, bgfail, locknotice, remote, error) and its subject (session, account, run
+stopped, usage, reset, bgfail, locknotice, remote, limit, error) and its subject (session, account, run
 or notice id, the failed check) as the detail; several give `events` with their count. The event
 lines themselves are free text, so they never go in a push: the run's note, health's
 jobs.session-watch.note, lists the last RECENT_MAX pushed ones with their times, so a push the

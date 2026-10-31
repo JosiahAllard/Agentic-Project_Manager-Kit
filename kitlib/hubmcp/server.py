@@ -291,10 +291,12 @@ TOOLS = {
              ["checkout", "title", "files"]), "POST", "/approvals", AGENT),
     "hub_handoff_ready": (
         "Records that this session checkpointed and stands down (POST /handoffs), beside its "
-        "ready reply to the PM (skill session-handoff): the same kind and state note path. The "
+        "ready reply to the PM (skill session-handoff): the same kind and state note path. A "
+        "successor told to in its first message records kind checkin once it has checked in. The "
         "hub stamps the time; GET /handoffs gives each session's newest record.",
         _obj({"kind": _one_of(hubapi.HANDOFF_KINDS, "The ready reply's word: handoff (ready to "
-                                                    "hand off), restart or stop."),
+                                                    "hand off), restart or stop; or checkin, a "
+                                                    "successor that has checked in."),
               "state_path": {"type": "string", "description": "The absolute path of the state "
                                                               "note, as in the ready reply."},
               "from": {"type": "string", "description": "Your launcher session key (pm for the "

@@ -1453,6 +1453,20 @@ class UnblockedPushTest(PushCase):
         self.worker.send_jobs()
         self.assertEqual(len(self.jobs_sent()), 1)
 
+    def test_two_sessions_crossing_in_one_round_are_two_pushes_each_saying_what_it_is(self):
+        self.push.states[push.PM_KEY] = push.NO_SESSION
+        self.worker.job_event('usage-crossover', 'crossing', 'kit:a2')
+        self.worker.job_event('usage-crossover', 'no-room', 'griff')
+        self.worker.job_event('usage-crossover', 'crossing', 'griff:a3')
+        self.push.states[push.PM_KEY] = push.WRITTEN
+        self.worker.send_jobs()
+        self.assertEqual(sorted(t.splitlines()[0] for t in self.jobs_sent()), [
+            '[hub push] job usage-crossover crossing detail:griff:a3 route:pm attempt:1',
+            '[hub push] job usage-crossover crossing detail:kit:a2 route:pm attempt:1',
+            '[hub push] job usage-crossover no-room detail:griff route:pm attempt:1'])
+        for text in self.jobs_sent():
+            self.assertIn('hub health jobs.usage-crossover', text)
+
 
 if __name__ == '__main__':
     unittest.main()

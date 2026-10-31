@@ -552,8 +552,8 @@ store's git push (the `push` setting).
   a detail is one more header field, `[hub push] job <name> <word> detail:<detail> route:pm
   attempt:<k>`, cut to the header alphabet like every field (a sha or a count, never prose). Each job
   owes at most one push: a newer event replaces one not yet written, its detail with it, except a
-  word in `push.JOB_EACH` (`unblocked`), owed once per detail, so two records unblocked in one round
-  are two pushes. `unblock-conditions` (`kitlib/hubjobs/unblock_conditions.py`, every 300 s) reads
+  word in `push.JOB_EACH` (`unblocked` and the usage crossover's words), owed once per detail, so two
+  records unblocked in one round are two pushes. `unblock-conditions` (`kitlib/hubjobs/unblock_conditions.py`, every 300 s) reads
   each `launcher.repos` repository's store with no fetch and, on each blocked record, each `until`
   line it may act on (docs/backlog.md "block --until"); a met condition clears that one member in one
   store commit under `Session: hub-condition` (`recordwrite.condition_met`, which re-reads the record
@@ -569,10 +569,17 @@ store's git push (the `push` setting).
   opened record from `coord-restart`'s backlog wake; nothing else is pushed.
   `session-watch` (`kitlib/hubjobs/session_watch.py`, docs/pm-watch.md "Hub session-watch job") runs
   pm_watch's checks every 60 s, first at 30 s, and pushes at most once a run: one event as its kind
-  (`idle`, `stopped`, `usage`, `reset`, `bgfail`, `locknotice`, `remote`, `error`) with its subject
-  (session, account, run or notice id, check) as the detail, several as `events` with their count.
-  The event lines are free text, so they go in its health `note` (the last 20 pushed, with times), never
-  in a push.
+  (`idle`, `stopped`, `limit`, `usage`, `reset`, `bgfail`, `locknotice`, `remote`, `error`) with its
+  subject (session, account, run or notice id, check) as the detail, several as `events` with their
+  count. The event lines are free text, so they go in its health `note` (the last 20 pushed, with
+  times), never in a push.
+  `usage-crossover` (`kitlib/hubjobs/usage_crossover.py`, every 300 s, first at 60 s, before
+  `coord-restart`'s first run) moves a session to another account as its account nears the weekly
+  limit (docs/launcher.md "Usage crossover"). It is on `notify` until the owner sets
+  `launcher.usage_crossover`. Its words are all in `push.JOB_EACH`: `crossing`, `would-cross`,
+  `crossed`, `cross-cleared`, `cross-failed`, `stalled`, `no-ready`, `no-checkin`, `no-room`,
+  `pm-limit`, `unmanaged`. It reads the hub's own hand-off records through `Sources.handoffs`, which
+  `serve.build` sets to the newest of each session.
 - Files, in `launcher.state_dir`: `push-outbox.json` (what is still to send, rewritten after each round
   that changed it, so a server ended without a clean close loses at most that round; read again at
   start: an entry whose item changed while the server was down fires afresh, one whose item is gone is
@@ -1291,7 +1298,7 @@ docstring "Hand-offs".
 |---|---|---|
 | (doc id) | server | `C-001`, `C-002`, ...: the document's id, not a field; a higher number is newer |
 | from | agent | the session's key: a launcher session key (sessions.json, read on each add) or `pm`, checked as a question's `from` is |
-| kind | agent | `handoff`, `restart` or `stop` (`api.HANDOFF_KINDS`): the ready reply's word |
+| kind | agent | `handoff`, `restart` or `stop` (`api.HANDOFF_KINDS`): the ready reply's word; or `checkin`: a session started by a hand-off has read its note and taken over (the usage crossover stops the old session on it, docs/launcher.md "Usage crossover") |
 | state_path | agent | the absolute path of the state note, on one line |
 | at | server | ISO time the hub took it |
 

@@ -62,7 +62,7 @@ class WriteTest(Case):
         for kind in api.HANDOFF_KINDS:
             with self.subTest(kind=kind):
                 self.assertEqual(self.post(who='pm', kind=kind)[0], 200)
-        self.assertEqual(api.HANDOFF_KINDS, ('handoff', 'restart', 'stop'))
+        self.assertEqual(api.HANDOFF_KINDS, ('handoff', 'restart', 'stop', 'checkin'))
 
     def test_the_id_prefix_is_its_own(self):
         self.assertEqual(hubvalidate.REF_COLLECTIONS['C'], 'handoffs')

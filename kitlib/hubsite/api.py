@@ -129,7 +129,8 @@ Hand-offs (docs/action-hub.md "handoffs/C-NNN"). POST handoffs (AGENT) records t
 checkpointed and stands down, beside its ready reply to the PM (skill session-handoff): {from,
 kind, state_path}, all required. from is a session key checked as a question's is (a launcher
 session key, read now, or `pm`); kind is one of HANDOFF_KINDS (handoff, restart, stop: the word
-of the reply); state_path is the absolute path of the state note, on one line. The hub sets `at`.
+of the reply; checkin: a successor that has checked in, kitlib.launcher.handoff); state_path is
+the absolute path of the state note, on one line. The hub sets `at`.
 GET handoffs (ANY) gives the newest record of each session (newest_handoffs: the highest id per
 `from`), sorted by key, or with `from=<key>` that key's alone; over the tunnel only, the state
 path is cut to `.../<its file name>` (ntpath.basename). Every record is kept; none is pending or pushed, no route changes or

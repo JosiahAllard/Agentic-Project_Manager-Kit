@@ -2,6 +2,7 @@
 import unittest
 
 from kitlib.launcher import handoff, start
+from kitlib.launcher import state as files
 from kitlib.launcher.settings import LaunchError
 from tests.launcher.fakes import FakeHost, Home
 
@@ -22,6 +23,40 @@ class SuccessorPrompt(unittest.TestCase):
         for entry in (AGENT, PLAIN):
             text = handoff.successor_prompt(entry, 'old-a1', 'new-a2')
             self.assertIn('entry-state.md', text)
+
+    def test_the_successor_is_told_to_record_its_checkin_under_its_own_key(self):
+        for entry in (AGENT, PLAIN):
+            text = handoff.successor_prompt(entry, 'old-a1', 'new-a2', state='Z/state-r2.md', key='alpha')
+            self.assertIn('hub_handoff_ready (kind checkin, state_path Z/state-r2.md', text)
+            self.assertIn('from alpha)', text)
+
+
+class RecordMove(unittest.TestCase):
+    def setUp(self):
+        self.h = Home(self, accounts=('1', '2'))
+        self.sessions = {'alpha': dict(AGENT), 'help': dict(PLAIN)}
+
+    def read(self, name):
+        return files.read_json(files.path(self.h.settings, name))
+
+    def test_a_main_coordinator_moves_in_both_files(self):
+        coord = {'alpha': 1, 'pm_account': 2}
+        self.assertTrue(handoff.record_move(self.h.settings, self.sessions, coord, 'alpha',
+                                            self.sessions['alpha'], '2', 'alpha-coord-a2'))
+        entry = self.read('sessions.json')['alpha']
+        self.assertEqual((entry['account'], entry['name']), (2, 'alpha-coord-a2'))
+        self.assertEqual(self.read('coordinators.json'), {'alpha': 2, 'pm_account': 2})
+
+    def test_a_plain_session_moves_in_sessions_json_alone(self):
+        self.assertFalse(handoff.record_move(self.h.settings, self.sessions, {'alpha': 1}, 'help',
+                                             self.sessions['help'], '2', 'alpha-help-a2'))
+        self.assertIsNone(self.read('coordinators.json'))
+        self.assertEqual(self.read('sessions.json')['help']['name'], 'alpha-help-a2')
+
+    def test_no_coordinators_file_writes_none(self):
+        handoff.record_move(self.h.settings, self.sessions, None, 'alpha', self.sessions['alpha'],
+                            '2', 'alpha-coord-a2')
+        self.assertIsNone(self.read('coordinators.json'))
 
 
 class PmName(unittest.TestCase):
@@ -54,6 +89,12 @@ class HandoffState(unittest.TestCase):
         self.assertIn('state-r2.md', text)
         self.assertNotIn('entry-state.md', text)
         self.assertEqual(out[0], '== alpha : alpha-coord-a1 (account 1) -> alpha-coord-a2 (account 2)')
+
+    def test_a_handoff_asks_the_successor_for_the_checkin_record(self):
+        handoff.handoff(self.h.settings, self.host, 'alpha', '2', state='Z/state-r2.md')
+        text, = self.host.opened
+        self.assertIn('kind checkin', text)
+        self.assertIn('from alpha)', text)
 
     def test_state_with_all_is_refused(self):
         with self.assertRaisesRegex(LaunchError, '--state takes one --session'):

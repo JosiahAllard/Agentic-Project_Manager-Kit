@@ -2,9 +2,9 @@
 resets first among those under the limit, else its last account (docs/launcher.md "Hub restart").
 
   make(sources) -> jobs.Job | None   the job; None when launcher.state_dir is not set
-  decide(key, entry, live, record, last_stop, down_runs, accounts, now, wake=None) -> Decision
-                                     the whole restart decision, pure: no file, process or clock
-                                     is read
+  decide(key, entry, live, record, last_stop, down_runs, accounts, now, wake=None, claimed=False)
+                                     -> Decision: the whole restart decision, pure: no file,
+                                     process or clock is read
   backlog_wake(offered, baseline)    a Wake when the offer holds a record id the baseline does not
   owner_wake(key, items, since)      a Wake when an owner answer or a decided approval for the key is
                                      newer than `since` (owner_since: the stopped session's start,
@@ -31,7 +31,9 @@ so the framework pushes `recovered` straight after the run, replacing anything o
 START_TIMEOUT_S is a failure (health), and counts as a start for the backoff and the cap.
 
 Held, never started: a live session of the entry's stem (any account or recycle, the test
-`launch.py start --session` refuses on: never a second copy); a deliberate stop, meaning a
+`launch.py start --session` refuses on: never a second copy); a claim of the usage crossover, the
+hub moving this very session (kitlib.hubjobs.usage_crossover claims, which lapse: a bad
+usage-crossover.json fails the run as a bad state file does); a deliberate stop, meaning a
 stop.log line with no successor for a session of the stem (`launch.py stop --name X` without
 --successor, the PM's step on a `ready to stop:` reply) newer than the last time the job saw the
 coordinator alive, or with no sighting at all; a coordinator seen down on fewer than DOWN_RUNS runs
@@ -263,8 +265,9 @@ def pace_hold(record, down_runs, now):
     return None
 
 
-def decide(key, entry, live, record, last_stop, down_runs, accounts, now, wake=None):
-    """The restart decision for one sessions.json entry. `live`: the names of the launched
+def decide(key, entry, live, record, last_stop, down_runs, accounts, now, wake=None, claimed=False):
+    """The restart decision for one sessions.json entry. `claimed`: the usage crossover is moving
+    it. `live`: the names of the launched
     sessions running now; `record`: the job's {seen_at, account, starts} for it (or None);
     `last_stop`: epoch seconds of the newest stop.log line with no successor for a session of the
     stem (or None); `down_runs`: the runs in a row, this one included, it was seen down;
@@ -279,6 +282,8 @@ def decide(key, entry, live, record, last_stop, down_runs, accounts, now, wake=N
     stem = entry['stem']
     if any((n or '').startswith(stem) for n in live):   # lookup.running_stem's test
         return _hold('running')
+    if claimed:
+        return _hold('the usage crossover is moving it')
     if not deliberate_stop(record, last_stop):
         wake = None                     # a crash restart: nothing to lift, no wake prompt
     elif wake is None:
@@ -543,6 +548,8 @@ class RestartJob(object):
             self._after_reboot(None, now)   # a bad state file: no boot kept, nothing written
             raise
         booted = self._after_reboot(records, now)     # first: a bad sessions.json must not stop it
+        from kitlib.hubjobs import usage_crossover      # it imports this module
+        claimed = usage_crossover.claims(self.settings, now)
         sessions = state.read_sessions(self.settings)
         rows = lookup.launched(self.procs())
         live = {lookup.rc_name(p.get('CommandLine')) for p in rows}
@@ -582,7 +589,7 @@ class RestartJob(object):
                 if note:
                     notes.append(note)
             d = decide(key, entry, live, records.get(key), last_stop, self._down[key], accts, now,
-                       wake=wake)
+                       wake=wake, claimed=key in claimed)
             if not d.start:
                 notes.append('%s: %s' % (key, d.reason))
                 if d.word and self._told.get(key) != d.word:

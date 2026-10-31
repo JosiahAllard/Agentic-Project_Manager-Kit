@@ -307,6 +307,21 @@ class WiredTest(ServeCase):
         self.assertEqual([(i['kind'], i['id']) for i in got], [('question', qid)])
         self.assertEqual(marks(), before)             # no handed/heard/seen marks (_routed's own pops aside)
 
+    def test_a_maker_gets_the_stores_newest_handoff_of_each_session_in_sources(self):
+        seen = []
+
+        def maker(sources):
+            seen.append(sources.handoffs)
+            return None
+        hub = self.build(jobs=[maker])
+        self.assertEqual(seen[0](), {})
+        for doc_id, kind in (('C-001', 'handoff'), ('C-002', 'checkin')):
+            hub.api.store.put('handoffs', doc_id, {'from': 'kit', 'kind': kind, 'state_path': 'Z:\\n.md',
+                                                   'at': '2026-10-01T00:00:00Z'})
+        got = seen[0]()
+        self.assertEqual(list(got), ['kit'])
+        self.assertEqual((got['kit']['id'], got['kit']['kind']), ('C-002', 'checkin'))
+
     def test_no_jobs_is_null_in_health_and_a_maker_that_raises_is_a_note(self):
         def broken(sources):
             raise RuntimeError('no')

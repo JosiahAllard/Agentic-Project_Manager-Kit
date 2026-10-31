@@ -121,8 +121,8 @@ snapshot's and GET health's `watcher` (Api.watcher_seen).
 Jobs (the hub's timed jobs, kitlib.hubsite.jobs): job_event(name, event, detail=None), on any
 thread, owes the PM one `job <name> <event>` push, with `detail:<detail>` after the event when
 one is given (one owed push per job name: a newer event of the same job replaces one still owed,
-its detail with it; an event in JOB_EACH, `unblocked`, is owed once per detail instead, beside
-the rest, and its text says what to do: each names one opened record); the
+its detail with it; an event in JOB_EACH, `unblocked` and the usage crossover's words, is owed
+once per detail instead, beside the rest, and its text says what to do: each names one thing); the
 thread sends each owed one every round (send_jobs), tried on the same schedule until a try is
 written or GIVE_UP_S passes. Owed job pushes live in memory only, never in the outbox: a restart
 drops them, and the job pushes again when it fails again.
@@ -190,11 +190,37 @@ MAX_ITEMS = 20                              # items in one message
 LOG_MAX = 1 << 20                           # push-undelivered.jsonl rotates past this
 OUTBOX = 'push-outbox.json'
 # Job events owed once per detail rather than once per job: each names one thing the PM must
-# hear about (kitlib.hubjobs.unblock_conditions: one opened record each), so a second one in a
-# round must not replace the first.
+# hear about (kitlib.hubjobs.unblock_conditions: one opened record each; usage_crossover: one
+# session or account each), so a second one in a round must not replace the first.
+_CROSSOVER = 'The hub usage crossover job (hub health jobs.usage-crossover, usage-crossover.log): '
 JOB_EACH = {'unblocked': 'A hub timed job cleared a hold whose `until` condition was met: the '
                          'record named in detail (<repo>:<ID>) is unblocked; `backlog.py show '
-                         '<ID>` gives the commit. No reply is needed.'}
+                         '<ID>` gives the commit. No reply is needed.',
+            'crossing': _CROSSOVER + 'detail (<session>:a<account>) nears the weekly limit and the '
+                        'hub is moving it there. Do not hand it off or stop it yourself: when it '
+                        'replies ready, the hub runs the next step. No reply is needed.',
+            'would-cross': _CROSSOVER + 'would move detail (<session>:a<account>) now, but '
+                           'launcher.usage_crossover is notify: nothing was stopped or started. '
+                           'For your information; no reply is needed.',
+            'stalled': _CROSSOVER + 'detail stands stopped at the weekly limit. On `full` the hub '
+                       'stops it and starts a successor on its state note; otherwise it is yours.',
+            'crossed': _CROSSOVER + 'the session in detail has taken over and its old session has '
+                       'gone. For your information; no reply is needed.',
+            'cross-cleared': _CROSSOVER + 'dropped the crossing of detail before it finished; the '
+                             'log says why and what it had done. For your information; no reply '
+                             'is needed.',
+            'cross-failed': _CROSSOVER + 'gave up on detail: it needs you. The log says why.',
+            'no-ready': _CROSSOVER + 'detail has not replied ready to its checkpoint message, or '
+                        'has not gone quiet on a state note written since, in 30 minutes; the hub '
+                        'still waits. Check on it.',
+            'no-checkin': _CROSSOVER + 'the successor of detail has not recorded its check-in in '
+                          '30 minutes; its old session stays idle. Check on the successor.',
+            'no-room': _CROSSOVER + 'detail needs moving and no account has room: nothing was '
+                       'stopped or started. A stalled session wakes at its reset.',
+            'pm-limit': _CROSSOVER + 'the PM session is at the weekly limit; this job never moves '
+                        'it. It is yours to hand off.',
+            'unmanaged': _CROSSOVER + 'detail, a session with no sessions.json entry, is at the '
+                         'weekly limit; this job leaves it to you.'}
 UNDELIVERED = 'push-undelivered.jsonl'
 COLLECTIONS = {'questions': 'question', 'todos': 'todo', 'approvals': 'approval',
                'stories': 'story', 'to_pm': 'to_pm', 'skill_edits': 'skill_edit'}
