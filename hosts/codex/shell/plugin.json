@@ -1,8 +1,7 @@
 {
   "name": "pm-kit",
   "version": "0.4.0",
-  "description": "The PM kit as a Codex plugin (ARCHITECTURE.md, Packaging; hosts/codex/README.md): its hooks, skills, the read-only machine lock MCP server and the hub MCP server. Rendered from kit.json and content/ by tools/render_content.py; never edit it by hand.",
+  "description": "The PM kit as a Codex plugin (ARCHITECTURE.md, Packaging; hosts/codex/README.md): its skills, the read-only machine lock MCP server and the hub MCP server; its hooks are the pm-kit-hooks plugin. Rendered from kit.json and content/ by tools/render_content.py; never edit it by hand.",
   "skills": "./content/skills/",
-  "hooks": "./hosts/codex/shell/hooks/hooks.json",
   "mcpServers": "./hosts/codex/shell/mcp.json"
 }

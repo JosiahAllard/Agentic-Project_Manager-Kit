@@ -60,7 +60,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/pending.md` | the pending-steps file | pending steps | kw: pending
 - `docs/pm-data-branch.md` | PM data on a private branch of the kit repo | PM data | kw: pm-data, data-branch
 - `docs/pm-first-run.md` | PM first run | the first PM session | kw: pm-first-run
-- `docs/plugin-source.md` | the plugin's source: export of pushed kit main, refresh, migrate | installing or refreshing the plugin | kw: plugin-source, plugin, plugin_refresh, export
+- `docs/plugin-source.md` | the plugin's source: export of pushed kit main, refresh, migrate | installing or refreshing the plugin | kw: plugin-source, plugin, plugin_refresh, export, pm-kit-hooks
 - `docs/pm-start.md` | PM session-start checklist | starting a PM session | kw: pm-start, checklist
 - `docs/pm-watch.md` | PM watcher | watching sessions | kw: pm-watch, watcher
 - `docs/preflight.md` | preflight (with its --board) and checkout guard | starting any task | kw: preflight, board, checkout
@@ -81,7 +81,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `content/default-profile.md` | the agent profile roles read in a repository with none of its own (`docs/agent-profile.md`) | a repo has no profile | kw: profile, default-profile
 - `content/skills/*/*.md` | one skill per folder, the source of every host's skills, and the folder Claude's plugin loads them from (`docs/content.md`) | editing a skill, reading what Claude loads | kw: skills, skill
 - `hosts/claude/shell/agents/*.md` | Claude's agent files, rendered from content/roles (never edit by hand) | reading what Claude loads | kw: agents, rendered
-- `hosts/codex/README.md` | the Codex host: what is ported, what runs, what is not verified | working on the Codex plugin | kw: codex, host, plugin, runtime, canary
+- `hosts/codex/README.md` | the Codex host: what is ported, what runs, what is not verified | working on the Codex plugin | kw: codex, host, plugin, runtime, canary, pm-kit-hooks
 - `templates/stacks/godot/.claude/skills/godot-render-check/SKILL.md` | Godot render check and e2e tiers | Godot repos | kw: godot, render, e2e
 - `templates/common/AGENTS.md` | starter rules file (AGENTS.md) for a new repo | installing | kw: template, agents, rules
 - `templates/common/CLAUDE.md` | starter CLAUDE.md: imports AGENTS.md | installing | kw: template, claude

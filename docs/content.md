@@ -142,16 +142,19 @@ as a TOML multi-line string. A Codex agent file has no tool list, so `capabiliti
 rendered; nor is `compact`, because no per-agent compact key in a Codex agent file has been established
 (no Codex install here to check). It owns the agents folder alone: Codex loads the skills from
 `./content/skills/` in the export, so none is copied. Its `retired()` names `hosts/codex/shell/skills`
-and `hosts/codex/shell/boot`, the folders the old hand-made copy needed, so a file left in either is
-stale. Its
-manifests are `hosts/codex/shell/plugin.json` (the name and version; `./content/skills/`, the hooks file and `mcp.json` named from the export root, where the export places it as `.codex-plugin/plugin.json`, docs/plugin-source.md "Layout"),
-`hosts/codex/shell/mcp.json` (the read-only lock server and the hub server) and `hosts/codex/shell/hooks/hooks.json`
-(every declared hook event running `boot/hook.py codex <event>`, the export's own entry, as one
-command string), with `hooks.linux.json` beside it as for Claude ("Manifests"): the Linux command
-line joined as a POSIX shell line, `${PLUGIN_ROOT}/boot/hook.py` in double quotes and the body in
-single quotes (`posix_quote`). Nothing is vendored: the Codex plugin root is the export folder, which
-holds `boot/` and `hosts.json`, as Claude's does. Status:
-hosts/codex/README.md.
+and `hosts/codex/shell/boot`, the folders the old hand-made copy needed, and `hosts/codex/shell/hooks`,
+where the hooks were rendered before the hooks plugin, so a file left in any is stale. Its
+manifests are `hosts/codex/shell/plugin.json` (the name and version; `./content/skills/` and `mcp.json` named from the export root, where the export places it as `.codex-plugin/plugin.json`, docs/plugin-source.md "Layout"; no hooks)
+and `hosts/codex/shell/mcp.json` (the read-only lock server and the hub server). The hooks are the
+fixed-bytes plugin `pm-kit-hooks` in `hosts/codex/shell/hooks-plugin`, written by hand and never
+rendered, since Codex asks for trust again when its bytes change (docs/plugin-source.md "Codex hooks
+plugin"). Its `hooks/hooks.json` must still equal what `hooks()` gives (every declared hook event
+running `pm_kit_hook.py codex <event>`, the stub that runs the installed export's `boot/hook.py`, as
+one command string), and its `hooks.linux.json` what `hooks(platform='linux')` gives: the Linux
+command line joined as a POSIX shell line, `${PLUGIN_ROOT}/pm_kit_hook.py` in double quotes and the
+body in single quotes (`posix_quote`); tests/pluginsource/test_codex_hooks.py holds both. Nothing is
+vendored: the Codex plugin root is the export folder, which holds `boot/` and `hosts.json`, as
+Claude's does. Status: hosts/codex/README.md.
 
 ## Manifests
 

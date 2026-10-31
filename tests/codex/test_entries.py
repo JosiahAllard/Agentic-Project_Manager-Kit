@@ -14,7 +14,7 @@ from kitlib.host import header
 
 ROOT = Path(__file__).resolve().parents[2]
 PLUGIN = ROOT                           # the plugin root: the export, laid out as the kit
-HOOK = 'boot/hook.py'                   # the kit's one hook entry, hooks.json's ${PLUGIN_ROOT}/boot/hook.py
+HOOK = 'boot/hook.py'                   # the kit's one hook entry, run by the pm-kit-hooks stub from the installed export
 MCP = 'hosts/codex/shell/mcp/'          # mcp.json's servers, from the plugin root
 
 

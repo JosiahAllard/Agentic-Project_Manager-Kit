@@ -96,7 +96,8 @@ class Retired(unittest.TestCase):
             def render(self, content):
                 return self.r.render(content)
 
-        left = ('hosts/codex/shell/skills/old/SKILL.md', 'hosts/codex/shell/boot/kitboot.py')
+        left = ('hosts/codex/shell/skills/old/SKILL.md', 'hosts/codex/shell/boot/kitboot.py',
+                'hosts/codex/shell/hooks/hooks.json')     # the hooks before the pm-kit-hooks plugin
         with tempfile.TemporaryDirectory() as root:
             for rel in left:
                 os.makedirs(os.path.join(root, os.path.dirname(rel)))
@@ -181,11 +182,11 @@ class Manifests(unittest.TestCase):
         self.assertEqual((plugin['name'], plugin['version']), (kit['name'], kit['version']))
         # The manifest the export writes at .codex-plugin/plugin.json: every path from the plugin
         # root, the export (no $schema and no extensions: the live Codex refuses that form).
-        self.assertEqual(sorted(plugin), ['description', 'hooks', 'mcpServers', 'name', 'skills', 'version'])
+        # No hooks: they are the separate plugin pm-kit-hooks (hosts/codex/shell/hooks-plugin).
+        self.assertEqual(sorted(plugin), ['description', 'mcpServers', 'name', 'skills', 'version'])
         self.assertEqual(plugin['skills'], './content/skills/')
-        self.assertEqual(plugin['hooks'], './hosts/codex/shell/hooks/hooks.json')
         self.assertEqual(plugin['mcpServers'], './hosts/codex/shell/mcp.json')
-        for key in ('skills', 'hooks', 'mcpServers'):
+        for key in ('skills', 'mcpServers'):
             self.assertTrue(os.path.exists(os.path.join(ROOT, *plugin[key][2:].strip('/').split('/'))), key)
         # Codex starts a plugin's MCP server in its cache copy and expands no ${PLUGIN_ROOT}.
         servers = json.loads(files[cc.MCP_REL])
@@ -195,21 +196,21 @@ class Manifests(unittest.TestCase):
             self.assertEqual(server['args'], ['hosts/codex/shell/mcp/' + script])
             self.assertEqual(server['cwd'], '.')
             self.assertTrue(os.path.isfile(os.path.join(ROOT, *server['args'][0].split('/'))))
-        hooks = json.loads(files[cc.HOOKS_REL])['hooks']
+        self.assertFalse([p for p in files if '/hooks' in p[len(cc.SHELL_REL):]], 'no hooks file is rendered')
+        hooks = cc.renderer().hooks()['hooks']
         self.assertEqual(sorted(hooks), sorted(registry.host('codex').capabilities.hook_events))
         for event, groups in hooks.items():
-            self.assertEqual(groups[0]['hooks'][0]['command'], 'pythonw "${PLUGIN_ROOT}/boot/hook.py" codex ' + event)
+            self.assertEqual(groups[0]['hooks'][0]['command'], 'pythonw "${PLUGIN_ROOT}/pm_kit_hook.py" codex ' + event)
 
     def test_the_linux_hooks_are_one_posix_shell_line_each(self):
         """hooks.linux.json: the same events, matchers, timeout and status as hooks.json, each command
-        /bin/sh running python3 on the plugin's hook entry; the guard's exits 2 when python3 fails
+        /bin/sh running python3 on the hooks plugin's stub; the guard's exits 2 when python3 fails
         (the guard-error deny), a start event's prints the did-not-load line."""
-        files = cc.renderer().manifests(kcontent.load_kit(ROOT), kcontent.load(ROOT))
-        self.assertEqual(cc.hooks_rel('linux'), 'hosts/codex/shell/hooks/hooks.linux.json')
-        windows = json.loads(files[cc.HOOKS_REL])['hooks']
-        linux = json.loads(files[cc.hooks_rel('linux')])['hooks']
+        self.assertEqual(cc.hooks_rel('linux'), 'hosts/codex/shell/hooks-plugin/hooks/hooks.linux.json')
+        windows = cc.renderer().hooks(platform='windows')['hooks']
+        linux = cc.renderer().hooks(platform='linux')['hooks']
         self.assertEqual(sorted(linux), sorted(windows))
-        script = ' kit-hook "${PLUGIN_ROOT}/boot/hook.py" codex '
+        script = ' kit-hook "${PLUGIN_ROOT}/pm_kit_hook.py" codex '
         start = ("/bin/sh -c 'python3 \"$@\" || echo \"PM kit: the kit did not load: python3 failed or is not "
                  "on PATH (exit $?)\"'")
         for event, groups in windows.items():
