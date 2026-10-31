@@ -38,11 +38,12 @@
   gate.py stop RUN [-C DIR]
       end gate run RUN (the r-... id on its held line and in machine_lock.py status): only its
       own process tree and lock; 0 stopped or already gone, 1 could not end it, 4 refused: not a
-      gate run, another session's, or a landing's, which it never touches (kitlib.gate.stop;
-      docs/gate.md "Stopping a gate"). The gate it stops exits 13 with a `stopped` result record
+      gate run, another session's, or a landing's (a load node's land gate shows as none on the
+      node: kitlib.gate.stop; docs/gate.md "Stopping a gate"). The gate it stops exits 16 with a
+      `stopped` result record
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.gate, prints and exits.
-Exit codes (kitlib.gate): 0 OK, 1 FAILED, 2 USAGE, 3 STUCK, 4 REFUSED, 5 BUSY, 13 STOPPED; 9
+Exit codes (kitlib.gate): 0 OK, 1 FAILED, 2 USAGE, 3 STUCK, 4 REFUSED, 5 BUSY, 16 STOPPED; 9
 LANDED_UNGATED is retired (no landing gives it); a machine lock refusal passes its own code
 through (6, 8, 10, 11, 12); 130 Ctrl+C.
 """

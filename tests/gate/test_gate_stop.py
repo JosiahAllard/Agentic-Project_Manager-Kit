@@ -517,6 +517,8 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(G.NAMES[G.STOPPED], 'STOPPED')
         self.assertEqual(result.verdict_of(G.STOPPED), 'stopped')
         self.assertNotIn(G.STOPPED, (6, 7, 8, 10, 11, 12, 130))         # the lock's and wait-result's
+        self.assertNotIn(G.STOPPED, (9, 13, 14, 15))                    # a load node's: node.py gate
+                                                                        # passes a gate's code on
 
     def test_a_stopped_summary_is_the_verdict_line(self):
         out = runner.stopped_outcome('gate run r was stopped', 'logs-here')

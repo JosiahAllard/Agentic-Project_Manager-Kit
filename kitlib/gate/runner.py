@@ -676,8 +676,9 @@ def stopped_outcome(what, log_dir=None, base=None):
 def book_refusal(e, log_dir=None, base=None):
     """The Outcome of a LockError from a gate's own booking: lock_refusal's, but a stop of the run
     while it waited is STOPPED. The lock's code for that is 1, the same as for a command it could
-    not start, so its words tell them apart (CANCELLED_WAITING). A landing's booking stays with
-    lock_refusal."""
+    not start, so its words tell them apart (CANCELLED_WAITING). A landing's booking on main
+    (Lander.book_slot) stays with lock_refusal; a load node's land gate books here, as a plain gate
+    (kitlib.gate.stop)."""
     if CANCELLED_WAITING in (e.message or ''):
         return stopped_outcome('the gate was stopped while it waited for the machine lock',
                                log_dir, base)

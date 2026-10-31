@@ -10,7 +10,8 @@ comes from its lock record alone, and nothing is ended that the record does not 
                              (priority, resource, note), a run under a landing's process (the
                              record's ancestors, parent), a running land record of its process, or
                              the holder of the landing lock of -C's repository. A landing's lock
-                             is never broken here, and one that cannot be read is held
+                             is never broken here, and one that cannot be read is held. A load
+                             node's land gate shows none of these on the node (below)
   another session's          the lock's own rule (api.end_run): the owner, or the agent session
                              the record's ancestors show it belongs to; refused otherwise
   ended, or its process gone ALREADY GONE, exit 0, what is left of it settled: a dead run's lock
@@ -25,6 +26,10 @@ process.terminate_verified, which ends a pid only if its creation time is still 
 judged on the handle it kills through: never by name, never a recycled pid. Its job closes with
 it, which ends the tree; a process that left the job is named and never ended. The lock's reap
 then frees the run, and the result record is finished `stopped` from here (result.finish_stopped).
+
+The landing checks see this machine only. kitlib.loadnode.landgate.land_gate runs runner.merged_gate
+with no slot and no book_kw, so on a load node a land job's merged gate is a plain gate run: a stop
+run there ends it, and main reports NOT LANDED with nothing pushed.
 
 `stop_run` is the whole of it. It says nothing but through `say`, and never exits. Exit codes: OK
 (stopped, or already gone), FAILED (it could not be ended), USAGE (no run id), REFUSED (nothing was
@@ -67,7 +72,8 @@ def _until(done, wait_s):
 
 
 def is_landing(rec):
-    """True for a landing's own lock run: only kitlib.gate.land.Lander.book_slot books these."""
+    """True for a landing's own lock run on this machine: only kitlib.gate.land.Lander.book_slot
+    books these. A load node's land gate books none of these marks (the module docstring)."""
     return (rec.get('priority') == 'land' or bool(rec.get('resource'))
             or str(rec.get('note') or '').startswith('landing:'))
 
