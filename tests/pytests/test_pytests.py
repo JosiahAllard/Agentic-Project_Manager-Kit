@@ -1221,10 +1221,34 @@ class Select(Repo):
         self.assertEqual(code, 0)
         self.assertEqual(run.call_args[0][0], ['test_lib.T'])
 
-    def test_the_merged_flag_selects_all_for_a_tools_change(self):
+    def test_the_merged_flag_adds_the_whole_tree_classes_not_every_module(self):
+        # A landing's merged gate: the change's own selection plus the whole_tree classes, not ALL.
+        self.write_config({'tool_tests': {'whole_tree': {'test_other.O': 'reads the whole tree'}}})
         code, lines, _ = self.main('--select', '--plan', '--merged', '--changed', 'tools/lib.py')
         self.assertEqual(code, 0)
-        self.assertIn('on a merged branch', lines[0])
+        self.assertEqual(lines, ['pytests: 1 changed path(s) -> 1 test module(s) + 1 whole-tree '
+                                 'class(es) (merged)', 'pytests: test_lib test_other.O'])
+
+    def test_a_landing_merge_selects_over_base_to_merge(self):
+        # The landing tree: HEAD is the merge of a branch into main, --base is main before it. A
+        # tool main added since the branch forked (unmapped: ALL if it were read) is not in the
+        # change list; the branch's lib.py is, and its test runs with the whole_tree class.
+        self.write_config({'tool_tests': {'whole_tree': {'test_other.O': 'reads the whole tree'}}})
+        r = self.repo
+        r.commit('tools', '.kit.json', 'tools')
+        r.git('checkout', '-q', '-b', 'topic')
+        r.write('tools/lib.py', 'X = 2\n')
+        r.commit('branch', 'tools/lib.py')
+        r.git('checkout', '-q', 'main')
+        r.write('tools/side.py', 'Y = 1\n')
+        base = r.commit('main moved', 'tools/side.py')
+        r.git('merge', '-q', '--no-ff', '-m', 'Merge topic', 'topic')
+        code, lines, _ = self.main('--select', '--plan', '--merged', '--base', base)
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(lines, ['pytests: 1 changed path(s) -> 1 test module(s) + 1 whole-tree '
+                                 'class(es) (merged)', 'pytests: test_lib test_other.O'])
+        code, lines, _ = self.main('--select', '--plan', '--base', base + '~1')   # side.py read
+        self.assertEqual(lines[0], 'pytests: full suite: nothing maps tools/side.py to a test')
 
     def test_the_tools_dir_is_the_checkouts(self):
         os.rename(os.path.join(self.root, 'tools'), os.path.join(self.root, 'scripts'))
