@@ -270,20 +270,25 @@ def chain_host(chain, names, hosts=None):
 
 
 
-def booking_hosts(pairs, snap=None, hosts=None, ctime=None):
+def booking_hosts(pairs, snap=None, hosts=None, live=None):
     """[[pid, ctime]] of the agent hosts among pairs ([pid, ctime], a run's ancestors at its
     booking, run.run_ancestors): each one the process listing (snap, default process.snapshot())
-    names as an agent host image (hosts, default agent_hosts()) and still made at that time
-    (ctime, default process.proc_ctime). The stale-run reap reads them (kitlib.lock.stale): a run
-    all of whose hosts are gone has lost the sessions that booked it. [] when there is none, and
-    when the listing or the host registry cannot be read: such a run is never taken as stale."""
+    names as an agent host image (hosts, default agent_hosts()). The stale-run reap reads them
+    (kitlib.lock.stale): a run all of whose hosts are gone has lost the sessions that booked it.
+    Every one must be live at booking (live, default wrapper_state, is True): the ancestor walk
+    can end at an exited process that can still be opened, and a host already gone at booking
+    would make the run stale while its agent lives. So [] when any is not surely live, when there
+    is none, and when the listing or the host registry cannot be read: such a run is never taken
+    as stale."""
     try:
         snap = process.snapshot() if snap is None else snap
         hosts = agent_hosts() if hosts is None else hosts
-        ctime = process.proc_ctime if ctime is None else ctime
+        live = wrapper_state if live is None else live
         names = {int(p): (n or "").lower() for p, _pp, n in snap}
-        return sorted([int(p), int(c)] for p, c in pairs
-                      if names.get(int(p)) in hosts and ctime(int(p)) == int(c))
+        found = sorted([int(p), int(c)] for p, c in pairs if names.get(int(p)) in hosts)
+        if any(live(p, c) is not True for p, c in found):
+            return []
+        return found
     except Exception:
         return []
 
@@ -401,6 +406,28 @@ def write_json(path, data, replace_s=2.0):
                     os.remove(tmp)
                 raise
             time.sleep(0.05)
+
+
+def create_json(path, data):
+    """Writes path only when nothing is there: a temp file moved into place by a move that fails
+    when path exists (os.rename on Windows; os.link elsewhere), so a reader never sees it half
+    written and a file another process wrote first is never replaced. True when written, False
+    when path was already there."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = "%s.%d.new.tmp" % (path, os.getpid())
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(data, f, indent=1)
+    try:
+        if os.name == "nt":
+            os.rename(tmp, path)
+        else:
+            os.link(tmp, path)
+        return True
+    except FileExistsError:
+        return False
+    finally:
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
 
 
 def read_json(path):

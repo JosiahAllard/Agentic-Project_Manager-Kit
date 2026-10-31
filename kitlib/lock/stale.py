@@ -9,14 +9,17 @@ A run is stale when all of these hold (reason):
     them is surely gone (store.hosts_gone): none live, none that cannot be told;
   - it has held for longer than max(stale_scale x guide, guide + stale_min_s), the guide being
     the larger of its `expect_s` and its kind's `warn_s`;
-  - it is not detached, unless INCLUDE_DETACHED.
-A record with no `hosts` (the owner's own runs, runs booked before hosts were recorded) is never
-stale.
+  - it is not detached, unless INCLUDE_DETACHED;
+  - its `role` is not "owner".
+A record with no `hosts` (the owner's own runs, runs booked before hosts were recorded, a run one
+of whose hosts was not surely live at booking) is never stale.
 
 reap(store, stop) is called by a booking (kitlib.lock.run.acquire) after its first look at the
 queue and then every stale_check_s while it waits. It runs under the store's "reap" mutex, taken
 without waiting (a booking that does not get it skips that pass), re-reads each record there and
-writes the run's own stop request (by "lock", with `why`), never over one already there. The
+writes the run's own stop request (by "lock", with `why`), never over one already there: the
+file is created only when none is there (store.create_json), so an owner's stop made between the
+look and the write is kept. The
 run's wrapper then ends its own tree as for any stop (Slot.wait), so nothing here signals or ends
 a process. The lock-window notice folder gets a stale notice (notice.stale). A wrapper that never
 looks at its stop file (it is hung itself) is not escalated: its slots stay held until it dies,
@@ -55,6 +58,8 @@ def reason(store, rec, now=None):
         return None
     if rec.get("background") or rec.get("releasing"):
         return None
+    if rec.get("role") == "owner":          # the owner's own run is never the lock's to end
+        return None
     if rec.get("detached") and not INCLUDE_DETACHED:
         return None
     due = due_after_s(rec, store.settings)
@@ -86,32 +91,41 @@ def _records(store):
 
 
 def reap(store, stop):
-    """Asks every stale run to stop: stop(store, id, BY, None, why=reason) (run.request_stop),
-    says so and writes the stale notice. Returns the ids it asked. A pass whose "reap" mutex is
-    held elsewhere does nothing. Never raises an OSError."""
+    """Asks every stale run to stop: stop(store, id, BY, None, why=reason, exclusive=True)
+    (run.request_stop, which writes only when no stop request is there), says so and writes the
+    stale notice. Returns the ids it asked. A pass whose "reap" mutex is held elsewhere does
+    nothing; an OSError on one record skips that record. Never raises an OSError."""
     asked = []
     try:
         with store.lock("reap", 0):
             for rec in _records(store):
-                rid = rec["id"]
-                if reason(store, rec) is None:
+                try:
+                    if _reap_one(store, stop, rec):
+                        asked.append(rec["id"])
+                except OSError:
                     continue
-                if os.path.exists(store.path("active", rid + ".stop")):
-                    continue
-                if not store.run_live(rec):
-                    continue
-                again, _there = read_record(store.path("active", rid + ".json"))
-                if not isinstance(again, dict) or (again.get("pid"), again.get("ctime")) != (
-                        rec.get("pid"), rec.get("ctime")):
-                    continue
-                why = reason(store, again)
-                if why is None or not stop(store, rid, BY, None, why=why):
-                    continue
-                asked.append(rid)
-                store.say("the lock ends stale run %s (%s/%s, %s): %s; it asked the run to stop, "
-                          "and its wrapper ends its process tree" % (
-                              rid, again.get("repo"), again.get("slug"), again.get("kind"), why))
-                notice.stale(store, again, why)
     except OSError:
         pass
     return asked
+
+
+def _reap_one(store, stop, rec):
+    rid = rec["id"]
+    if reason(store, rec) is None:
+        return False
+    if os.path.exists(store.path("active", rid + ".stop")):
+        return False
+    if not store.run_live(rec):
+        return False
+    again, _there = read_record(store.path("active", rid + ".json"))
+    if not isinstance(again, dict) or (again.get("pid"), again.get("ctime")) != (
+            rec.get("pid"), rec.get("ctime")):
+        return False
+    why = reason(store, again)
+    if why is None or not stop(store, rid, BY, None, why=why, exclusive=True):
+        return False
+    store.say("the lock ends stale run %s (%s/%s, %s): %s; it asked the run to stop, and its "
+              "wrapper ends its process tree" % (
+                  rid, again.get("repo"), again.get("slug"), again.get("kind"), why))
+    notice.stale(store, again, why)
+    return True

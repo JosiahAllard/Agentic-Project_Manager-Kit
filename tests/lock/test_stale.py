@@ -101,6 +101,9 @@ class NeverReaped(Base):
         # guide 600 s: 3 x 600 = 1800 s, but guide + 3600 s = 4200 s is the larger.
         self.assert_kept(warn_s=None, expect_s=600, held_since=ago(3000))
 
+    def test_an_owner_run(self):
+        self.assert_kept(role="owner")
+
     def test_a_waiting_run(self):
         self.assert_kept(state="waiting")
 
@@ -204,13 +207,49 @@ class Races(Base):
         self.stale_record()
         real = rm.request_stop
 
-        def gone_first(store, rid, by, session=None, why=None):
+        def gone_first(store, rid, by, session=None, **kw):
             os.remove(store.path("active", rid + ".json"))
-            return real(store, rid, by, session, why=why)
+            return real(store, rid, by, session, **kw)
 
         self.assertEqual(stale.reap(self.store, gone_first), [])
         self.assertIsNone(self.stop_of())
         self.assertEqual(self.notices(), [])
+
+    def test_an_owner_stop_made_after_the_look_is_kept(self):
+        self.stale_record()
+        real = rm.request_stop
+
+        def owner_first(store, rid, by, session=None, **kw):
+            self.assertTrue(real(store, rid, "the owner", "sess-o"))
+            return real(store, rid, by, session, **kw)
+
+        self.assertEqual(stale.reap(self.store, owner_first), [])
+        self.assertEqual(self.stop_of()["by"], "the owner")
+        self.assertEqual(self.notices(), [])
+        self.assertFalse(any("ends stale run" in s for s in self.said))
+
+    def test_the_locks_stop_never_replaces_one_there(self):
+        self.stale_record()
+        self.assertTrue(rm.request_stop(self.store, RID, "the owner", "sess-o"))
+        self.assertFalse(rm.request_stop(self.store, RID, stale.BY, None, why="w", exclusive=True))
+        self.assertEqual(self.stop_of()["by"], "the owner")
+        left = [n for n in os.listdir(self.store.path("active")) if n.endswith(".tmp")]
+        self.assertEqual(left, [])
+
+    def test_an_error_on_one_run_skips_only_that_run(self):
+        other = "r-20261031T000001Z-57a1e1"
+        self.stale_record()
+        self.stale_record(rid=other)
+        real = rm.request_stop
+
+        def first_fails(store, rid, by, session=None, **kw):
+            if rid == RID:
+                raise OSError("disk")
+            return real(store, rid, by, session, **kw)
+
+        self.assertEqual(stale.reap(self.store, first_fails), [other])
+        self.assertIsNone(self.stop_of())
+        self.assertEqual(self.stop_of(other)["by"], stale.BY)
 
     def test_a_stray_stop_is_pruned(self):
         os.makedirs(self.store.path("active"), exist_ok=True)
@@ -242,13 +281,38 @@ class Races(Base):
 
 
 class Recorded(Base):
-    def test_booking_hosts_names_only_live_agent_hosts(self):
-        snap = [(10, 1, "cmd.exe"), (20, 10, "Claude.exe"), (30, 20, "claude.exe")]
-        ct = {20: 200, 30: 999}.get
-        self.assertEqual(store_mod.booking_hosts([(10, 100), (20, 200), (30, 300)], snap,
-                                                 frozenset({"claude.exe"}), ct), [[20, 200]])
-        self.assertEqual(store_mod.booking_hosts([(10, 100)], snap, frozenset({"claude.exe"}), ct),
+    SNAP = [(10, 1, "cmd.exe"), (20, 10, "Claude.exe"), (30, 20, "claude.exe")]
+    HOSTS = frozenset({"claude.exe"})
+
+    def booked(self, pairs, states):
+        return store_mod.booking_hosts(pairs, self.SNAP, self.HOSTS,
+                                       lambda p, c: states.get((p, c)))
+
+    def test_booking_hosts_names_only_agent_hosts(self):
+        live = {(20, 200): True, (30, 300): True}
+        self.assertEqual(self.booked([(10, 100), (30, 300), (20, 200)], live),
+                         [[20, 200], [30, 300]])
+        self.assertEqual(self.booked([(10, 100)], live), [])
+
+    def test_booking_hosts_with_a_host_gone_at_booking_is_empty(self):
+        self.assertEqual(self.booked([(20, 200), (30, 300)], {(20, 200): True, (30, 300): False}),
                          [])
+
+    def test_booking_hosts_with_a_host_that_cannot_be_told_is_empty(self):
+        self.assertEqual(self.booked([(20, 200), (30, 300)], {(20, 200): True}), [])
+
+    def test_booking_hosts_drops_an_exited_ancestor_that_still_opens(self):
+        # The ancestor walk can end at an exited process that can still be opened (this test
+        # holds its handle): named as a host, it would make the run stale from its booking.
+        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        ct = process.proc_ctime(p.pid)
+        p.kill()
+        p.wait()
+        me = [os.getpid(), process.own_ctime()]
+        snap = [(p.pid, me[0], "node.exe"), (me[0], 1, "node.exe")]
+        hosts = frozenset({"node.exe"})
+        self.assertEqual(store_mod.booking_hosts([me], snap, hosts), [me])
+        self.assertEqual(store_mod.booking_hosts([[p.pid, ct], me], snap, hosts), [])
 
     def test_booking_hosts_that_cannot_read_the_listing_is_empty(self):
         def broken():

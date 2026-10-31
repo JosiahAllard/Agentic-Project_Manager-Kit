@@ -45,9 +45,9 @@ from kitlib.lock import notice
 from kitlib.lock import site
 from kitlib.lock import stale
 from kitlib.lock.store import (EXIT_BUSY, EXIT_HOLD, EXIT_REQUIRE, EXIT_RESERVED, EXIT_TIMEOUT,
-                               EXIT_USAGE, LockError, Store, booking_hosts, caller, iso,
-                               local_text, new_id, parse_iso, read_record, remove, session_of,
-                               tree_role, utc_now, write_json)
+                               EXIT_USAGE, LockError, Store, booking_hosts, caller, create_json,
+                               iso, local_text, new_id, parse_iso, read_record, remove,
+                               session_of, tree_role, utc_now, write_json)
 from kitlib.platform.linux import process as procfs
 from kitlib.proc import bash, cpu, daemons, process, win32, winwatch
 from kitlib.proc.job import Job, JobError, cores_text
@@ -2029,16 +2029,22 @@ def expected_end(since, expect_s, max_s=10 * 365 * 86400):
         return None
 
 
-def request_stop(store, rid, by, session=None, why=None):
+def request_stop(store, rid, by, session=None, why=None, exclusive=False):
     """Writes run rid's stop request (active/<id>.stop: {by_pid, at, by, session}, and why when
     given; session is the asker's session id or None, why the stale-run reap's reason,
-    kitlib.lock.stale). False when no such run is live."""
+    kitlib.lock.stale). exclusive (the stale-run reap's) writes it only when no request is there
+    (create_json), so one made at the same moment is never written over. False when no such run
+    is live, or with exclusive when a request was already there."""
     if not os.path.exists(store.path("active", rid + ".json")):
         return False
     doc = {"by_pid": os.getpid(), "at": iso(), "by": by, "session": session}
     if why:
         doc["why"] = why
-    write_json(store.path("active", rid + ".stop"), doc)
+    if exclusive:
+        if not create_json(store.path("active", rid + ".stop"), doc):
+            return False
+    else:
+        write_json(store.path("active", rid + ".stop"), doc)
     store.bump()
     return True
 
