@@ -410,18 +410,18 @@ def write_json(path, data, replace_s=2.0):
 
 def create_json(path, data):
     """Writes path only when nothing is there: a temp file moved into place by a move that fails
-    when path exists (os.rename on Windows; os.link elsewhere), so a reader never sees it half
-    written and a file another process wrote first is never replaced. True when written, False
-    when path was already there."""
+    when path exists, so a reader never sees it half
+    written and a file another process wrote first is never replaced (os.rename on Windows; os.link
+    on Linux). True when written, False when path was already there."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = "%s.%d.new.tmp" % (path, os.getpid())
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         json.dump(data, f, indent=1)
     try:
-        if os.name == "nt":
-            os.rename(tmp, path)
-        else:
+        if kitlib.platform.NAME == "linux":
             os.link(tmp, path)
+        else:
+            os.rename(tmp, path)
         return True
     except FileExistsError:
         return False
