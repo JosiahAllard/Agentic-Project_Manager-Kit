@@ -996,14 +996,11 @@ class Lander(object):
           once    when the base sets "landing".gate_once (docs/gate.md "Gate once at landing"),
                   a default-mode record lands whatever "gate".smoke_steps and "landing".shared_paths
                   say: only a strict path (strict_refusal, before the docs route) or a gate config
-                  file refuses it, as the merged gate runs --full (once_escalate)."""
-        gate = self.cfg.section('gate')
-        smoke = list(gate.get('smoke_steps') or [])
-        shared = self.cfg.section('landing').get('shared_paths')
-        once = self.gate_once()
-        if not once and not smoke and not S.docs_steps(gate) and shared is None:
-            return ('the base %s sets no "gate".smoke_steps or "gate".docs_only, so only a --full '
-                    'record lands' % self.expect_main[:10])
+                  file refuses it, as the merged gate runs --full (once_escalate).
+        The checks of the landing diff alone, in this order, are diff_refusal's."""
+        why = self.no_route_refusal()
+        if why:
+            return why
         mb, why = refs.merge_base(tip, self.expect_main, self.root)
         if not mb:
             return 'git cannot find the merge base of the tip and %s: %s' % (
@@ -1024,6 +1021,32 @@ class Lander(object):
                                           self.expect_main[:10]))
         passed = {s.get('name') for s in rec.get('steps') or []
                   if isinstance(s, dict) and s.get('result') in ('pass', 'warn', 'reused')}
+        return self.diff_refusal(changed, mode, passed)
+
+    def no_route_refusal(self):
+        """Why the base's config takes no record that is not --full, whatever the tip changes, or
+        None: it sets none of "gate".smoke_steps, "gate".docs_only, "landing".shared_paths and
+        "landing".gate_once."""
+        gate = self.cfg.section('gate')
+        if (not self.gate_once() and not gate.get('smoke_steps') and not S.docs_steps(gate)
+                and self.cfg.section('landing').get('shared_paths') is None):
+            return ('the base %s sets no "gate".smoke_steps or "gate".docs_only, so only a --full '
+                    'record lands' % self.expect_main[:10])
+        return None
+
+    def diff_refusal(self, changed, mode, passed):
+        """select_refusal's checks of the landing diff `changed` for a record of `mode` ("select"
+        or "docs") whose passed steps are the names `passed`, in select_refusal's order: None, or
+        why such a record does not land it. `passed` None (full_needed: a plain gate not yet run)
+        skips the two checks of which steps passed, so only what the diff and the base's config
+        decide is left."""
+        why = self.no_route_refusal()
+        if why:
+            return why
+        gate = self.cfg.section('gate')
+        smoke = list(gate.get('smoke_steps') or [])
+        shared = self.cfg.section('landing').get('shared_paths')
+        once = self.gate_once()
         if once:                        # before the docs-only route: a docs record too
             why = self.strict_refusal(changed, '"landing".gate_once')
             if why:
@@ -1033,6 +1056,8 @@ class Lander(object):
             if why:
                 return why
         if reuse.docs_only_change(self.cfg, gate, changed):
+            if passed is None:
+                return None
             missing = [n for n in S.docs_steps(gate) if n not in passed]
             if not missing:
                 return None
@@ -1047,7 +1072,7 @@ class Lander(object):
         if hit:
             return 'the tip changes the gate\'s config (%s), which only a --full record lands' % (
                 ', '.join(hit[:5]))
-        missing = [] if once else [n for n in smoke if n not in passed]
+        missing = [] if once or passed is None else [n for n in smoke if n not in passed]
         if missing:
             return 'the base\'s smoke step %s did not pass in it' % ', '.join(missing)
         return None
@@ -2835,6 +2860,33 @@ def land(root, branch, expect_main, expect_tip, **kw):
     Outcome (OK, FAILED, USAGE, STUCK, REFUSED, BUSY, or a machine lock code when the booking was
     refused; LANDED_UNGATED is retired, never returned)."""
     return Lander(root, branch, expect_main, expect_tip, **kw).run()
+
+
+def full_needed(root, cfg, base, changed, docs):
+    """Whether a branch whose landing diff is `changed` must end on `gate.py --full` (docs/gate.md
+    "The final gate"), for the plain branch gate's FULL NEEDED line: `(reason, None)` when it must,
+    `(None, None)` when its default-mode record (`docs` True: its docs-only one) would land, or
+    `(None, why)` when that cannot be told. `cfg` is the base's config and `base` the base commit,
+    as a landing reads them. The reason is Lander.diff_refusal's, the tip check's own (steps that
+    passed aside, as the gate has not run them yet), or else a changed strict path: the procedure
+    ends a strict branch on --full even where the record check takes its default-mode record (the
+    merged gate runs --full --fresh; Strict paths). Reads only."""
+    lander = Lander(root, [], None, [])
+    lander.cfg, lander.expect_main = cfg, base
+    why = lander.diff_refusal(changed, 'docs' if docs else 'select', None)
+    if why:
+        return why, None
+    globs, why = lander.strict_globs()
+    if globs is None:
+        return None, 'cannot read the strict paths from %s at %s: %s' % (
+            cfg.main_branch, base[:10], why)
+    hits = [p for p in reuse.changed_list(changed) if S._match(p, globs)]
+    if hits:
+        more = len(hits) - STRICT_SHOWN
+        return ('the tip changes strict path %s%s, and a strict branch ends on --full (docs/gate.md '
+                '"Strict paths")' % (', '.join(hits[:STRICT_SHOWN]),
+                                     ' and %d more' % more if more > 0 else ''), None)
+    return None, None
 
 
 def check_strict(root, branches):

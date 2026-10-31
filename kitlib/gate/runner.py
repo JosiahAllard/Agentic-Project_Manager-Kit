@@ -74,6 +74,10 @@ NO_STEP_FULL = ('REFUSED: no gate step selected: every step in the "gate".steps 
                 'and that no other step\'s skip_if_selected names')
 NO_CHECKS = ('GATE OK (auto-detected: no stack found, so NO checks ran; give the gate steps with a '
              '"gate" section in .kit.json or tools/gate.json)')
+# full_hint: a plain gate's line when its tip must end on --full, or when that cannot be told
+FULL_NEEDED = ('FULL NEEDED: %s; so this tip\'s final gate is gate.py -C %s --full (docs/gate.md '
+               '"The final gate")')
+FULL_UNKNOWN = 'NOTE: cannot tell whether this tip needs a final --full gate: %s'
 PROBE_TIMEOUT = 60      # seconds a `requires` probe argv may take
 CANCELLED_WAITING = 'was cancelled by stop while it waited'     # kitlib.lock.run's LockError text
 # A console window the gate's run opened (window_results): False, it warns; True, it fails the
@@ -274,6 +278,24 @@ def default_base(cfg, root):
         return ref, note
     return None, 'neither %s/%s nor %s resolves: pass --base' % (cfg.remote, cfg.main_branch,
                                                                   cfg.main_branch)
+
+
+def full_hint(top, base, changed, docs):
+    """The line a plain branch gate (no --full, --only or other --base) adds when the checkout
+    `top`'s change `changed` must end on --full (docs/gate.md "The final gate"; kitlib.gate.land
+    full_needed, read from the config at the base commit `base`, as a landing reads it): FULL_NEEDED,
+    or FULL_UNKNOWN when that cannot be told; None when the change needs no --full. `docs`: the
+    gate runs only the docs-only steps. Never raises: the hint never fails the gate."""
+    try:
+        from kitlib.gate import land    # land imports this module
+        reason, why = land.full_needed(top, kconfig.load_at(top, base), base, changed, docs)
+    except Exception as e:          # noqa: BLE001 - the hint never fails or stops the gate
+        reason, why = None, '%s: %s' % (type(e).__name__, e)
+    if reason:
+        return ascii_line(FULL_NEEDED % (reason, top))
+    if why:
+        return ascii_line(FULL_UNKNOWN % why)
+    return None
 
 
 # ---------------------------------------------------------------- running steps
@@ -753,6 +775,8 @@ def _branch_gate(root, base=None, full=False, only=None, plan=False, slug=None, 
     out = _gate_checkout(top, cfg, seen, base=base, full=full, only=only, plan=plan, slug=slug,
                          log_dir=log_dir, say=say, book_kw=book_kw, known=known)
     out.facts['source'] = seen[0].source
+    if out.facts.get('full_hint'):
+        out.lines.append(out.facts['full_hint'])
     out.lines.append(detect.label(seen[0]))
     return out
 
@@ -818,6 +842,7 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     docs = not (full or only or empty) and reuse.docs_only_change(cfg, gate, changed)
     if docs:
         say('a docs-only change: only the "docs_only" steps run (docs/gate.md "Docs-only changes")')
+    hint = None if (full or only or partial) else full_hint(top, base_sha, changed, docs)
     try:
         all_steps = S.build(gate, top, mb, cfg.tools_dir, full=full)
         chosen, picked = S.select(gate, all_steps, changed, full=full, only=only,
@@ -829,7 +854,7 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     base_text = '%s (merge base with %s)' % (mb[:10], base)
     if plan:
         return G.Outcome(G.OK, plan_lines(chosen, picked, all_steps, base_text, changed),
-                         chosen=[s.name for s in chosen])
+                         chosen=[s.name for s in chosen], full_hint=hint)
     if not chosen and not empty:
         text = NO_STEP_FULL if full and not only else NO_STEP % len(changed)
         return G.Outcome(G.REFUSED, [text], record=None,
@@ -876,7 +901,7 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     ok, line = verdict(results, empty)
     lines = [line, 'logs: %s' % logs]
     facts = dict(verdict=line, results=results, record=None, no_record=None, head=head, base=mb,
-                 log_dir=logs, changed=changed, windows=watched.get('windows'))
+                 log_dir=logs, changed=changed, windows=watched.get('windows'), full_hint=hint)
     if not ok:
         facts['no_record'] = 'the gate failed'
         if full and not only and not partial and not empty:
