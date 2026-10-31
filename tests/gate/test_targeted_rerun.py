@@ -58,12 +58,12 @@ GATE = {'steps': [
      'pass': '^OK'},
     {'name': 'after', 'always': True, 'cmd': AFTER, 'pass': '^ok$'}]}
 
-# A retribution gate's gradle step log, red on one test (2026-10-28), cut down and its worktree
+# A repository gate's gradle step log, red on one test (2026-10-28), cut down and its worktree
 # path dropped: the class is a simple name, the method a display name, and no passing test shows.
 GRADLE_LOG = '''gate_tiers gradle: 31 changed path(s) against b857e2a660 (--all)
 gate_tiers: --- gradle-build: gradlew.bat build --offline --max-workers=4
 
-> Task :retribution-api:test
+> Task :app-api:test
 
 ApiLayeringTest > api.errand <-> api.movement import files stay at or under their ceilings FAILED
     org.opentest4j.AssertionFailedError at ApiLayeringTest.java:77
@@ -71,24 +71,24 @@ ApiLayeringTest > api.errand <-> api.movement import files stay at or under thei
 > Task :worker:assemble
 
 
-> Task :retribution-api:test
+> Task :app-api:test
 
 6000 tests completed, 1 failed
 
-> Task :retribution-api:test FAILED
+> Task :app-api:test FAILED
 > Task :worldmap:test
 
 FAILURE: Build failed with an exception.
 
 * What went wrong:
-Execution failed for task ':retribution-api:test'.
+Execution failed for task ':app-api:test'.
 > There were failing tests. See the report at: file:///build/reports/tests/test/index.html
 
 BUILD FAILED in 9m 27s
 81 actionable tasks: 47 executed, 34 up-to-date
 gate_tiers: --- gradle-build exited 1
-    test tasks: 7 ran, 0 FROM-CACHE, 1 UP-TO-DATE, 1 FAILED
-      FAILED     :retribution-api:test
+    test tasks: 7 ran, 1 UP-TO-DATE, 1 FAILED
+      FAILED     :app-api:test
 gate_tiers gradle: FAILED - gradle-build: exit 1
 '''
 GRADLE_GATE = {'steps': [
