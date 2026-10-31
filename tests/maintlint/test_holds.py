@@ -72,6 +72,24 @@ class Findings(unittest.TestCase):
                                   rec('BBB', summary='needs a live client', state='parked')), CMD)
         self.assertEqual(got, [])
 
+    def test_a_uses_line_answers_a_live_client_hit(self):
+        got = holds.findings(snap(priced('AAA', summary='two live runs', uses='dev-clone')), CMD,
+                             {'dev-clone': 1})
+        self.assertEqual(got, [])
+
+    def test_a_uses_line_does_not_answer_an_owner_hit(self):
+        got = holds.findings(snap(priced('AAA', summary='the owner go', uses='dev-clone')), CMD,
+                             {'dev-clone': 1})
+        self.assertEqual([f.key for f in got], ['AAA'])
+        self.assertNotIn('--uses', got[0].fix)
+
+    def test_the_fix_names_uses_when_the_repository_declares_resources(self):
+        records = snap(priced('AAA', summary='needs a live client'))
+        got = holds.findings(records, CMD, {'gpu': 1, 'dev-clone': 1})
+        self.assertIn('--on live-client', got[0].fix)
+        self.assertIn(CMD + ' set AAA --uses <dev-clone|gpu>', got[0].fix)
+        self.assertNotIn('--uses', holds.findings(records, CMD)[0].fix)
+
 
 if __name__ == '__main__':
     unittest.main()

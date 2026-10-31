@@ -540,6 +540,31 @@ class WholeRun(StoreCase):
         self.assertFalse(any(n.startswith('backlog NOT CHECKED') for n in res['notes']),
                          res['notes'])
 
+    def _lint_with_unreadable_resources(self, *records):
+        kit_json_ref(self.repo)
+        self.seed(*records)
+        broken = mock.PropertyMock(side_effect=maintlint.Refusal('resources config is broken'))
+        with mock.patch.object(type(maintlint.open_store(self.repo.root, fetch=False)), 'resources',
+                               broken):
+            return self.run_lint()
+
+    def test_the_uses_hint_needs_a_uses_line_in_the_store(self):
+        kit_json_ref(self.repo, {'backlog': {'resources': {'gpu': 1}}})
+        self.seed(priced('AAA', summary='needs a live client'))
+        res = self.run_lint()
+        fixes = [f['fix'] for f in res['findings'] if f['check'] == 'keyword-hold']
+        self.assertEqual(len(fixes), 1, res)
+        self.assertNotIn('--uses', fixes[0])
+
+    def test_no_uses_line_never_reads_the_resources_config(self):
+        res = self._lint_with_unreadable_resources(priced('AAA'))
+        self.assertFalse(any('backlog resources not read' in n for n in res['notes']), res['notes'])
+
+    def test_a_uses_line_with_an_unreadable_resources_config_gives_a_note(self):
+        res = self._lint_with_unreadable_resources(priced('AAA', uses='dev-clone'))
+        self.assertTrue(any('backlog resources not read: resources config is broken' in n
+                            for n in res['notes']), res['notes'])
+
     def test_in_a_pm_data_worktree_paths_are_read_in_the_code_checkout(self):
         kit_json_ref(self.repo)
         self.seed(priced('AAA'))

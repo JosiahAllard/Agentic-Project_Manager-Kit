@@ -328,7 +328,7 @@ def _set_options():
 
 OPTIONS = {
     'next': None, 'show': None, 'find': None, 'list': None, 'check': None, 'stale': None, 'landable': None,
-    'add': {'--summary': True, '--scope': True, '--effort': True, '--ref': True, '--reopen': False,
+    'add': {'--summary': True, '--scope': True, '--uses': True, '--effort': True, '--ref': True, '--reopen': False,
             '--found-on': True, '--why-not-folded': True, '--body-file': True},
     'set': None,                                # _set_options(), read when asked
     'block': {'--on': True, '--reason': True, '--owner-ask': True, '--until': True},

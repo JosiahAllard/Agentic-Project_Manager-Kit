@@ -69,6 +69,7 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `backlog.id_grammar` (upper|mixed, default "upper"): item id spelling
 - `backlog.code_main` (string): the branch code lands on, which `add --found-on` measures a branch's diff from; default repo.main_branch
 - `backlog.cap` (int >= 1, default 5): most records `backlog.py next` offers and `pull` takes in order (`next --cap` overrides it for one call); every worktree reads the main checkout's value
+- `backlog.resources` (map name -> int >= 1, default {}): limited resources and how many live pulls may use each at once: a record names one with `uses:`, and `next` passes it over at capacity (docs/backlog.md "Resources"); every worktree reads the main checkout's value
 - `board.state_file` (repo path): the board state file, under the git dir (default <git common dir>/kit/board-state.md)
 - `checkout_guard.rule_pointer` (string): where a refusal points for the rule
 - `commit.merge_fold` (bool, default false): commit.py folds a merge commit

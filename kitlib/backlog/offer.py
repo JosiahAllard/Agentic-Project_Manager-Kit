@@ -234,13 +234,59 @@ class Offer(object):
 
 class PassedOver(object):
     def __init__(self, rec, rank, why, blocker=None):
-        # `blocker`: `(who, record id)` of the live pull or other session's record whose scope
-        # this one collides with; None for any other reason (`blocker_summary` counts these).
+        # `blocker`: `(who, record id)` of the live pull or other session's record whose scope or
+        # resource this one collides with; None for any other reason (`blocker_summary` counts
+        # these).
         self.rec, self.rank, self.why, self.blocker = rec, rank, why, blocker
 
 
+# --- resources ------------------------------------------------------------------------------------
+
+def uses(rec):
+    """The record's `uses:` names, each once."""
+    return list(dict.fromkeys(rec.all('uses')))
+
+
+def live_label(rec):
+    return '%s (in flight on %s)' % (rec.id, rec.get('pulled_by') or '?')
+
+
+def resource_load(holding, capacity):
+    """`{name: [the live pulls of `holding` using it]}` for every name `capacity` declares. A name
+    it does not declare counts nothing (`check` flags it). One git-free pass, so `show` shares it
+    with the offer without computing one."""
+    load = {name: [] for name in capacity}
+    for rec in holding:
+        for name in uses(rec):
+            if name in load:
+                load[name].append(rec)
+    return load
+
+
+def capacity_why(name, limit, takers):
+    return 'resource %s at capacity %d, taken by %s' % (name, limit, ', '.join(takers))
+
+
+def undeclared_why(names):
+    return 'uses %s, which .kit.json does not declare' % ', '.join(names)
+
+
+def uses_line(rec, holding, capacity):
+    """`show`'s line: `uses dev-clone (1/1: X on B), gpu (0/1)`."""
+    load = resource_load(holding, capacity)
+    parts = []
+    for name in uses(rec):
+        if name not in capacity:
+            parts.append('%s (not declared in .kit.json)' % name)
+            continue
+        taken = ['%s on %s' % (r.id, r.get('pulled_by') or '?') for r in load[name]]
+        parts.append('%s (%d/%d%s)' % (name, len(taken), capacity[name],
+                                       ': %s' % ', '.join(taken) if taken else ''))
+    return 'uses %s' % ', '.join(parts)
+
+
 def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=None,
-               folded=None):
+               folded=None, capacity=None):
     """`((offers, passed), refusals, ranks)`. `holding` are the live pulls whose scopes are taken
     first. `cap` None offers every startable record (`next --all`), with the same pass-overs. `unmet(rec)` -> `[(member, why)]` gates `requires:`. Only records whose `session:`
     equals `session` are offered; another session's record takes its scope silently. A record
@@ -252,7 +298,14 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
     (kitlib/backlog/roles.py), takes scope a live pull holds.
     `folded(rec)` -> a reason or None: a record of `session` it gives a reason for (its scope
     folds into another live pull's branch, or git cannot tell) is passed over with that reason
-    and takes no scope; it is asked only of a record that would otherwise be offered."""
+    and takes no scope; it is asked only of a record that would otherwise be offered.
+    `capacity` ({resource: limit}; None: none declared) counts `uses:` the way scope is counted:
+    the live pulls of `holding` first, then, in rank order, the records offered above and other
+    sessions' records. A record with no room in any one of its resources is passed over, a live
+    pull named as its blocker; each record taking a place takes one unit of each. A seed is
+    measured against the live pulls alone. A candidate naming a resource `capacity` does not
+    declare is passed over, never offered and never a crash."""
+    capacity = capacity or {}
     ranks = ranked(snap)
     occupied = []
     for rec in holding:
@@ -280,6 +333,9 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
         for m in rec.all('scope'):
             holders.setdefault(m, ('%s (in flight on %s)' % (rec.id, rec.get('pulled_by') or '?'),
                                    (rec.get('pulled_by') or '?', rec.id)))
+    live_takers = {name: [(live_label(r), (r.get('pulled_by') or '?', r.id)) for r in recs]
+                   for name, recs in resource_load(holding, capacity).items()}
+    takers = {name: list(held) for name, held in live_takers.items()}
     for rec in ordered:
         reached.add(id(rec))
         rid = rec.id
@@ -309,6 +365,23 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
                                          'already taken%s' % (hit[0][0], hit[0][1], ' by %s'
                                          % holder if holder else ''), who))
             continue
+        names = uses(rec)
+        unknown = [n for n in names if n not in capacity]
+        if unknown:
+            if own(rec):
+                passed.append(PassedOver(rec, ranks.get(rid, '-'), undeclared_why(unknown)))
+            continue
+        # As for scope: a seed goes first over the rest of this offer, never over a live pull.
+        room = live_takers if id(rec) in seeded else takers
+        full = [n for n in names if len(room[n]) >= capacity[n]]
+        if full:
+            if own(rec):
+                held = room[full[0]]
+                passed.append(PassedOver(rec, ranks.get(rid, '-'),
+                                         capacity_why(full[0], capacity[full[0]],
+                                                      [label for label, _ in held]),
+                                         next((who for _, who in held if who), None)))
+            continue
         if own(rec) and unmet is not None:
             missing = unmet(rec)
             if missing:
@@ -321,13 +394,15 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
                 passed.append(PassedOver(rec, ranks.get(rid, '-'), why))
                 continue
         occupied.extend(scopes)
-        if not own(rec):
-            for m in scopes:
-                holders.setdefault(m, ('%s (session %s)' % (rid, rec.get('session') or 'none'),
-                                       ('session %s' % (rec.get('session') or 'none'), rid)))
-            continue
+        taker = (('%s (offered above)' % rid, None) if own(rec) else
+                 ('%s (session %s)' % (rid, rec.get('session') or 'none'),
+                  ('session %s' % (rec.get('session') or 'none'), rid)))
         for m in scopes:
-            holders.setdefault(m, ('%s (offered above)' % rid, None))
+            holders.setdefault(m, taker)
+        for name in names:
+            takers[name].append(taker)
+        if not own(rec):
+            continue
         offers.append(Offer(rec, ranks.get(rid, '-'), id(rec) in seeded))
         if cap is not None and len(offers) >= cap:
             break

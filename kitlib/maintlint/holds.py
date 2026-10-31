@@ -7,7 +7,8 @@ client, but which no hold keeps out of the offer (docs/maint-lint.md "Backlog ch
   record_text(rec, fields)        the fields' values joined by spaces
   keyword_hit(rec, keywords, fields)  (member, matched text) or (None, None)
   offerable(rec)                  open, with no hold, so next could offer it
-  findings(snap, backlog_cmd)     one Finding per offerable record with a hit
+  findings(snap, backlog_cmd, resources)  one Finding per offerable record with a hit that no
+                                  `uses:` line answers
 
 KEYWORDS, HOLD_MEMBERS, TEXT_FIELDS, record_text and keyword_hit are copied from
 the retired backlog_lint tool (the store reader's Record has the same `all`); its fix_hold is not: an owner
@@ -55,18 +56,25 @@ def offerable(rec):
     return omod.classify(rec)[0] in OFFERABLE
 
 
-def findings(snap, backlog_cmd):
+def findings(snap, backlog_cmd, resources=None):
+    """`resources` ({name: capacity}; None or {}: the repository declares none). A live-client hit
+    on a record with a `uses:` line is answered: the resource keeps it out of the offer while
+    taken, and `blocked_on: live-client` stays for what needs the owner present."""
     out = []
     for rec in snap.readable:
         if not offerable(rec):
             continue
         member, hit = keyword_hit(rec)
-        if member is None:
+        if member is None or (member == 'live-client' and rec.has('uses')):
             continue
+        fix = ('%s block %s --on %s --reason "<what it waits on and until when%s>"'
+               % (backlog_cmd, rec.stem, member,
+                  ', citing the ruling or question' if member == 'owner' else ''))
+        if member == 'live-client' and resources:
+            fix += ('; or, when a shared resource and not the owner\'s presence is what it needs, '
+                    '%s set %s --uses <%s>' % (backlog_cmd, rec.stem, '|'.join(sorted(resources))))
         out.append(Finding(
             CHECK, rec.stem,
             '%s is open with no hold, but its text says "%s" (a %s hold)' % (rec.stem, hit, member),
-            '%s block %s --on %s --reason "<what it waits on and until when%s>"'
-            % (backlog_cmd, rec.stem, member,
-               ', citing the ruling or question' if member == 'owner' else '')))
+            fix))
     return out

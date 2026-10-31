@@ -63,10 +63,12 @@ class Context(object):
     may be blocked or released by anybody (stop_pull; opener.open_store passes
     kitlib.worktree.classify.branch_liveness, so this module imports nothing from worktree).
     `cap` (None: offer.DEFAULT_CAP; a callable: read on first use) is the most records `next` offers and `pull` takes in order
-    (`.kit.json` backlog.cap, opener.repo_cap); `next --cap` overrides it for that call."""
+    (`.kit.json` backlog.cap, opener.repo_cap); `next --cap` overrides it for that call.
+    `resources` (None: none; a callable: read on first use) is {name: capacity} (`.kit.json`
+    backlog.resources, opener.repo_resources)."""
 
     def __init__(self, store, root, remote='origin', main_branch='main', branch=None, today=None,
-                 code_main=None, code_remote=None, liveness=None, cap=None):
+                 code_main=None, code_remote=None, liveness=None, cap=None, resources=None):
         self.store = store
         self.root = root
         self.remote = remote
@@ -77,6 +79,7 @@ class Context(object):
         self.today = today
         self.liveness = liveness
         self._cap = cap
+        self._resources = resources
 
     @property
     def cap(self):
@@ -85,6 +88,18 @@ class Context(object):
         if callable(self._cap):
             self._cap = self._cap()
         return omod.DEFAULT_CAP if self._cap is None else self._cap
+
+    @property
+    def resources(self):
+        """{name: capacity}, a callable given for it called on first read, as `cap`."""
+        if callable(self._resources):
+            self._resources = self._resources()
+        return self._resources or {}
+
+    def capacity(self, snap):
+        """`resources` when a record of `snap` names one, else {} with no config read: a store
+        with no `uses:` line behaves, and fails, exactly as it did without them."""
+        return self.resources if any(r.has('uses') for r in snap.readable) else {}
 
     @property
     def session(self):
@@ -231,7 +246,7 @@ def _offer(snap, ctx, branch, cap, seeds, holding, diffs=None):
     folded = _offer_folds(ctx, holding, own, diffs)
     result, refusals, _ranks = omod.next_offer(snap, taken, cap=cap, seeds=seeds,
                                                session=ctx.session, unmet=ctx.unmet(snap),
-                                               folded=folded)
+                                               folded=folded, capacity=ctx.capacity(snap))
     if refusals:
         raise Failure('`next` cannot compute an offer: %s' % '; '.join(refusals))
     return result[0], result[1], holding, own
@@ -257,7 +272,8 @@ def current_offer(snap, ctx, branch=None):
         result, refusals, _ranks = omod.next_offer(snap, holding, cap=ctx.cap,
                                                    session=ctx.session,
                                                    unmet=ctx.unmet(snap),
-                                                   folded=_offer_folds(ctx, holding, None, diffs))
+                                                   folded=_offer_folds(ctx, holding, None, diffs),
+                                                   capacity=ctx.capacity(snap))
         if refusals:
             notes.append('NOTE: the offer without branch %s cannot be computed (%s); only the '
                          'offer as %s was checked' % (own, '; '.join(refusals), own))
@@ -282,9 +298,26 @@ def read_body_file(path):
 
 # --- add ------------------------------------------------------------------------------------------
 
+def _checked_uses(ctx, names):
+    """`names`, each once, or Usage: every one must be a resource name `.kit.json` declares (a
+    write may add no `check` error, and fail_findings reads no config, so the plan refuses it)."""
+    for name in names:
+        bad = rmod._uses(name)
+        if bad:
+            raise Usage('bad `--uses %s`: %s; `set ID --uses -` clears the list' % (name, bad))
+    names = list(dict.fromkeys(names))
+    unknown = [n for n in names if n not in ctx.resources]
+    if unknown:
+        raise Usage('`--uses %s`: .kit.json "backlog".resources does not declare it (declared: %s)'
+                    % (', '.join(unknown), ', '.join(sorted(ctx.resources)) or 'none'))
+    return names
+
+
 def plan_add(snap, ctx, rid, summary, scopes, effort=None, ref=None, reopen=False, session=None,
-             found_on=None, why_not_folded=None, review=None, body=None, summary_max=None):
-    """One unprioritised record. `priority: -` always: pricing is a separate act.
+             found_on=None, why_not_folded=None, review=None, body=None, summary_max=None,
+             uses=()):
+    """One unprioritised record. `priority: -` always: pricing is a separate act. `uses` names
+    the resources it needs (docs/backlog.md "Resources").
 
     `review` (`<source> <YYYY-MM-DD>`, the library's alone: the Action Hub passes it, the CLI has
     no flag) writes the review mark: `pull` refuses the record and `next` never offers it until a
@@ -323,6 +356,7 @@ def plan_add(snap, ctx, rid, summary, scopes, effort=None, ref=None, reopen=Fals
         bad = smod.scope_member_error(s)
         if bad:
             raise Usage('bad `--scope %s`: %s' % (s, bad))
+    uses = _checked_uses(ctx, uses)
     if effort is not None and rmod._effort(effort) is not None:
         raise Usage('bad `--effort %s`: %s' % (effort, rmod._effort(effort)))
     if review is not None and rmod._review(review) is not None:
@@ -344,6 +378,7 @@ def plan_add(snap, ctx, rid, summary, scopes, effort=None, ref=None, reopen=Fals
     if review is not None:
         pairs.append(('review', review))
     pairs += [('scope', s) for s in scopes]
+    pairs += [('uses', n) for n in uses]
     if session is not None:
         pairs.append(('session', session))
     if ref:
@@ -761,6 +796,9 @@ def plan_set(snap, ctx, rid, changes, unset=(), *, body=None, role_checked=False
       free scope, are free. Each `--scope` value is checked first: a malformed member is USAGE,
       not a collision.
     - `scope` replaces the whole list; the output names each member it removed.
+    - `uses` replaces the whole list too, `-` alone clearing it, which frees a pulled record's
+      slot as narrowing frees scope. Every name must be declared. On a pulled record, a name it
+      did not hold whose resource live pulls fill is the same `set-widen-collision` row.
     """
     for key, vals in changes:
         refuse_machine_paths('--' + key, *vals)
@@ -794,6 +832,8 @@ def plan_set(snap, ctx, rid, changes, unset=(), *, body=None, role_checked=False
         bad = smod.scope_member_error(s)
         if bad:
             raise Usage('bad `--scope %s`: %s; give one `--scope <path>` per path' % (s, bad))
+    changes = [(k, ([] if v == ['-'] else _checked_uses(ctx, v)) if k == 'uses' else v)
+               for k, v in changes]
 
     keys = [k for k, _ in changes]
     pairs = [(k, v) for k, v in rec.pairs() if k not in unset]
@@ -824,13 +864,24 @@ def plan_set(snap, ctx, rid, changes, unset=(), *, body=None, role_checked=False
             widen_hits = live_hits(added, holding, skip=rid, branch=rec.get('pulled_by'))
             # The fold-in guard, as `pull` runs it.
             folds, notes = _pull_fold_hits(ctx, added, holding, rec.get('pulled_by'))
-    if (widen_hits or folds) and not may_collide:
+    new_uses = [n for n in get('uses') if n not in rec.all('uses')]
+    full = []
+    if 'uses' in keys and was_pulled and new_uses:
+        holding, _dead, _why = omod.in_flight_split(snap, ctx.root, ctx.remote)
+        full = resource_hits(new_uses, holding, ctx.resources, skip=rid,
+                             branch=rec.get('pulled_by'))
+    if (widen_hits or full or folds) and not may_collide:
         override = '%s: `set %s --scope <path> [--scope <path> ...]` (the whole new list)' \
             % (policy.row_text(WIDEN_ROW), rid)
         if widen_hits:
             raise Refusal('`%s` is pulled, and this widens its scope into a live pull: %s. '
                           'Narrowing is free; widening into a live pull is %s'
                           % (rid, '; '.join(widen_hits), override))
+        if full:
+            raise Refusal('`%s` is pulled, and this adds a resource live pulls fill: %s. Dropping '
+                          'a resource is free; taking a full one is %s: `set %s --uses <name> '
+                          '[--uses <name> ...]` (the whole new list)'
+                          % (rid, '; '.join(full), policy.row_text(WIDEN_ROW), rid))
         raise Refusal(_fold_message(rid, folds, override, 'widen'))
     dropped = dropped_why = None
     if get('priority_ruling') and (priced or get('priority_by') == ['agent']):
@@ -845,7 +896,7 @@ def plan_set(snap, ctx, rid, changes, unset=(), *, body=None, role_checked=False
                                            ' / '.join(rmod.values(pairs, key)) or '(absent)'))
     if body is not None:
         lines.append('  body:       replaced (%d bytes)' % len(body.encode('utf-8')))
-    lines += ['  widened into a live pull: %s' % h for h in widen_hits]
+    lines += ['  widened into a live pull: %s' % h for h in widen_hits + full]
     lines += ['  folds into the work of %s: %s'
               % (h.rpartition('(changed on ')[2].partition(')')[0], h) for h in folds]
     if 'scope' in keys:
@@ -861,7 +912,7 @@ def plan_set(snap, ctx, rid, changes, unset=(), *, body=None, role_checked=False
     if text == rec.text:
         return Change({}, subject, lines + ['  (no change)'])
     change = Change({rid: text}, subject, lines)
-    if widen_hits or folds:
+    if widen_hits or full or folds:
         _collision_change(change, 'set')
     return change
 
@@ -1268,7 +1319,8 @@ def plan_pull(snap, ctx, rid, reason=None, may_collide=False, blocker=None):
     `preempt`, and the Change names the row (_collision_change). An unmet `requires:` refuses.
     The fold-in guard (`_pull_fold_hits`): one whose scope overlaps a path another live pull's
     branch changed is that row too; `next` passes such a record over, so its refusal comes
-    before the not-offered one.
+    before the not-offered one. A `uses:` resource live pulls on other branches fill
+    (resource_hits) is the same row.
     A pulled record refuses, unless its pull is dead and it is this session's: see
     `_plan_takeover`."""
     refuse_machine_paths('--reason', reason)
@@ -1307,6 +1359,7 @@ def plan_pull(snap, ctx, rid, reason=None, may_collide=False, blocker=None):
     offers, passed, holding, also, offer_notes = current_offer(snap, ctx, branch)
     offered = rec in [o.rec for o in offers] or rec in also
     hits = live_hits(rec.all('scope'), holding, skip=rid, branch=branch)
+    full = resource_hits(rec.all('uses'), holding, ctx.capacity(snap), skip=rid, branch=branch)
     folds, notes = _pull_fold_hits(ctx, rec.all('scope'), holding, branch)
     # The fold refusal first: `next` passes a folding record over, so "not in the offer" would
     # hide the reason and the override that this one names.
@@ -1319,11 +1372,12 @@ def plan_pull(snap, ctx, rid, reason=None, may_collide=False, blocker=None):
                       'owner\'s yes, runs `pull %s --reason "<why>"` (recorded); a worker stops '
                       'and reports%s'
                       % (rid, omod.not_offered_why(rec, passed, ctx.session), rid,
-                         '. Its scope collides with a live pull, so it is %s' % override
-                         if hits else ''))
-    if hits and (not may_collide or reason is None):
+                         '. Its %s with a live pull, so it is %s'
+                         % ('scope collides' if hits else 'resource collides', override)
+                         if hits or full else ''))
+    if (hits or full) and (not may_collide or reason is None):
         raise Refusal('`%s` collides with a live pull: %s. `--reason` alone never overrides it: '
-                      'pulling it anyway is %s' % (rid, '; '.join(hits), override))
+                      'pulling it anyway is %s' % (rid, '; '.join(hits + full), override))
     lines = offer_notes + notes + ['PULLED %s - state: open -> pulled' % rid, '  pulled_at:  %s' % ctx.date(),
                      '  pulled_by:  %s' % branch]
     resume = resume_line(rec.body)
@@ -1339,7 +1393,7 @@ def plan_pull(snap, ctx, rid, reason=None, may_collide=False, blocker=None):
         if blocker is not None:
             recorded += ' (unblocks %s)' % blocker
         lines += _collisions(rec, holding)
-        lines += ['warning: %s' % f for f in folds]
+        lines += ['warning: %s' % f for f in full + folds]
         offers = [o for o in offers if o.rec is not rec]
         displaced = ['%s rank %s priority %s' % (o.rec.id, o.rank, o.rec.get('priority'))
                      for o in offers] or ['-']
@@ -1350,9 +1404,33 @@ def plan_pull(snap, ctx, rid, reason=None, may_collide=False, blocker=None):
         subject += ', pre-empting %d offered item%s' % (len(offers), '' if len(offers) == 1 else 's')
     pairs = rmod.apply_changes(rec.pairs(), changes)
     change = Change({rid: _text(pairs, rec.body)}, subject, lines)
-    if hits or folds:
+    if hits or full or folds:
         _collision_change(change, 'pull')
     return change
+
+
+def resource_hits(names, holding, capacity, skip=None, branch=None):
+    """`resource X at capacity N, taken by ...` for each of `names` the live pulls of `holding`
+    fill, bar the record id `skip` and any pull by `branch` (live_hits' rule). An undeclared name
+    fills nothing."""
+    others = [r for r in holding
+              if r.id != skip and not (branch and r.get('pulled_by') == branch)]
+    load = omod.resource_load(others, capacity)
+    return [omod.capacity_why(n, capacity[n], [omod.live_label(r) for r in load[n]])
+            for n in dict.fromkeys(names) if n in capacity and len(load[n]) >= capacity[n]]
+
+
+def uses_shown(snap, ctx, rec):
+    """`show`'s `uses` line for a record that has one, None otherwise; a read, so a config that
+    cannot be read is said on the line, never an error."""
+    if not rec.has('uses'):
+        return None
+    try:
+        capacity = ctx.resources
+    except Failure as exc:
+        return 'uses %s (capacity not read: %s)' % (', '.join(omod.uses(rec)), exc)
+    holding, _dead, _why = omod.in_flight_split(snap, ctx.root, ctx.remote)
+    return omod.uses_line(rec, holding, capacity)
 
 
 def live_hits(scopes, holding, skip=None, branch=None):
@@ -1468,6 +1546,8 @@ def _plan_takeover(snap, ctx, rec, reason, may_collide, blocker):
                       '%s); a coordinator clears it with `clear-review %s --reason T` before '
                       'anyone takes it over' % (rid, rec.get('review'), rid))
     hits = live_hits(rec.all('scope'), holding, skip=rid, branch=ctx.current_branch())
+    full = resource_hits(rec.all('uses'), holding, ctx.capacity(snap), skip=rid,
+                         branch=ctx.current_branch())
     folds, notes = _pull_fold_hits(ctx, rec.all('scope'), holding, ctx.current_branch())
     given = [f for f, v in (('--reason', reason), ('--blocker', blocker)) if v is not None]
     if given:
@@ -1478,9 +1558,11 @@ def _plan_takeover(snap, ctx, rec, reason, may_collide, blocker):
         raise Refusal('`%s` was pulled by %s, which has landed on %s (%s): close the record, do '
                       'not take it over' % (rid, old, ctx.main_branch, merge))
     override = '%s, with `pull %s`' % (policy.row_text('pull-collision'), rid)
-    if hits and not may_collide:
-        raise Refusal('`%s` is a dead pull of this session, and its scope collides with a live '
-                      'pull: %s. Taking it over anyway is %s' % (rid, '; '.join(hits), override))
+    if (hits or full) and not may_collide:
+        raise Refusal('`%s` is a dead pull of this session, and its %s with a live pull: %s. '
+                      'Taking it over anyway is %s'
+                      % (rid, 'scope collides' if hits else 'resource collides',
+                         '; '.join(hits + full), override))
     if folds and not may_collide:
         raise Refusal(_fold_message(rid, folds, override))
     branch = ctx.current_branch()
@@ -1493,11 +1575,11 @@ def _plan_takeover(snap, ctx, rec, reason, may_collide, blocker):
     if resume:
         lines.append(resume)
     lines += _collisions(rec, holding)
-    lines += ['warning: %s' % f for f in folds]
+    lines += ['warning: %s' % f for f in full + folds]
     change = Change({rid: _text(pairs, rec.body)},
                     'backlog: pull %s onto %s, taking over a dead pull from %s' % (rid, branch, old),
                     lines)
-    if hits or folds:
+    if hits or full or folds:
         _collision_change(change, 'pull')
     return change
 
