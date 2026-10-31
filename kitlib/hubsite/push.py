@@ -206,11 +206,13 @@ JOB_EACH = {'unblocked': 'A hub timed job cleared a hold whose `until` condition
                        'stops it and starts a successor on its state note; otherwise it is yours.',
             'crossed': _CROSSOVER + 'the session in detail has taken over and its old session has '
                        'gone. For your information; no reply is needed.',
-            'cross-cleared': _CROSSOVER + 'dropped the crossing of detail: nothing was moved by '
-                             'it, and the log says why. For your information; no reply is needed.',
+            'cross-cleared': _CROSSOVER + 'dropped the crossing of detail before it finished; the '
+                             'log says why and what it had done. For your information; no reply '
+                             'is needed.',
             'cross-failed': _CROSSOVER + 'gave up on detail: it needs you. The log says why.',
-            'no-ready': _CROSSOVER + 'detail has not replied ready to its checkpoint message in '
-                        '30 minutes; the hub still waits. Check on it.',
+            'no-ready': _CROSSOVER + 'detail has not replied ready to its checkpoint message, or '
+                        'has not gone quiet on a state note written since, in 30 minutes; the hub '
+                        'still waits. Check on it.',
             'no-checkin': _CROSSOVER + 'the successor of detail has not recorded its check-in in '
                           '30 minutes; its old session stays idle. Check on the successor.',
             'no-room': _CROSSOVER + 'detail needs moving and no account has room: nothing was '

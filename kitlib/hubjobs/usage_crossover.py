@@ -4,7 +4,8 @@ the weekly limit (docs/launcher.md "Usage crossover", docs/action-hub.md "Timed 
   make(sources) -> jobs.Job | None   the job; None when launcher.state_dir is not set or the host
                                      has no watcher readers
   decide(key, entry, crossing, live, stall, quiet_s, accounts, newest, starts, running, landed,
-         mode, now) -> Decision      one session's next step, pure: no file, process or clock read
+         mode, now, note_at, cleared, asks) -> Decision
+                                     one session's next step, pure: no file, process or clock read
   pick_target(accounts, current, running, landed, now) -> (account, why) | None
   claims(settings, now) -> {key}     the sessions the job is moving now (kitlib.hubjobs.coord_restart
                                      holds them); LaunchError for a bad state file
@@ -27,16 +28,22 @@ restart resolves each from live facts:
 
   asked       not delivered: deliver again. A newer `handoff` or `restart` record: ready. A newer
               `stop` record: cleared, the PM told. WAIT_READY_S with nothing: `no-ready` once, and
-              it stays open. The week reset or the session gone: cleared.
-  ready       notes the highest C-number, counts the start, then `launch.py handoff --session K
-              --account N --state <path>` (no --state on the stall path: the entry's note).
+              it stays open. The week reset or the session gone: cleared. The session stalled and
+              the mode not full: cleared with `stalled`, left to the PM (it cannot reply).
+  ready       waits until the record's state note was written after the ask and the transcript
+              has been quiet QUIET_S (WAIT_READY_S of it: `no-ready` once); then notes the highest
+              C-number, counts the start, then `launch.py handoff --session K --account N --state
+              <path>` (no --state, and no wait, on the stall path: the entry's note). The entry
+              moved to the job's own successor name with no successor running: failed.
   starting    successor live and sessions.json moved: started. Successor live and the entry not
               moved: the child died between the two, so the job finishes the file write and never
               runs handoff again. No successor after START_WAIT_S: backoff, then ready.
   started     a newer `checkin` record (the successor's prompt tells it to post one): stopping.
               WAIT_CHECKIN_S with nothing: `no-checkin` once; the old session stays idle, and
               nothing is ever stopped on a timeout. The old session gone: done.
-  stopping    `launch.py stop --name old --successor new --pid P`; the old session gone: done.
+  stopping    `launch.py stop --name old --successor new --pid P`; the old session gone: done. A
+              stop is counted before its child: after a refused one, BACKOFF_S; STOP_TRIES of
+              them: failed, the old session stays (the stall stop the same).
   stall-stop  on `full`, from any state before stopping, when the old session is stalled:
               `launch.py stop --name old --pid P`; then ready, with `stalled` set, starting on the
               entry's own note. A successor already up is named to stop, and the crossing goes
@@ -44,13 +51,17 @@ restart resolves each from live facts:
               reach this state late): back to started, or cleared with no successor.
 
 Before a start, an entry whose name differs from the one noted was moved by someone else: cleared.
-A crossing clears on done, abort or failure, with a push; the file then holds no claim.
+A crossing clears on done, abort or failure, with a push; the file then holds no claim. One that
+clears with the session left where it was (ready to stop, its successor gone, its start's entry
+write with no successor, its stop refused, an unknown state) is remembered for its key as
+{account, reset}: the trigger asks it nothing more on that account until that week resets.
 
 Holds, nothing done: the PM session; no entry, stem or state note; several processes of the stem;
 the old process's pid or creation time changed; a stale reading with no stall read; a reset within
 RESET_NEAR_S; no room on any account (no stop and no start: `no-room` once per change, and a stalled
 session stays and wakes at its reset); KEY_CAP starts for the key or MACHINE_CAP on the machine in
-CAP_WINDOW_S, counted before the child runs; BACKOFF_S after a failed start; a stall read with
+CAP_WINDOW_S, counted before the child runs; ASK_CAP new crossings asked for the key in
+CAP_WINDOW_S (`cross-failed`); BACKOFF_S after a failed start; a stall read with
 activity under QUIET_S old. No second start goes to an account until its reading is newer than the
 job's last start there.
 
@@ -71,8 +82,9 @@ would-cross, crossed, cross-cleared, cross-failed, stalled, no-ready, no-checkin
 unmanaged. A word goes out once per change, kept in the state file as `told`.
 
 State in <launcher.state_dir>/usage-crossover.json: {crossings: {key: {phase, phase_at, ...}},
-starts: {key: [epoch]}, landed: {account: epoch of the last start there}, told: {key: mark},
-windows: {name: reset of the window already told}, readings: {account: text}}. The same file is the
+starts: {key: [epoch]}, asks: {key: [epoch]}, landed: {account: epoch of the last start there},
+told: {key: mark}, windows: {name: reset of the window already told}, readings: {account: text},
+cleared: {key: {account, reset}}}. The same file is the
 claim: coord-restart holds a key whose crossing moved phase less than CLAIM_TTL_S ago. A bad file
 is a failure, here and in coord-restart, never read as empty.
 
@@ -110,8 +122,10 @@ WAIT_CHECKIN_S = 30 * 60       # after the start: `no-checkin`
 START_WAIT_S = 5 * 60          # no successor this long after a start: failed
 CLAIM_TTL_S = 2 * 3600         # after the last phase change
 KEY_CAP = 3                    # starts per key in CAP_WINDOW_S
+ASK_CAP = 3                    # new crossings asked per key in CAP_WINDOW_S
 MACHINE_CAP = 6                # starts on the machine in CAP_WINDOW_S
 BACKOFF_S = C.BACKOFF_S
+STOP_TRIES = len(BACKOFF_S)    # stops of one old session run, each after the last one's backoff
 CAP_WINDOW_S = C.CAP_WINDOW_S
 STATE_FILE = 'usage-crossover.json'
 LOG = 'usage-crossover.log'
@@ -137,13 +151,15 @@ class StepFailed(Exception):
 class Decision(object):
     """`action` one of ACTS, ADVANCE, CLEAR, HOLD. `note` the text for health and the log;
     `target` the account a start or a would-cross goes to; `word`, `detail` the push and `mark`
-    what says it changed (default the word); `phase`, `fields` an ADVANCE's next state."""
+    what says it changed (default the word); `phase`, `fields` an ADVANCE's next state, or a
+    CLEAR's {account, reset} to remember (`remember` asks _step to fill them)."""
 
     def __init__(self, action, note, target=None, word=None, detail=None, mark=None, phase=None,
-                 fields=None):
+                 fields=None, remember=False):
         self.action, self.note, self.target = action, note, target
         self.word, self.detail, self.mark = word, detail, mark or word
         self.phase, self.fields = phase, dict(fields or {})
+        self.remember = remember
 
     def __repr__(self):
         return 'Decision(%r, %r, target=%r, word=%r, phase=%r)' % (
@@ -260,20 +276,30 @@ def _no_room(key):
 
 
 def decide(key, entry, crossing, live, stall, quiet_s, accounts, newest, starts, running, landed,
-           mode, now):
+           mode, now, note_at=None, cleared=None, asks=None):
     """One session's next step. `entry` its sessions.json entry (None: gone); `crossing` its open
     crossing or None; `live` [Live] of the processes of its stem; `stall` the stall read of the
     session in question, or None; `quiet_s` seconds since its transcript was written, or None;
     `accounts` {account: AccountState}; `newest` its newest hand-off record or None; `starts`
-    {key: [epoch]}; `running`, `landed` as pick_target; `mode` launcher.usage_crossover. Reads
-    nothing itself."""
+    {key: [epoch]}; `running`, `landed` as pick_target; `mode` launcher.usage_crossover;
+    `note_at` the mtime of the crossing's state note (its ready record's), or None; `cleared` the
+    {account, reset} of its last crossing that cleared with the session left where it was, or
+    None; `asks` [epoch] of its asks. Reads nothing itself."""
     if crossing:
         return _step(key, entry, crossing, live, stall, quiet_s, accounts, newest, starts, running,
-                     landed, mode, now)
-    return _trigger(key, entry, live, stall, quiet_s, accounts, starts, running, landed, mode, now)
+                     landed, mode, now, note_at)
+    return _trigger(key, entry, live, stall, quiet_s, accounts, starts, running, landed, mode, now,
+                    cleared, asks)
 
 
-def _trigger(key, entry, live, stall, quiet_s, accounts, starts, running, landed, mode, now):
+def _cleared_now(cleared, acct, reset):
+    """True when a crossing of this key cleared on this account in this week window."""
+    return (isinstance(cleared, dict) and str(cleared.get('account')) == str(acct)
+            and _number(cleared.get('reset')) and abs(cleared['reset'] - reset) < RESET_NEAR_S)
+
+
+def _trigger(key, entry, live, stall, quiet_s, accounts, starts, running, landed, mode, now,
+             cleared=None, asks=None):
     if not isinstance(entry, dict) or not entry.get('stem'):
         return _hold('no stem')
     if not entry.get('state'):
@@ -299,6 +325,9 @@ def _trigger(key, entry, live, stall, quiet_s, accounts, starts, running, landed
     reset = stall[1] if stalled else week_reset
     if reset - now < RESET_NEAR_S:
         return _hold('the week resets within %d min' % (RESET_NEAR_S // 60))
+    if _cleared_now(cleared, acct, reset):
+        return _hold('its crossing cleared on account %s this week: not asked again before the '
+                     'week resets' % acct)
     why = cap_reached(key, starts, now)
     if why:
         return _hold(why, 'cross-failed', key, 'cap')
@@ -312,22 +341,42 @@ def _trigger(key, entry, live, stall, quiet_s, accounts, starts, running, landed
     if mode == NOTIFY:
         return Decision(WOULD, note, target, 'would-cross', detail,
                         'would-cross:%s:%s' % (target, 'stall' if stalled else 'week'))
-    if stalled and mode == FULL:
-        return Decision(STOP_STALLED, note, target, 'stalled', detail)
-    if not fresh:
+    if stalled:                 # stopped at the limit: it cannot reply to a checkpoint message
+        if mode == FULL:
+            return Decision(STOP_STALLED, note, target, 'stalled', detail)
         return _hold('stalled, left to the PM (usage_crossover is not full)', 'stalled', key)
+    n = len(recent(asks, now))
+    if n >= ASK_CAP:
+        return _hold('%d asks in %d h for it already' % (n, CAP_WINDOW_S // 3600), 'cross-failed',
+                     key, 'ask-cap')
     return Decision(ASK, note, target, 'crossing', detail)
 
 
-def _gone(note, word='cross-cleared', detail=None):
-    return Decision(CLEAR, note, word=word, detail=detail)
+def _gone(note, word='cross-cleared', detail=None, remember=False):
+    """A CLEAR. `remember`: the session stays where it is, so the trigger must not ask it again
+    in this week window (_cleared_now)."""
+    return Decision(CLEAR, note, word=word, detail=detail, remember=remember)
 
 
 def _advance(phase, note, **fields):
     return Decision(ADVANCE, note, phase=phase, fields=fields)
 
 
-def _step(key, entry, c, live, stall, quiet_s, accounts, newest, starts, running, landed, mode, now):
+def _step(key, entry, c, live, stall, quiet_s, accounts, newest, starts, running, landed, mode, now,
+          note_at=None):
+    d = _phase_step(key, entry, c, live, stall, quiet_s, accounts, newest, starts, running, landed,
+                    mode, now, note_at)
+    if d.action == CLEAR and d.remember:
+        acct = str(c.get('account'))
+        st = accounts.get(acct)
+        reset = stall[1] if stall is not None and stall[1] > now else window(
+            st.usage if st is not None else None, 'seven_day', now)[1]
+        d.fields = {} if reset is None else {'account': acct, 'reset': reset}
+    return d
+
+
+def _phase_step(key, entry, c, live, stall, quiet_s, accounts, newest, starts, running, landed,
+                mode, now, note_at):
     phase = c.get('phase')
     if not isinstance(entry, dict):
         return _gone('its sessions.json entry is gone', detail=key)
@@ -340,20 +389,21 @@ def _step(key, entry, c, live, stall, quiet_s, accounts, newest, starts, running
     up = [l for l in live if new and l.name == new]
     moved = bool(new) and entry.get('name') == new
     args = (key, entry, c, live, old, up, moved)
-    stalled = bool(old) and is_stalled(stall, quiet_s, now) and mode == FULL
+    stall_now = bool(old) and is_stalled(stall, quiet_s, now)
+    stalled = stall_now and mode == FULL
     if phase == ASKED:
-        return _asked(args, stalled, accounts, newest, running, landed, now)
+        return _asked(args, stalled, stall_now, accounts, newest, running, landed, now)
     if phase == READY:
-        return _ready(args, stalled, accounts, starts, running, landed, now)
+        return _ready(args, stalled, accounts, starts, running, landed, now, quiet_s, note_at)
     if phase == STARTING:
         return _starting(args, c, now)
     if phase == STARTED:
         return _started(args, stalled, newest, now)
     if phase == STOPPING:
-        return _stopping(args)
+        return _stopping(args, now)
     if phase == STALL_STOP:
-        return _stall_stop(args, stalled)
-    return _gone('unknown state %r' % (phase,), 'cross-failed', key)
+        return _stall_stop(args, stalled, now)
+    return _gone('unknown state %r' % (phase,), 'cross-failed', key, remember=True)
 
 
 def _stall_first(key, entry, c, accounts, running, landed, now):
@@ -364,7 +414,7 @@ def _stall_first(key, entry, c, accounts, running, landed, now):
     return _advance(STALL_STOP, 'stalled: stop first, then account %s' % pick[0], stalled=True)
 
 
-def _asked(args, stalled, accounts, newest, running, landed, now):
+def _asked(args, stalled, stall_now, accounts, newest, running, landed, now):
     key, entry, c, live, old, _up, _moved = args
     if not old:
         return _gone('the session ended before its ready record', detail=key)
@@ -374,11 +424,14 @@ def _asked(args, stalled, accounts, newest, running, landed, now):
         return _hold('several processes of the stem')
     rec = newer(newest, c.get('high_c'))
     if rec is not None and rec.get('kind') == 'stop':
-        return _gone('it replied ready to stop: no crossing', detail=key)
+        return _gone('it replied ready to stop: no crossing', detail=key, remember=True)
     if rec is not None and rec.get('kind') in READY_KINDS:
         return _advance(READY, 'ready record %s' % rec.get('id'), state_path=rec.get('state_path'))
     if stalled:
         return _stall_first(key, entry, c, accounts, running, landed, now)
+    if stall_now:               # stopped at the limit before its reply: it cannot send one now
+        return _gone('stalled before its ready record: left to the PM (usage_crossover is not '
+                     'full)', 'stalled', key)
     st = accounts.get(str(c.get('account')))
     week, _ = window(st.usage if st is not None else None, 'seven_day', now)
     if week is not None and week < TRIGGER_WEEK:
@@ -390,7 +443,22 @@ def _asked(args, stalled, accounts, newest, running, landed, now):
     return _hold('waiting for its ready record')
 
 
-def _ready(args, stalled, accounts, starts, running, landed, now):
+def _settled(key, c, quiet_s, note_at, now):
+    """None when the old session has settled on its hand-off: its state note written after the
+    ask and its transcript quiet QUIET_S. Else the hold; `no-ready` after WAIT_READY_S of it."""
+    asked = c.get('asked_at')
+    if not (_number(note_at) and _number(asked) and note_at > asked):
+        why = 'its state note %s not written since the ask' % c.get('state_path')
+    elif quiet_s is None or quiet_s < QUIET_S:
+        why = 'its transcript written under %d s ago' % QUIET_S
+    else:
+        return None
+    if now - c.get('phase_at', now) >= WAIT_READY_S:
+        return _hold('%s, for %d min' % (why, WAIT_READY_S // 60), 'no-ready', key)
+    return _hold('waiting: ' + why)
+
+
+def _ready(args, stalled, accounts, starts, running, landed, now, quiet_s=None, note_at=None):
     key, entry, c, live, old, up, _moved = args
     if up:
         return _advance(STARTING, 'its successor is up')
@@ -398,6 +466,10 @@ def _ready(args, stalled, accounts, starts, running, landed, now):
     if was_stalled and live:
         return _gone('someone started it again', detail=key)
     if entry.get('name') != c.get('entry_name'):
+        if c.get('new_name') and entry.get('name') == c['new_name']:
+            return _gone('its start moved sessions.json to %s, which is not running%s'
+                         % (c['new_name'], '; the old session stays' if old else ''),
+                         'cross-failed', key, remember=True)
         return _gone('sessions.json was moved by someone else', detail=key)
     if not was_stalled:
         if not old:
@@ -406,6 +478,9 @@ def _ready(args, stalled, accounts, starts, running, landed, now):
             return _hold('several processes of the stem')
         if stalled:
             return _stall_first(key, entry, c, accounts, running, landed, now)
+        wait = _settled(key, c, quiet_s, note_at, now)
+        if wait is not None:
+            return wait
     why = cap_reached(key, starts, now)
     if why:
         return _gone(why, 'cross-failed', key)
@@ -439,7 +514,8 @@ def _started(args, stalled, newest, now):
             return _gone('its old session has gone: done', 'crossed', c.get('new_name'))
         return _gone('both sessions have gone', 'cross-failed', key)
     if not up:
-        return _gone('its successor has gone; the old session stays', 'cross-failed', key)
+        return _gone('its successor has gone; the old session stays', 'cross-failed', key,
+                     remember=True)
     if stalled:
         return _advance(STALL_STOP, 'the old session stalled: stopped with its successor up')
     rec = newer(newest, c.get('high_c'))
@@ -451,19 +527,33 @@ def _started(args, stalled, newest, now):
     return _hold('waiting for its check-in')
 
 
-def _stopping(args):
+def _stop_or_wait(key, c, now, action, note):
+    """The stop, or its backoff after a refused one; STOP_TRIES refused, the last backoff out:
+    given up."""
+    retry = c.get('stop_retry_at')
+    if _number(retry) and now < retry:
+        return _hold('backoff after a refused stop')
+    tries = int(c.get('stop_tries') or 0)
+    if tries >= STOP_TRIES:
+        return _gone('its stop was refused %d times; the old session stays' % tries,
+                     'cross-failed', key, remember=True)
+    return Decision(action, note)
+
+
+def _stopping(args, now):
     key, _entry, c, _live, old, up, _moved = args
     if not old:
         return _gone('its old session has gone: done', 'crossed', c.get('new_name'))
     if not up:
-        return _gone('its successor has gone; the old session stays', 'cross-failed', key)
-    return Decision(STOP_OLD, 'its successor checked in')
+        return _gone('its successor has gone; the old session stays', 'cross-failed', key,
+                     remember=True)
+    return _stop_or_wait(key, c, now, STOP_OLD, 'its successor checked in')
 
 
-def _stall_stop(args, stalled):
-    key, _entry, _c, _live, old, up, _moved = args
+def _stall_stop(args, stalled, now):
+    key, _entry, c, _live, old, up, _moved = args
     if old and stalled:
-        return Decision(STOP_STALLED, 'stalled')
+        return _stop_or_wait(key, c, now, STOP_STALLED, 'stalled')
     if up:
         return _advance(STARTED, 'its successor is up')
     if old:
@@ -559,7 +649,7 @@ class CrossoverJob(object):
         if newest is None:
             return jobs.Skip('the hub gives the job no hand-off read yet')
         now = self.clock()
-        doc = self._read(settings)
+        doc = self._read(settings, now)
         sessions = state.read_sessions(settings)
         coordinators = state.read_coordinators(settings) or {}
         rows = [(lookup.rc_name(p.get('CommandLine')), p) for p in lookup.launched(self.procs())]
@@ -569,7 +659,8 @@ class CrossoverJob(object):
         run = _Run(self, ctx, settings, doc, now)
         run.log_readings(accounts)
         stalls = self._stalls(settings, lives)
-        quiet = self._quiet(stalls, now)
+        olds = [c.get('old_name') for c in doc['crossings'].values() if isinstance(c, dict)]
+        quiet = self._quiet(set(stalls) | {n for n in olds if n}, now)
         running = _running(lives, coordinators)
         entries = dict(state.entries(sessions))
 
@@ -578,7 +669,9 @@ class CrossoverJob(object):
             name = (crossing or {}).get('old_name') or (live[0].name if live else None)
             return decide(key, entry, crossing, live, stalls.get(name), quiet.get(name), accounts,
                           newest.get(key), doc['starts'], running, doc['landed'],
-                          settings.usage_crossover, now)
+                          settings.usage_crossover, now,
+                          note_at=_mtime((crossing or {}).get('state_path')),
+                          cleared=doc['cleared'].get(key), asks=doc['asks'].get(key))
 
         steps, known = [], set()
         for key in sorted(set(entries) | set(doc['crossings'])):
@@ -613,12 +706,16 @@ class CrossoverJob(object):
         if reset is not None:
             run.once_a_window('pm', reset, 'pm-limit', 'pm')
 
-    def _read(self, settings):
-        """The state file, each part an object; missing is empty, a bad file a failure."""
+    def _read(self, settings, now):
+        """The state file, each part an object; missing is empty, a bad file a failure. A cleared
+        mark whose week has reset is dropped."""
         data = state.read_json(state.path(settings, STATE_FILE)) or {}
-        for part in ('crossings', 'starts', 'landed', 'told', 'windows', 'readings'):
+        for part in ('crossings', 'starts', 'landed', 'told', 'windows', 'readings', 'cleared',
+                     'asks'):
             if not isinstance(data.get(part), dict):
                 data[part] = {}
+        data['cleared'] = {k: v for k, v in data['cleared'].items()
+                           if isinstance(v, dict) and _number(v.get('reset')) and v['reset'] > now}
         return data
 
     def _accounts(self, settings):
@@ -643,15 +740,29 @@ class CrossoverJob(object):
                 out[r['name']] = (folders.get(stop[0]), stop[1])
         return out
 
-    def _quiet(self, stalls, now):
-        """{name: seconds since its transcript was written} of the stalled sessions."""
+    def _quiet(self, names, now):
+        """{name: seconds since its transcript was written} of these sessions (the stalled ones
+        and those of open crossings). An unreadable one is left out: unknown is not quiet."""
         finder = self.host.newest_finder()
         out = {}
-        for name in stalls:
-            t = finder(name)
+        for name in sorted(names):
+            try:
+                t = finder(name)
+            except OSError:
+                continue
             if t is not None:
                 out[name] = now - t
         return out
+
+
+def _mtime(path):
+    """The mtime of a state note, or None: no path, or no file."""
+    if not isinstance(path, str) or not path:
+        return None
+    try:
+        return os.path.getmtime(path)
+    except (OSError, ValueError):
+        return None
 
 
 def _pm_name(name, coordinators):
@@ -759,6 +870,8 @@ class _Run(object):
             self.log('%s: %s' % (key, d.note))
         if d.action == CLEAR:
             self.doc['crossings'].pop(key, None)
+            if d.fields.get('reset') is not None:
+                self.doc['cleared'][key] = d.fields
             self.dirty = True
             self.tell(key, d)
         elif d.action == HOLD:
@@ -792,6 +905,9 @@ class _Run(object):
         c = self.doc['crossings'].get(key)
         if c is None:
             c = self._new_crossing(key, entry, live, d.target, c_number(newest), ASKED)
+            kept = {k: recent(v, self.now) for k, v in self.doc['asks'].items()}
+            self.doc['asks'] = {k: v for k, v in kept.items() if v}
+            self.doc['asks'].setdefault(key, []).append(self.now)
         self.save()
         c['delivered'] = bool(self.job.deliver(c['old_name'], checkpoint_text(key, d.target)))
         self.dirty = True
@@ -820,8 +936,14 @@ class _Run(object):
         self.dirty = True
         self.notes.insert(0, '%s: sessions.json moved to %s' % (key, c['new_name']))
 
+    def _count_stop(self, c):
+        """A stop is counted, and its backoff set, before the child: a refusal waits it out."""
+        tries = int(c.get('stop_tries') or 0) + 1
+        c.update(stop_tries=tries, stop_retry_at=self.now + BACKOFF_S[min(tries, len(BACKOFF_S)) - 1])
+
     def _stop_old(self, key, entry, live, d, newest, sessions, coordinators):
         c = self.doc['crossings'][key]
+        self._count_stop(c)
         self.save()
         self.notes.insert(0, '%s: stopping %s' % (key, c['old_name']))
         self._child(stop_argv(self.job.kit, c['old_name'], c['old_pid'], c['new_name']))
@@ -833,6 +955,7 @@ class _Run(object):
             c['stalled'] = True
         if d.word:
             self.tell(key, d)
+        self._count_stop(c)
         self.save()
         up = c.get('new_name') in [l.name for l in live]
         self.notes.insert(0, '%s: stopping stalled %s' % (key, c['old_name']))

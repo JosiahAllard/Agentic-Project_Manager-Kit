@@ -45,8 +45,8 @@ ACCOUNTS = {'1': HOT, '2': on(20)}
 
 
 def crossing(phase, **fields):
-    c = {'phase': phase, 'phase_at': NOW - 60, 'account': '1', 'target': '2',
-         'old_name': OLD.name, 'old_pid': OLD.pid, 'old_created': OLD.created,
+    c = {'phase': phase, 'phase_at': NOW - 60, 'asked_at': NOW - 120, 'account': '1',
+         'target': '2', 'old_name': OLD.name, 'old_pid': OLD.pid, 'old_created': OLD.created,
          'entry_name': OLD.name, 'high_c': 5, 'delivered': True}
     if phase in (U.STARTING, U.STARTED, U.STOPPING):
         c['new_name'] = NEW.name
@@ -55,9 +55,11 @@ def crossing(phase, **fields):
 
 
 def decide(entry=ENTRY, cross=None, live=(OLD,), stall=None, quiet=None, accounts=ACCOUNTS,
-           newest=None, starts=None, running=None, landed=None, mode='normal', now=NOW):
+           newest=None, starts=None, running=None, landed=None, mode='normal', now=NOW,
+           note_at=None, cleared=None, asks=None):
     return U.decide('kit', entry, cross, list(live), stall, quiet, accounts, newest, starts or {},
-                    {'1': 1} if running is None else running, landed or {}, mode, now)
+                    {'1': 1} if running is None else running, landed or {}, mode, now,
+                    note_at=note_at, cleared=cleared, asks=asks)
 
 
 def record(number, kind):
@@ -131,6 +133,22 @@ class Trigger(unittest.TestCase):
         d = decide(mode='notify', stall=STALL, quiet=120, accounts={'1': on(50), '2': on(20)})
         self.assertEqual(d.action, U.WOULD)
 
+    def test_a_crossing_cleared_this_week_on_the_account_is_not_asked_again(self):
+        week_reset = NOW + 2 * DAY
+        d = decide(cleared={'account': '1', 'reset': week_reset + 30})
+        self.assertEqual((d.action, d.word), (U.HOLD, None))
+        self.assertIn('cleared', d.note)
+        d = decide(cleared={'account': '1', 'reset': week_reset}, mode='full', stall=STALL, quiet=600)
+        self.assertEqual(d.action, U.HOLD)
+        self.assertEqual(decide(cleared={'account': '1', 'reset': week_reset - 7 * DAY}).action, U.ASK)
+        self.assertEqual(decide(cleared={'account': '3', 'reset': week_reset}).action, U.ASK)
+
+    def test_asks_have_a_cap_per_key(self):
+        d = decide(asks=[NOW - 60, NOW - 120, NOW - 180])
+        self.assertEqual((d.action, d.word, d.mark), (U.HOLD, 'cross-failed', 'ask-cap'))
+        self.assertEqual(decide(asks=[NOW - 60, NOW - 120]).action, U.ASK)
+        self.assertEqual(decide(asks=[NOW - 2 * DAY] * 3).action, U.ASK)
+
 
 class Stall(unittest.TestCase):
     QUIET = {'1': on(50), '2': on(20)}
@@ -142,6 +160,10 @@ class Stall(unittest.TestCase):
     def test_normal_holds_and_tells_the_pm(self):
         d = decide(stall=STALL, quiet=60, accounts=self.QUIET)
         self.assertEqual((d.action, d.word), (U.HOLD, 'stalled'))
+
+    def test_normal_with_a_fresh_reading_at_99_still_never_asks_a_stalled_session(self):
+        d = decide(stall=STALL, quiet=600, accounts=ACCOUNTS)       # account 1 at 99%, fresh
+        self.assertEqual((d.action, d.word, d.detail), (U.HOLD, 'stalled', 'kit'))
 
     def test_activity_under_a_minute_old_is_no_stall(self):
         d = decide(stall=STALL, quiet=59, accounts=self.QUIET, mode='full')
@@ -271,8 +293,13 @@ class Asked(unittest.TestCase):
         d = self.step(mode='full', stall=STALL, quiet=600)
         self.assertEqual((d.action, d.phase, d.fields), (U.ADVANCE, U.STALL_STOP, {'stalled': True}))
 
-    def test_a_stall_on_normal_keeps_waiting(self):
-        self.assertEqual(self.step(stall=STALL, quiet=600).action, U.HOLD)
+    def test_a_stall_on_normal_is_left_to_the_pm_as_stalled(self):
+        d = self.step(stall=STALL, quiet=600)
+        self.assertEqual((d.action, d.word, d.detail, d.remember), (U.CLEAR, 'stalled', 'kit', False))
+
+    def test_ready_to_stop_is_remembered_for_the_week(self):
+        d = self.step(newest=record(6, 'stop'))
+        self.assertEqual(d.fields, {'account': '1', 'reset': NOW + 2 * DAY})
 
     def test_a_stall_on_full_with_no_room_stops_nothing(self):
         d = self.step(mode='full', stall=STALL, quiet=600, accounts={'1': HOT, '2': on(99)})
@@ -285,11 +312,35 @@ class Asked(unittest.TestCase):
 class Ready(unittest.TestCase):
     def step(self, **kwargs):
         fields = kwargs.pop('fields', {})
+        kwargs.setdefault('quiet', 600)
+        kwargs.setdefault('note_at', NOW - 30)          # after the ask at NOW - 120
         return decide(cross=crossing(U.READY, state_path='Z:/n.md', **fields), **kwargs)
 
     def test_it_starts_on_the_target_picked_now(self):
         d = self.step(accounts={'1': HOT, '2': on(99), '3': on(20)})
         self.assertEqual((d.action, d.target), (U.START, '3'))
+
+    def test_a_state_note_not_written_since_the_ask_never_starts(self):
+        for note_at in (None, NOW - 120, NOW - 3 * DAY):
+            d = self.step(note_at=note_at)
+            self.assertEqual((d.action, d.word), (U.HOLD, None), note_at)
+            self.assertIn('not written since the ask', d.note)
+
+    def test_a_transcript_written_under_a_minute_ago_never_starts(self):
+        for quiet in (None, 0, U.QUIET_S - 1):
+            d = self.step(quiet=quiet)
+            self.assertEqual(d.action, U.HOLD, quiet)
+            self.assertIn('transcript', d.note)
+        self.assertEqual(self.step(quiet=U.QUIET_S).action, U.START)
+
+    def test_half_an_hour_unsettled_says_no_ready(self):
+        d = self.step(note_at=None, fields={'phase_at': NOW - U.WAIT_READY_S})
+        self.assertEqual((d.action, d.word), (U.HOLD, 'no-ready'))
+
+    def test_its_own_start_moved_the_entry_with_no_successor_fails_it(self):
+        d = self.step(entry=MOVED, fields={'new_name': NEW.name})
+        self.assertEqual((d.action, d.word, d.remember), (U.CLEAR, 'cross-failed', True))
+        self.assertIn('which is not running; the old session stays', d.note)
 
     def test_a_successor_up_is_never_started_again(self):
         d = self.step(live=(OLD, U.Live('kit-coord-a2', 22, CREATED)),
@@ -388,6 +439,14 @@ class Stopping(unittest.TestCase):
     def test_a_new_process_under_the_old_name_is_never_stopped(self):
         d = self.step((U.Live(OLD.name, 99, CREATED), NEW))
         self.assertEqual((d.action, d.word), (U.CLEAR, 'crossed'))
+
+    def test_a_refused_stop_waits_out_its_backoff_then_gives_up(self):
+        def step(**fields):
+            return decide(entry=MOVED, cross=crossing(U.STOPPING, **fields), live=(OLD, NEW))
+        self.assertEqual(step(stop_tries=1, stop_retry_at=NOW + 1).action, U.HOLD)
+        self.assertEqual(step(stop_tries=1, stop_retry_at=NOW).action, U.STOP_OLD)
+        d = step(stop_tries=U.STOP_TRIES, stop_retry_at=NOW - 1)
+        self.assertEqual((d.action, d.word, d.remember), (U.CLEAR, 'cross-failed', True))
 
 
 class StallStop(unittest.TestCase):
@@ -539,6 +598,22 @@ class JobBase(unittest.TestCase):
                                   'weekly_stop': lambda folders: (folder, reset)})
         self.host.written[name] = written
 
+    def note(self, number, written, kind='handoff'):
+        """A hand-off record whose state note is a real file last written at `written`."""
+        path = os.path.join(self.tmp, 'note-%d.md' % number)
+        with open(path, 'w') as f:
+            f.write('note')
+        os.utime(path, (written, written))
+        return {'id': 'C-%03d' % number, 'kind': kind, 'state_path': path}
+
+    def ready(self, **fields):
+        """A crossing in ready whose session has settled: its note written after the ask, its
+        transcript quiet ten minutes."""
+        rec = self.note(6, NOW - 30)
+        self.host.written[OLD.name] = NOW - 600
+        self.put(crossing(U.READY, state_path=rec['state_path'], **fields))
+        return rec
+
     def run_job(self, ctx=None):
         self.ctx = ctx or Ctx()
         return self.job(self.ctx)
@@ -564,6 +639,7 @@ class Job(JobBase):
         self.assertEqual((c['high_c'], c['delivered'], c['old_pid'], c['target']), (7, True, 11, '2'))
         self.assertEqual(self.ctx.events, [('crossing', 'kit:a2')])
         self.assertEqual(self.calls, [])
+        self.assertEqual(self.doc()['asks'], {'kit': [NOW]})
 
     def ctx_note(self):
         return 'kit: asked to checkpoint for account 2; kit: account 1 99% of its week: to account 2 ' \
@@ -587,11 +663,12 @@ class Job(JobBase):
 
     def test_the_whole_move_ends_with_the_old_session_stopped_after_the_checkin(self):
         self.run_job()
-        self.newest = {'kit': record(1, 'handoff')}
+        self.newest = {'kit': self.note(1, NOW + 100)}
+        self.host.written[OLD.name] = NOW + 120             # quiet three minutes at the next run
         self.now += 300
         self.run_job()
         self.assertEqual(self.calls, [['handoff', '--session', 'kit', '--account', '2', '--state',
-                                       'Z:/note-1.md']])
+                                       self.newest['kit']['state_path']]])
         self.assertEqual(self.saved_at_child['crossings']['kit']['phase'], U.STARTING)
         self.assertEqual(self.saved_at_child['starts'], {'kit': [NOW + 300]})
         self.assertEqual(self.saved_at_child['landed'], {'2': NOW + 300})
@@ -612,6 +689,76 @@ class Job(JobBase):
         self.now += 300
         self.run_job()
         self.assertEqual(self.ctx.events, [('crossed', NEW.name)])
+        self.assertIsNone(self.crossing())
+
+    def test_a_ready_record_on_a_note_older_than_the_ask_never_starts(self):
+        self.run_job()
+        self.newest = {'kit': self.note(1, NOW - 3600)}     # an old note posted again
+        self.host.written[OLD.name] = NOW - 600
+        self.now += 300
+        self.assertIsInstance(self.run_job(), jobs.Skip)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.crossing()['phase'], U.READY)
+        self.assertIn('not written since the ask', self.log_text())
+
+    def test_a_ready_record_waits_for_the_transcript_to_go_quiet(self):
+        self.run_job()
+        self.newest = {'kit': self.note(1, NOW + 250)}
+        self.host.written[OLD.name] = NOW + 290              # still writing 10 s before the run
+        self.now += 300
+        self.assertIsInstance(self.run_job(), jobs.Skip)
+        self.assertEqual(self.calls, [])
+        self.now += 300
+        self.run_job()
+        self.assertEqual(self.calls[0][:5], ['handoff', '--session', 'kit', '--account', '2'])
+
+    def test_ready_to_stop_clears_and_is_not_asked_again_on_the_next_runs(self):
+        self.run_job()
+        self.newest = {'kit': record(1, 'stop')}
+        self.now += 300
+        self.run_job()
+        self.assertEqual(self.ctx.events, [('cross-cleared', 'kit')])
+        for _ in range(3):
+            self.now += 300
+            self.usage['1'] = reading(99, age=60 - (self.now - NOW))
+            self.run_job()
+            self.assertEqual(self.ctx.events, [])
+        self.assertEqual((len(self.sent), self.calls), (1, []))
+        self.assertEqual(self.doc()['cleared'], {'kit': {'account': '1', 'reset': NOW + 2 * DAY}})
+
+    def test_an_idle_predecessor_whose_successor_died_is_not_asked_or_started_again(self):
+        self.put(crossing(U.STARTED, high_c=1))
+        self.write('sessions.json', {'kit': MOVED})
+        self.live = [OLD]
+        self.run_job()
+        self.assertEqual(self.ctx.events, [('cross-failed', 'kit')])
+        self.now += 300
+        self.usage['1'] = reading(99, age=-240)
+        self.run_job()
+        self.assertEqual((self.sent, self.calls, self.ctx.events), ([], [], []))
+
+    def test_a_cleared_mark_lapses_when_its_week_resets(self):
+        self.write(U.STATE_FILE, {'cleared': {'kit': {'account': '1', 'reset': NOW - 1}}})
+        self.run_job()
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.doc()['cleared'], {})
+
+    def test_a_refused_stop_backs_off_then_gives_up_with_the_old_session_left(self):
+        self.put(crossing(U.STOPPING))
+        self.write('sessions.json', {'kit': MOVED})
+        self.live = [OLD, NEW]
+        self.code = 2
+        for wait in U.BACKOFF_S:
+            with self.assertRaises(U.StepFailed):
+                self.run_job()
+            calls = len(self.calls)
+            self.now += 60
+            self.assertIsInstance(self.run_job(), jobs.Skip)
+            self.assertEqual(len(self.calls), calls)
+            self.now += wait - 60
+        self.run_job()
+        self.assertEqual(len(self.calls), U.STOP_TRIES)
+        self.assertEqual(self.ctx.events, [('cross-failed', 'kit')])
         self.assertIsNone(self.crossing())
 
     def test_the_started_state_is_read_back_after_a_hub_restart(self):
@@ -635,7 +782,7 @@ class Job(JobBase):
         self.assertEqual(self.crossing()['phase'], U.STARTED)
 
     def test_a_failed_start_counts_and_fails_the_run_with_the_state_kept(self):
-        self.put(crossing(U.READY, state_path='Z:/n.md'))
+        self.ready()
         self.code = 3
         with self.assertRaises(U.StepFailed):
             self.run_job()
@@ -643,7 +790,7 @@ class Job(JobBase):
         self.assertEqual(self.doc()['starts'], {'kit': [NOW]})
 
     def test_a_timeout_fails_the_run_too(self):
-        self.put(crossing(U.READY, state_path='Z:/n.md'))
+        self.ready()
         self.code = subprocess.TimeoutExpired('x', 1)
         with self.assertRaisesRegex(U.StepFailed, 'did not end'):
             self.run_job()
