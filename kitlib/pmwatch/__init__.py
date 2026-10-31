@@ -549,6 +549,19 @@ def rc_key(r):
     return "%s %s %s" % (r["name"], r.get("pid"), r.get("proc_start"))
 
 
+def _newest_live(names, records, alive):
+    """{name: its newest record whose process runs} of the watched names."""
+    newest = {}
+    for r in records:
+        n, started = r.get("name"), r.get("started_ms")
+        if not isinstance(n, str) or n not in names or isinstance(started, bool) \
+                or not isinstance(started, (int, float)):
+            continue
+        if (n not in newest or started > newest[n]["started_ms"]) and alive(r):
+            newest[n] = r
+    return newest
+
+
 def rc_events(names, records, alive, rc_pids, lost, now):
     """(events, lost now) of the Remote Control link check (docs/pm-watch.md "Remote Control link").
 
@@ -562,13 +575,7 @@ def rc_events(names, records, alive, rc_pids, lost, now):
     state, so neither line repeats; a session that is gone, or runs as another process now (a stop
     and a relaunch), drops out, so the new one starts clean. A record whose name is not text is
     skipped."""
-    newest = {}
-    for r in records:
-        n, started = r.get("name"), r.get("started_ms")
-        if not isinstance(n, str) or n not in names or isinstance(started, bool)                 or not isinstance(started, (int, float)):
-            continue
-        if (n not in newest or started > newest[n]["started_ms"]) and alive(r):
-            newest[n] = r
+    newest = _newest_live(names, records, alive)
     ev, cur, unlinked = [], [], []
     for n in sorted(names):
         r = newest.get(n)
@@ -595,14 +602,80 @@ def rc_events(names, records, alive, rc_pids, lost, now):
     return ev, sorted(cur)
 
 
-def rc_check(sessions, reader, dirs=None, ctime=None, rc_pids=None):
+def at_limit(u):
+    """True when an account's stored reading says it can be at its weekly limit: 100%, or 99% and
+    stale (the file refreshes only while a session works, so a stalled account's reading can stop
+    short of 100 and age). A reading unknown (None) or under that is False."""
+    week = u.get("week")
+    return week is not None and (week >= 100 or (week >= 99 and bool(u.get("stale"))))
+
+
+def limit_events(names, records, alive, account_of, readings, fired, now):
+    """(events, stalled now) of the usage-limit check (docs/pm-watch.md "Usage-limit stall").
+
+    records and alive as rc_events; a record's weekly_stop() gives the epoch time the weekly limit
+    that stopped the session resets, or None; a record without it (a host with no reader) is
+    skipped. account_of(rec) is its account, or None. readings: the Watcher's stored usage, by
+    account. fired: the entries already reported. A watched session with a live process, on an
+    account at_limit, whose stop lies ahead gives LIMIT once; the entry holds the process and the
+    reset, and one that recovers drops out, so only a new stall fires again."""
+    ev, cur = [], []
+    newest = _newest_live(names, records, alive)
+    for n in sorted(newest):
+        r = newest[n]
+        account = account_of(r)
+        if r.get("weekly_stop") is None or not at_limit(readings.get(account) or {}):
+            continue
+        reset = r["weekly_stop"]()
+        if reset is None or reset <= now:
+            continue
+        key = "%s %s" % (rc_key(r), reset)
+        cur.append(key)
+        if key not in fired:
+            ev.append("LIMIT %s account %s stalled at the weekly limit until %s (pid %s)"
+                      % (n, account, time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(reset)),
+                         r["pid"]))
+    return ev, sorted(cur)
+
+
+def _folder_key(p):
+    return os.path.normcase(os.path.realpath(p))
+
+
+def registry_accounts(settings):
+    """{registry folder key: account} of the launcher's accounts. A folder of no account (an org's,
+    or a default folder no account names) has no usage reading, so it gets no LIMIT."""
+    from kitlib.launcher import pipes
+    return {_folder_key(os.path.join(d, pipes.REGISTRY)): n
+            for n in settings.account_numbers() for d in settings.account_dirs(n)}
+
+
+def limit_check(names, records, alive, accounts):
+    """The LIMIT check for Watcher: check(fired, readings, now) -> (lines, fired), over limit_events.
+    names() the watched names, records() the host's session records, accounts() registry_accounts.
+    Those are read only while some account is at_limit, so the check costs nothing otherwise; a
+    pass with none clears `fired`."""
+    def check(fired, readings, now):
+        if not any(at_limit(u) for u in readings.values()):
+            return [], []
+        folders = accounts()
+        return limit_events(names(), records(), alive,
+                            lambda r: folders.get(_folder_key(r["registry"])) if r.get("registry") else None,
+                            readings, list(fired or []), now)
+    return check
+
+
+def rc_check(sessions, reader, dirs=None, ctime=None, rc_pids=None, accounts=None):
     """The REMOTE check for Watcher: check(lost) -> (lines, lost), over rc_events for the names in
     sessions.json (watched_sessions) and the PM's (kitlib.launcher.stop.PM_RC_NAME: the PM has
     no sessions.json entry). reader(dirs) gives the host's session records
     (on Claude, hosts.claude.adapter.claude_host.rc_records); dirs() the registry folders (default:
     every configured account's, kitlib.launcher.pipes.registry_dirs, read again on each call);
     ctime(pid) the process creation time; rc_pids() the running sessions' --remote-control names.
-    The imports happen here, when the watcher is built, so a landing cannot mix modules later."""
+    The imports happen here, when the watcher is built, so a landing cannot mix modules later.
+    The check's `limit` attribute is the LIMIT check over the same sessions and records (limit_check;
+    accounts() default: registry_accounts of the launcher settings, read again on each call), which
+    the Watcher picks up, so every builder of the REMOTE check gets LIMIT too."""
     from kitlib import pmstart
     from kitlib.launcher import pipes, settings as launcher_settings, stop
     from kitlib.proc import process
@@ -621,9 +694,13 @@ def rc_check(sessions, reader, dirs=None, ctime=None, rc_pids=None):
             return False
         return now is not None and r.get("proc_start") is not None and str(now) == str(r["proc_start"])
 
+    def names():
+        return set(watched_sessions(sessions)) | {stop.PM_RC_NAME}
+
     def check(lost):
-        names = set(watched_sessions(sessions)) | {stop.PM_RC_NAME}
-        return rc_events(names, reader(dirs()), alive, rc_pids, list(lost or []), time.time())
+        return rc_events(names(), reader(dirs()), alive, rc_pids, list(lost or []), time.time())
+    check.limit = limit_check(names, lambda: reader(dirs()), alive,
+                              accounts or (lambda: registry_accounts(launcher_settings.load())))
     return check
 
 
@@ -661,12 +738,14 @@ class Watcher:
     others it has no baseline: a plugin export already behind at the first run is reported then.
     hub: check(last) -> (lines, last) (hub_check), or None for no HUB check.
     rc: check(lost) -> (lines, lost) (rc_check), or None for no REMOTE check; on the idle cadence.
+    limit: check(fired, readings, now) -> (lines, fired) (limit_check), or None for rc's own `limit`,
+    if it has one; on the idle cadence, after the usage check. Like REMOTE it has no baseline.
     preload_modules: the host's own modules its checks import late (preload).
     stopped: stopped(name, mtime) -> time or None (stop_log_reader over stop.log beside `sessions`).
     yield_to: yield_to() -> True while the hub's session-watch job covers the session checks
     (hub_session_job_up), or None to never step aside; asked once each poll (one that raises is
-    False). While True the session checks (USAGE, RESET, IDLE, STOPPED, BGFAIL, LOCKNOTICE, REMOTE
-    and their ERROR lines) still run and keep the state current, but their lines are dropped, so
+    False). While True the session checks (USAGE, RESET, IDLE, STOPPED, BGFAIL, LOCKNOTICE, REMOTE,
+    LIMIT and their ERROR lines) still run and keep the state current, but their lines are dropped, so
     a hub gone down hands back with nothing repeated; BRANCH, PLUGIN and HUB stay. `yielded` is the
     latest poll's answer, which the heartbeat carries (write_heartbeat).
     """
@@ -674,7 +753,7 @@ class Watcher:
     def __init__(self, state, branches, usage_reader, alerts_dir, sessions, newest,
                  idle_minutes=20, branch_poll=300, usage_poll=600, idle_poll=300, tip=branch_tip,
                  notice_dir=None, plugin=None, preload_modules=(), stopped=None, hub=None, rc=None,
-                 yield_to=None):
+                 yield_to=None, limit=None):
         preload(preload_modules)
         self.yield_to = yield_to
         self.yielded = False
@@ -692,9 +771,11 @@ class Watcher:
         self.plugin = plugin
         self.hub = hub
         self.rc = rc
+        self.limit = limit or getattr(rc, "limit", None)
         self.fails = {"branch": 0, "usage": 0, "alerts": 0, "idle": 0, "notices": 0, "plugin": 0,
-                      "hub": 0, "rc": 0}
+                      "hub": 0, "rc": 0, "limit": 0}
         self.next_b = self.next_u = self.next_i = self.next_p = self.next_h = self.next_r = 0.0
+        self.next_l = 0.0
 
     def start(self, now):
         s = self.s
@@ -794,4 +875,12 @@ class Watcher:
                 self.fails["rc"] = 0
             except Exception as e:
                 self._failed("rc", e, sev)
+        if self.limit and now >= self.next_l:       # on the idle cadence: nothing read below 99%
+            self.next_l = now + self.idle_poll
+            try:
+                ev, s["limit_stalled"] = self.limit(s.get("limit_stalled", []), s.get("usage", {}), now)
+                sev += ev
+                self.fails["limit"] = 0
+            except Exception as e:
+                self._failed("limit", e, sev)
         return events
