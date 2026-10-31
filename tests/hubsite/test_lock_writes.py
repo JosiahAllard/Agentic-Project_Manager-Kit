@@ -306,8 +306,8 @@ class DoorWriteTest(DoorWriteCase):
         self.assertAlmostEqual((start - dt.datetime.now(UTC)).total_seconds(), 3600, delta=60)
         self.assertEqual((hold['scope'], hold['note']), ('half', 'build'))
         # a bare HH:MM is this PC's local time
-        local = (dt.datetime.now().astimezone() + dt.timedelta(days=1)).replace(
-            hour=14, minute=0, second=0, microsecond=0)
+        local = (dt.datetime.now() + dt.timedelta(days=1)).replace(
+            hour=14, minute=0, second=0, microsecond=0).astimezone()     # tomorrow's offset, not today's
         day = local.strftime('%Y-%m-%d')
         obj = self.ok('/lock/holds', {'kind': 'hold', 'scope': 'whole',
                                       'start': day + ' 14:00', 'end': day + ' 15:00'})
