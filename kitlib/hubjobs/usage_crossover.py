@@ -4,7 +4,7 @@ the weekly limit (docs/launcher.md "Usage crossover", docs/action-hub.md "Timed 
   make(sources) -> jobs.Job | None   the job; None when launcher.state_dir is not set or the host
                                      has no watcher readers
   decide(key, entry, crossing, live, stall, quiet_s, accounts, newest, starts, running, landed,
-         mode, now, note_at, cleared, asks) -> Decision
+         mode, now, note_at, cleared, asks, weeks) -> Decision
                                      one session's next step, pure: no file, process or clock read
   decide_pm(pms, crossing, stall, quiet_s, accounts, newest, starts, running, landed, mode, now,
             note_at, cleared, asks, points, recorded, names) -> Decision
@@ -17,9 +17,11 @@ the weekly limit (docs/launcher.md "Usage crossover", docs/action-hub.md "Timed 
   CrossoverJob(load, ...)            its run(ctx)
 
 The trigger is the weekly window only (the five-hour window is ignored): a reading no older than
-pmwatch.STALE_MINUTES at TRIGGER_WEEK% or more, or a stall read: the session transcript's newest
-entry is a weekly-limit error (the host's weekly_stop, not pm_watch's LIMIT event, which can lag
-an hour) whose reset lies ahead, with no transcript write for QUIET_S.
+pmwatch.STALE_MINUTES at TRIGGER_WEEK% or more, or earlier, a fresh week at EARLY_FLOOR% or more
+that burn_eta, from the account's readings of the last BURN_SPAN_S, puts at 100% within LEAD_S;
+or a stall read: the session transcript's newest entry is a weekly-limit error (the host's
+weekly_stop, not pm_watch's LIMIT event, which can lag an hour) whose reset lies ahead, with no
+transcript write for QUIET_S.
 
 launcher.usage_crossover, read again at each run, sets what the job may do. `notify` (the default,
 and unset): decide, log, run `launch.py handoff --what-if` and `stop --dry-run` on each change and
@@ -33,8 +35,9 @@ restart resolves each from live facts:
 
   asked       not delivered: deliver again. A newer `handoff` or `restart` record: ready. A newer
               `stop` record: cleared, the PM told. WAIT_READY_S with nothing: `no-ready` once, and
-              it stays open. The week reset or the session gone: cleared. The session stalled and
-              the mode not full: cleared with `stalled`, left to the PM (it cannot reply).
+              it stays open. The week under EARLY_FLOOR% (a reset) or the session gone: cleared.
+              The session stalled and the mode not full: cleared with `stalled`, left to the PM
+              (it cannot reply).
   ready       waits until the record's state note was written after the ask and the transcript
               has been quiet QUIET_S (WAIT_READY_S of it: `no-ready` once); then notes the highest
               C-number, counts the start, then `launch.py handoff --session K --account N --state
@@ -86,9 +89,7 @@ pm-session or its pm_session_id on the command line); its account is pm_account.
 pm_session_id or pm_account recorded, pm-crossover cannot move it: `pm-limit` once per change. A conversation
 cannot resume on another account, so its successor starts fresh from its hand-off file through
 `launch.py pm-crossover`, which confirms the new session and writes coordinators.json. The trigger
-is TRIGGER_WEEK% of a fresh reading, or earlier: a fresh week at EARLY_FLOOR% or more that
-burn_eta, from the account's readings of the last BURN_SPAN_S, puts at 100% within LEAD_S. The
-target is tier 1 only (no account under TARGET_LIMIT% of both windows: `no-room pm`). Its states:
+is a session's (the early one included). The target is tier 1 only (no account under TARGET_LIMIT% of both windows: `no-room pm`). Its states:
 
   asked       the PM is pushed a checkpoint message (PM_CHECKPOINT: update HANDOFF.md, post
               hub_handoff_ready from pm with its path); as a session's, but a stall on full goes to
@@ -167,8 +168,8 @@ WEEK_S = 7 * 24 * 3600
 PM_DOC = '_pm'                 # the PM's key in the state file (no sessions.json key starts with _)
 PM_DETAIL = 'pm'               # its push detail
 PM_FROM = 'pm'                 # the `from` of its hand-off records (push.PM_KEY)
-EARLY_FLOOR = 95               # % of the week: the PM's early trigger needs at least this
-LEAD_S = 20 * 60               # the PM crosses early when its week would reach 100% this soon
+EARLY_FLOOR = 95               # % of the week: the early trigger needs at least this
+LEAD_S = 20 * 60               # a session or the PM crosses early when its week would reach 100% this soon
 BURN_SPAN_S = 2 * 3600         # the readings burn_eta reads
 BURN_MIN_S = 10 * 60           # fewer minutes of readings than this: no burn rate
 
@@ -320,7 +321,7 @@ def _no_room(key):
 
 
 def decide(key, entry, crossing, live, stall, quiet_s, accounts, newest, starts, running, landed,
-           mode, now, note_at=None, cleared=None, asks=None):
+           mode, now, note_at=None, cleared=None, asks=None, weeks=None):
     """One session's next step. `entry` its sessions.json entry (None: gone); `crossing` its open
     crossing or None; `live` [Live] of the processes of its stem; `stall` the stall read of the
     session in question, or None; `quiet_s` seconds since its transcript was written, or None;
@@ -328,12 +329,13 @@ def decide(key, entry, crossing, live, stall, quiet_s, accounts, newest, starts,
     {key: [epoch]}; `running`, `landed` as pick_target; `mode` launcher.usage_crossover;
     `note_at` the mtime of the crossing's state note (its ready record's), or None; `cleared` the
     {account, reset} of its last crossing that cleared with the session left where it was, or
-    None; `asks` [epoch] of its asks. Reads nothing itself."""
+    None; `asks` [epoch] of its asks; `weeks` {account: week readings} (burn_eta). Reads nothing
+    itself."""
     if crossing:
         return _step(key, entry, crossing, live, stall, quiet_s, accounts, newest, starts, running,
                      landed, mode, now, note_at)
     return _trigger(key, entry, live, stall, quiet_s, accounts, starts, running, landed, mode, now,
-                    cleared, asks)
+                    cleared, asks, weeks)
 
 
 def _cleared_now(cleared, acct, reset):
@@ -343,7 +345,7 @@ def _cleared_now(cleared, acct, reset):
 
 
 def _trigger(key, entry, live, stall, quiet_s, accounts, starts, running, landed, mode, now,
-             cleared=None, asks=None):
+             cleared=None, asks=None, weeks=None):
     if not isinstance(entry, dict) or not entry.get('stem'):
         return _hold('no stem')
     if not entry.get('state'):
@@ -356,12 +358,10 @@ def _trigger(key, entry, live, stall, quiet_s, accounts, starts, running, landed
     acct = (stall[0] if stall and stall[0] else None) or C.name_account(live[0].name) or (
         None if entry.get('account') in (None, '') else str(entry['account']))
     st = accounts.get(acct)
-    data = st.usage if st is not None else None
-    week, week_reset = window(data, 'seven_day', now)
-    high = week is not None and week >= TRIGGER_WEEK
-    fresh = high and is_fresh(data, now)
-    if not stalled and not fresh:
-        if high:
+    week, week_reset, high, early, eta = _week_trigger(st.usage if st is not None else None,
+                                                       (weeks or {}).get(acct), now)
+    if not stalled and not high and not early:
+        if week is not None and week >= TRIGGER_WEEK:
             return _hold('account %s: %d%% of its week, a stale reading, no stall read' % (acct, week))
         if stall is not None and stall[1] > now:
             return _hold('a stall read, but active under %d s ago' % QUIET_S)
@@ -381,7 +381,7 @@ def _trigger(key, entry, live, stall, quiet_s, accounts, starts, running, landed
     if pick is None:
         return _no_room(key)
     target, reason = pick
-    how = 'stalled' if stalled else '%d%% of its week' % week
+    how = 'stalled' if stalled else _how(week, high, eta)
     note = 'account %s %s: to account %s (%s)' % (acct, how, target, reason)
     detail = '%s:a%s' % (key, target)
     if mode == NOTIFY:
@@ -478,7 +478,7 @@ def _asked(args, stalled, stall_now, accounts, newest, running, landed, now):
                      'full)', 'stalled', key)
     st = accounts.get(str(c.get('account')))
     week, _ = window(st.usage if st is not None else None, 'seven_day', now)
-    if week is not None and week < TRIGGER_WEEK:
+    if week is not None and week < EARLY_FLOOR:     # an early ask comes under TRIGGER_WEEK
         return _gone('the week reset: no crossing needed', detail=key)
     if not c.get('delivered'):
         return Decision(ASK, 'the checkpoint message again: not delivered', c.get('target'))
@@ -626,6 +626,25 @@ def burn_eta(points, now):
     return max(0.0, (100.0 - p1) / rate - (now - t1))
 
 
+def _week_trigger(data, points, now):
+    """(week, reset, high, early, eta) of an account's reading `data`: `high` a fresh week at
+    TRIGGER_WEEK% or more; `early` not high, a fresh week at EARLY_FLOOR% or more that burn_eta of
+    `points` puts at 100% within LEAD_S (eta its seconds, else None)."""
+    week, reset = window(data, 'seven_day', now)
+    fresh = week is not None and is_fresh(data, now)
+    eta = burn_eta(points, now) if fresh and week >= EARLY_FLOOR else None
+    high = fresh and week >= TRIGGER_WEEK
+    early = not high and eta is not None and eta < LEAD_S
+    return week, reset, high, early, eta
+
+
+def _how(week, high, eta):
+    """The trigger's words for a decision note: a week at the trigger, or early at its burn rate."""
+    if high:
+        return '%d%% of its week' % week
+    return '%d%% of its week, 100%% in %d min at its burn rate' % (week, eta // 60)
+
+
 def decide_pm(pms, crossing, stall, quiet_s, accounts, newest, starts, running, landed, mode, now,
               note_at=None, cleared=None, asks=None, points=None, recorded=None, names=()):
     """The PM's next step (module docstring "The PM"). `pms` [PmLive] of its launched processes;
@@ -665,12 +684,7 @@ def _pm_trigger(pms, stall, quiet_s, accounts, starts, running, landed, mode, no
     stalled = is_stalled(stall, quiet_s, now)
     acct = (stall[0] if stall and stall[0] else None) or pms[0].account
     st = accounts.get(acct)
-    data = st.usage if st is not None else None
-    week, week_reset = window(data, 'seven_day', now)
-    fresh = week is not None and is_fresh(data, now)
-    eta = burn_eta(points, now) if fresh and week >= EARLY_FLOOR else None
-    high = fresh and week >= TRIGGER_WEEK
-    early = not high and eta is not None and eta < LEAD_S
+    week, week_reset, high, early, eta = _week_trigger(st.usage if st is not None else None, points, now)
     if not stalled and not high and not early:
         if week is not None and week >= TRIGGER_WEEK:
             return _hold('account %s: %d%% of its week, a stale reading, no stall read' % (acct, week))
@@ -695,8 +709,7 @@ def _pm_trigger(pms, stall, quiet_s, accounts, starts, running, landed, mode, no
     if pick is None:
         return _no_room(PM_DETAIL)
     target, reason = pick
-    how = ('stalled' if stalled else '%d%% of its week' % week if high
-           else '%d%% of its week, 100%% in %d min at its burn rate' % (week, eta // 60))
+    how = 'stalled' if stalled else _how(week, high, eta)
     note = 'the PM: account %s %s: to account %s (%s)' % (acct, how, target, reason)
     detail = '%s:a%s' % (PM_DETAIL, target)
     if mode == NOTIFY:
@@ -821,7 +834,7 @@ PM_CHECKPOINT = ("The hub's usage crossover: the PM's account is near its weekly
                  'nothing more and start nothing. Once the new PM is confirmed you are told to stand down. '
                  'If the hub drops the crossing instead (a cross-cleared, cross-failed, no-room or stalled '
                  'push with detail pm), resume your normal work.')
-CHECKPOINT = ("The hub's usage crossover: this session's account has reached the weekly limit, and "
+CHECKPOINT = ("The hub's usage crossover: this session's account is near its weekly limit, and "
               'the hub will move you to account %s. Checkpoint and stand down now with skill '
               'session-handoff: write your state note, post it with hub_handoff_ready (kind '
               'handoff, from %s), reply ready as the skill says and go idle. The hub runs the '
@@ -933,7 +946,8 @@ class CrossoverJob(object):
                           newest.get(key), doc['starts'], running, doc['landed'],
                           settings.usage_crossover, now,
                           note_at=_mtime((crossing or {}).get('state_path')),
-                          cleared=doc['cleared'].get(key), asks=doc['asks'].get(key))
+                          cleared=doc['cleared'].get(key), asks=doc['asks'].get(key),
+                          weeks=doc['weeks'])
 
         steps, known = [], set()
         for key in sorted(set(entries) | set(doc['crossings'])):

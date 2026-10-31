@@ -56,10 +56,10 @@ def crossing(phase, **fields):
 
 def decide(entry=ENTRY, cross=None, live=(OLD,), stall=None, quiet=None, accounts=ACCOUNTS,
            newest=None, starts=None, running=None, landed=None, mode='normal', now=NOW,
-           note_at=None, cleared=None, asks=None):
+           note_at=None, cleared=None, asks=None, **weeks):
     return U.decide('kit', entry, cross, list(live), stall, quiet, accounts, newest, starts or {},
                     {'1': 1} if running is None else running, landed or {}, mode, now,
-                    note_at=note_at, cleared=cleared, asks=asks)
+                    note_at=note_at, cleared=cleared, asks=asks, **weeks)
 
 
 def record(number, kind):
@@ -146,6 +146,25 @@ class Trigger(unittest.TestCase):
     def test_a_cleared_key_that_stalls_on_normal_is_still_pushed_stalled(self):
         d = decide(cleared={'account': '1', 'reset': NOW + 2 * DAY}, stall=STALL, quiet=600)
         self.assertEqual((d.action, d.word, d.detail), (U.HOLD, 'stalled', 'kit'))
+
+    def test_the_early_trigger_asks_a_session_before_99_when_its_burn_rate_reaches_100_inside_the_lead(self):
+        warm = {'1': on(97), '2': on(20)}
+        fast = decide(accounts=warm, weeks={'1': rising(90, 97, 30)})
+        self.assertEqual((fast.action, fast.target, fast.word, fast.detail), (U.ASK, '2', 'crossing', 'kit:a2'))
+        self.assertIn('97% of its week, 100% in', fast.note)
+        self.assertIn('at its burn rate', fast.note)
+        holds = {
+            'under 95': decide(accounts={'1': on(94), '2': on(20)}, weeks={'1': rising(80, 94, 30)}),
+            'a slow rise': decide(accounts=warm, weeks={'1': rising(96, 97, 30)}),
+            'no readings kept': decide(accounts=warm, weeks={}),
+            'a stale reading': decide(accounts={'1': on(97, age=2 * 3600), '2': on(20)},
+                                      weeks={'1': rising(90, 97, 30)}),
+            'another account rising': decide(accounts=warm, weeks={'2': rising(90, 97, 30)}),
+        }
+        for why, d in holds.items():
+            self.assertEqual((d.action, d.word), (U.HOLD, None), why)
+        d = decide(accounts=warm, weeks={'1': rising(90, 97, 30)}, mode='notify')
+        self.assertEqual((d.action, d.word, d.mark), (U.WOULD, 'would-cross', 'would-cross:2:week'))
 
     def test_asks_have_a_cap_per_key(self):
         d = decide(asks=[NOW - 60, NOW - 120, NOW - 180])
@@ -492,6 +511,12 @@ class Asked(unittest.TestCase):
 
     def test_a_week_that_reset_clears_it(self):
         d = self.step(accounts={'1': on(99, week_in=-60), '2': on(20)})
+        self.assertEqual((d.action, d.word), (U.CLEAR, 'cross-cleared'))
+
+    def test_an_early_crossing_stays_open_under_99_and_clears_under_95(self):
+        self.assertEqual(self.step(accounts={'1': on(97), '2': on(20)}).action, U.HOLD)
+        self.assertEqual(self.step(accounts={'1': on(95), '2': on(20)}).action, U.HOLD)
+        d = self.step(accounts={'1': on(94), '2': on(20)})
         self.assertEqual((d.action, d.word), (U.CLEAR, 'cross-cleared'))
 
     def test_the_session_gone_or_replaced_clears_it(self):
@@ -857,6 +882,18 @@ class Job(JobBase):
     def ctx_note(self):
         return 'kit: asked to checkpoint for account 2; kit: account 1 99% of its week: to account 2 ' \
                '(under 95%, its week resets first)'
+
+    def test_a_fast_burning_coordinator_is_asked_before_99_from_the_kept_readings(self):
+        self.usage['1'] = reading(97)
+        self.write(U.STATE_FILE, {'weeks': {'1': rising(90, 97, 30)}})
+        self.run_job()
+        self.assertEqual(self.crossing()['phase'], U.ASKED)
+        self.assertEqual([name for name, _ in self.sent], [OLD.name])
+        self.assertIn('near its weekly limit', self.sent[0][1])
+        self.assertEqual(self.ctx.events, [('crossing', 'kit:a2')])
+        self.run_job()                  # the next run, still at 97%: the crossing stays open
+        self.assertEqual(self.crossing()['phase'], U.ASKED)
+        self.assertEqual(len(self.sent), 1)
 
     def test_a_second_run_does_not_ask_again(self):
         self.run_job()
