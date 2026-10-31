@@ -109,7 +109,9 @@ class EveryRenderedManifest(unittest.TestCase):
             r = importlib.import_module(registry.host(name).adapter).ADAPTER.content().renderer()
             files = r.manifests(kit, content, registry_path=path)
             hooks = [rel for rel in files if os.path.basename(rel).startswith('hooks.')]
-            self.assertEqual(len(hooks), len(known), (name, sorted(files)))
+            # Codex's hooks are its fixed-bytes pm-kit-hooks plugin (hosts/codex/shell/hooks-plugin),
+            # never rendered.
+            self.assertEqual(len(hooks), 0 if name == 'codex' else len(known), (name, sorted(files)))
             for rel in files:
                 with self.subTest(host=name, path=rel):
                     self.assertIsNotNone(generated.source(ROOT, rel))

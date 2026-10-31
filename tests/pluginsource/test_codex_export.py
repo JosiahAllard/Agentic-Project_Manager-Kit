@@ -1,7 +1,8 @@
 """Codex from the plugin export (docs/plugin-source.md "Codex"): the export places Codex's manifest
 at .codex-plugin/plugin.json, stamped; write_marketplace writes Codex's marketplace beside Claude's;
-hosts.codex.adapter.plugin_install installs the export by `codex plugin add` (a stand-in runs it);
-and refresh's prune keeps the export Codex's cache was installed from. Temp folders and a fake
+hosts.codex.adapter.plugin_install installs the export by `codex plugin add` (a stand-in runs it),
+pm-kit, then the hooks plugin pm-kit-hooks only when Codex does not hold its bytes, so a new kit
+version asks no new hook trust; and refresh's prune keeps the export Codex's cache was installed from. Temp folders and a fake
 codex.exe only: no real ~/.codex is read and no codex runs."""
 import datetime
 import json
@@ -20,7 +21,9 @@ from tests.pluginsource.test_codex import link
 
 NOW = datetime.datetime(2026, 10, 11, 9, 0)
 CODEX_MANIFEST = '{\n  "name": "pm-kit",\n  "version": "0.1.0",\n  "skills": "./content/skills/"\n}\n'
-HOOKS = '{"hooks": {}}\n'
+# A stand-in hooks plugin (the real one: tests/pluginsource/test_codex_hooks.py).
+STUB = {'.codex-plugin/plugin.json': '{"name": "pm-kit-hooks", "version": "1.0.0", "hooks": "./hooks/hooks.json"}\n',
+        'hooks/hooks.json': '{"hooks": {}}\n', 'pm_kit_hook.py': '# stub\n'}
 
 
 def write(path, text):
@@ -164,7 +167,8 @@ class Done(object):
 
 class InstallCase(unittest.TestCase):
     """A Codex home whose config.toml names the marketplace pm-kit at an export root, an export
-    folder at version 1.0.0-main.2, and a fake codex.exe (never run: `run` stands in)."""
+    folder at version 1.0.0-main.2 holding a hooks plugin (STUB), and a fake codex.exe (never run:
+    `run` stands in)."""
 
     def setUp(self):
         self.base = tempfile.mkdtemp(prefix='kit-codex-install-')
@@ -173,7 +177,9 @@ class InstallCase(unittest.TestCase):
         self.root = os.path.join(self.base, 'plugin')
         self.export = os.path.join(self.root, 'bbbbbbbbbbbb')
         write(os.path.join(self.export, '.codex-plugin', 'plugin.json'), '{"name": "pm-kit", "version": "1.0.0-main.2"}\n')
-        write(os.path.join(self.export, *pi.HOOKS), HOOKS)
+        self.stub = os.path.join(self.export, *pi.HOOKS_DIR)
+        for rel, text in STUB.items():
+            write(os.path.join(self.stub, *rel.split('/')), text)
         write(os.path.join(self.export, P.MARKER), '{"sha": "%s"}\n' % ('b' * 40))
         self.exe = os.path.join(self.base, 'bin', 'codex.exe')
         write(self.exe, 'not a program\n')
@@ -186,23 +192,41 @@ class InstallCase(unittest.TestCase):
               "[marketplaces.pm-kit]\nsource_type = \"local\"\nsource = '%s'\n\n"
               "[plugins.\"pm-kit@pm-kit\"]\nenabled = true\n%s" % (source, extra))
 
-    def cache(self, version, sha='a' * 40, hooks=HOOKS):
+    def cache(self, version, sha='a' * 40):
         folder = os.path.join(self.home, 'plugins', 'cache', 'pm-kit', 'pm-kit', version)
         write(os.path.join(folder, P.MARKER), '{"sha": "%s"}\n' % sha)
-        write(os.path.join(folder, *pi.HOOKS), hooks)
         return folder
 
-    def installs(self, rc=0, version='1.0.0-main.2'):
-        """A stand-in for codex plugin add: records the call; on rc 0 swaps the cache to `version`."""
+    def hooks_cache(self, files=None, named=True):
+        """Codex's copy of pm-kit-hooks 1.0.0 (`files`, else STUB); `named`: config.toml names it."""
+        top = os.path.join(self.home, 'plugins', 'cache', 'pm-kit', 'pm-kit-hooks')
+        if os.path.isdir(top):
+            gitfixture.rmtree(top)
+        for rel, text in (STUB if files is None else files).items():
+            write(os.path.join(top, '1.0.0', *rel.split('/')), text)
+        if named:
+            with open(os.path.join(self.home, 'config.toml'), 'a', encoding='utf-8') as fh:
+                fh.write('\n[plugins."pm-kit-hooks@pm-kit"]\nenabled = true\n')
+
+    def installs(self, rc=0, version='1.0.0-main.2', hooks=None):
+        """A stand-in for codex plugin add: records the call; on rc 0 swaps the pm-kit cache to
+        `version`, or the pm-kit-hooks cache to `hooks` (None: the export's)."""
         def run(argv, env):
             self.calls.append((argv, env.get('CODEX_HOME')))
-            if rc == 0 and version:
+            if rc == 0 and argv[-1] == pi.HOOKS_KEY:
+                self.hooks_cache(hooks or {rel: read(os.path.join(self.stub, *rel.split('/'))) for rel in STUB},
+                                 named=False)
+            elif rc == 0 and version:
                 top = os.path.join(self.home, 'plugins', 'cache', 'pm-kit', 'pm-kit')
                 for n in os.listdir(top) if os.path.isdir(top) else ():
                     gitfixture.rmtree(os.path.join(top, n))
                 self.cache(version, 'b' * 40)
             return Done(rc, b'', b'error: no such marketplace' if rc else b'')
         return run
+
+    def adds(self):
+        """The plugins each codex plugin add named, in order."""
+        return [argv[-1] for argv, _home in self.calls]
 
     def install(self, apply=True, run=None, env=None):
         pi.install(self.export, self.home, pi.read_config(self.home), self.lines.append, apply=apply,
@@ -214,30 +238,68 @@ class InstallCase(unittest.TestCase):
 
 class InstallTest(InstallCase):
     def test_apply_runs_codex_plugin_add_with_the_codex_home(self):
-        self.cache('1.0.0-main.1', hooks='{"hooks": {"old": 1}}\n')
-        self.install()
-        self.assertEqual(self.calls, [([os.path.realpath(self.exe), 'plugin', 'add', 'pm-kit@pm-kit'], self.home)])
-        self.assertIn('codex: installed pm-kit 1.0.0-main.2 from %s (was 1.0.0-main.1)' % self.export, self.text())
-        self.assertIn('asks the owner to trust them again', self.text())
-
-    def test_a_new_version_asks_for_trust_again_with_unchanged_hooks(self):
-        # Codex's trust hash covers the versioned cache folder (observed on 0.165)
         self.cache('1.0.0-main.1')
         self.install()
-        self.assertIn('installed pm-kit 1.0.0-main.2', self.text())
-        self.assertIn('Codex shows them as modified and asks the owner to trust them again', self.text())
+        exe = os.path.realpath(self.exe)
+        self.assertEqual(self.calls, [([exe, 'plugin', 'add', 'pm-kit@pm-kit'], self.home),
+                                      ([exe, 'plugin', 'add', 'pm-kit-hooks@pm-kit'], self.home)])
+        self.assertIn('codex: installed pm-kit 1.0.0-main.2 from %s (was 1.0.0-main.1)' % self.export, self.text())
 
-    def test_a_first_install_asks_for_the_first_trust(self):
+    def test_a_new_kit_version_with_the_hooks_plugin_held_asks_no_trust(self):
+        # Codex's trust covers every byte of a plugin's folder: the hooks plugin's never change
+        self.cache('1.0.0-main.1')
+        self.hooks_cache()
         self.install()
+        self.assertEqual(self.adds(), ['pm-kit@pm-kit'])
+        self.assertIn('installed pm-kit 1.0.0-main.2', self.text())
+        self.assertIn('codex: pm-kit-hooks is installed: current', self.text())
+        self.assertNotIn('trust', self.text())
+
+    def test_a_first_install_asks_for_the_first_trust_once(self):
+        self.install()
+        self.assertEqual(self.adds(), ['pm-kit@pm-kit', 'pm-kit-hooks@pm-kit'])
         self.assertIn('installed pm-kit 1.0.0-main.2 from %s (was none)' % self.export, self.text())
-        self.assertIn('codex: Codex asks the owner to trust the pm-kit hooks at its next start', self.text())
-        self.assertNotIn('trust them again', self.text())
+        self.assertIn('codex: installed pm-kit-hooks from %s: Codex asks the owner once to trust its four hooks at '
+                      'its next start; they run the installed pm-kit, so a new kit version asks nothing'
+                      % self.export, self.text())
+        self.assertNotIn('once more', self.text())
+
+    def test_a_changed_hooks_plugin_asks_once_more(self):
+        self.cache('1.0.0-main.2')
+        self.hooks_cache(dict(STUB, **{'pm_kit_hook.py': '# an older stub\n'}))
+        self.install()
+        self.assertEqual(self.adds(), ['pm-kit-hooks@pm-kit'])
+        self.assertIn('codex: pm-kit-hooks changed: Codex shows its four hooks as modified and asks the owner once '
+                      'more to trust them at its next start', self.text())
+
+    def test_a_hooks_plugin_codex_does_not_name_is_added_again(self):
+        self.cache('1.0.0-main.2')
+        self.hooks_cache(named=False)
+        self.install()
+        self.assertEqual(self.adds(), ['pm-kit-hooks@pm-kit'])
+        self.assertIn('codex: installed pm-kit-hooks again from %s, its bytes unchanged' % self.export, self.text())
+
+    def test_a_hooks_add_that_leaves_other_bytes_is_a_failure(self):
+        self.cache('1.0.0-main.2')
+        self.install(run=self.installs(hooks={'pm_kit_hook.py': '# other\n'}))
+        self.assertIn("codex: FAILED: codex plugin add pm-kit-hooks@pm-kit exited 0 but the cache does not hold the "
+                      "export's hosts/codex/shell/hooks-plugin", self.text())
+        self.assertNotIn('trust', self.text())
+
+    def test_an_export_without_the_hooks_plugin_adds_only_pm_kit(self):
+        gitfixture.rmtree(self.stub)
+        self.install()
+        self.assertEqual(self.adds(), ['pm-kit@pm-kit'])
+        self.assertIn('has no hosts/codex/shell/hooks-plugin/.codex-plugin/plugin.json: pm-kit-hooks not installed',
+                      self.text())
 
     def test_a_cache_at_the_exports_version_is_current(self):
         self.cache('1.0.0-main.2')
+        self.hooks_cache()
         self.install()
         self.assertEqual(self.calls, [])
         self.assertIn('codex: pm-kit 1.0.0-main.2 is installed from the export: current', self.text())
+        self.assertIn('codex: pm-kit-hooks is installed: current', self.text())
 
     def test_a_dry_run_names_the_command_and_runs_nothing(self):
         self.cache('1.0.0-main.1')
@@ -245,6 +307,8 @@ class InstallTest(InstallCase):
         self.assertEqual(self.calls, [])
         self.assertIn('codex: would run codex plugin add pm-kit@pm-kit (with CODEX_HOME=%s): the cache holds '
                       '1.0.0-main.1, the export is 1.0.0-main.2' % self.home, self.text())
+        self.assertIn("codex: would run codex plugin add pm-kit-hooks@pm-kit (with CODEX_HOME=%s): Codex does not "
+                      "hold the export's pm-kit-hooks" % self.home, self.text())
 
     def test_a_marketplace_elsewhere_is_refused(self):
         self.config(os.path.join(self.base, 'elsewhere'))
@@ -271,26 +335,29 @@ class InstallTest(InstallCase):
         self.assertIn('codex: not installed (codex.exe is unavailable', self.text())
         self.assertIn('run by hand: codex plugin add pm-kit@pm-kit (with CODEX_HOME=%s)' % self.home, self.text())
 
-    def test_a_failed_add_is_a_line_with_what_codex_said(self):
+    def test_a_failed_add_is_a_line_with_what_codex_said_and_no_hooks_add(self):
         self.install(run=self.installs(rc=1))
-        self.assertIn('codex: FAILED: codex plugin add exited 1: error: no such marketplace', self.text())
+        self.assertIn('codex: FAILED: codex plugin add pm-kit@pm-kit exited 1: error: no such marketplace', self.text())
+        self.assertEqual(self.adds(), ['pm-kit@pm-kit'])
 
     def test_an_add_that_leaves_another_version_is_a_failure(self):
         self.install(run=self.installs(version='0.0.1'))
         self.assertIn('codex: FAILED: codex plugin add exited 0 but the cache holds 0.0.1, not 1.0.0-main.2',
                       self.text())
+        self.assertEqual(self.adds(), ['pm-kit@pm-kit'])
 
     def test_an_add_that_times_out_is_a_line(self):
         def slow(argv, env):
             raise subprocess.TimeoutExpired(argv, pi.INSTALL_TIMEOUT)
         self.install(run=slow)
-        self.assertIn('codex: FAILED: codex plugin add did not finish in %d s' % pi.INSTALL_TIMEOUT, self.text())
+        self.assertIn('codex: FAILED: codex plugin add pm-kit@pm-kit did not finish in %d s' % pi.INSTALL_TIMEOUT,
+                      self.text())
 
     def test_an_add_that_cannot_start_is_a_line(self):
         def gone(argv, env):
             raise OSError('not a valid Win32 application')
         self.install(run=gone)
-        self.assertIn('codex: FAILED: codex plugin add could not start', self.text())
+        self.assertIn('codex: FAILED: codex plugin add pm-kit@pm-kit could not start', self.text())
 
     def test_a_config_that_is_not_toml_is_refused(self):
         write(os.path.join(self.home, 'config.toml'), '[marketplaces\n')
@@ -339,18 +406,21 @@ class StepTest(InstallCase):
         self.step()
         lines = self.lines
         self.assertIn('the pm-kit plugin is the hand-made pm-kit-local copy', lines[0])
-        self.assertEqual(lines[1:5], ['codex:   1. codex plugin remove pm-kit@pm-kit-local',
+        self.assertEqual(lines[1:6], ['codex:   1. codex plugin remove pm-kit@pm-kit-local',
                                       'codex:   2. codex plugin marketplace remove pm-kit-local',
                                       'codex:   3. codex plugin marketplace add "%s"' % self.root,
-                                      'codex:   4. codex plugin add pm-kit@pm-kit'])
-        self.assertEqual(len(lines), 6, lines)              # the old copy is no longer mirrored
+                                      'codex:   4. codex plugin add pm-kit@pm-kit',
+                                      'codex:   5. codex plugin add pm-kit-hooks@pm-kit'])
+        self.assertIn('trust the four pm-kit-hooks hooks it lists (once', lines[6])
+        self.assertEqual(len(lines), 7, lines)              # the old copy is no longer mirrored
 
     def test_no_pm_kit_marketplace_names_the_install_steps(self):
         write(os.path.join(self.home, 'config.toml'), "model = 'x'\n")
         self.step()
         self.assertEqual(self.lines, ['codex: config.toml names no pm-kit marketplace; to install the plugin from '
                                       'the export, run, with CODEX_HOME=%s: codex plugin marketplace add "%s", then '
-                                      'codex plugin add pm-kit@pm-kit' % (self.home, self.root)])
+                                      'codex plugin add pm-kit@pm-kit, then codex plugin add pm-kit-hooks@pm-kit'
+                                      % (self.home, self.root)])
 
     def test_a_marked_session_installs_nothing(self):
         codex.Step(environ=dict(self.env, CODEX_HOME=self.home, PM_KIT_ROLE='pm'))(self.export, self.lines.append, True)
@@ -366,7 +436,9 @@ class MarketplaceTest(InstallCase):
         self.assertTrue(pi.marketplace(self.export, self.lines.append, apply=True))
         got = json.loads(read(self.path()))
         self.assertEqual(got, pi.marketplace_body('bbbbbbbbbbbb'))
-        self.assertEqual(got['plugins'][0]['source'], {'source': 'local', 'path': './bbbbbbbbbbbb'})
+        self.assertEqual([(p['name'], p['source']) for p in got['plugins']],
+                         [('pm-kit', {'source': 'local', 'path': './bbbbbbbbbbbb'}),
+                          ('pm-kit-hooks', {'source': 'local', 'path': './bbbbbbbbbbbb/hosts/codex/shell/hooks-plugin'})])
         self.assertEqual(self.lines, ['codex: marketplace %s names ./bbbbbbbbbbbb' % self.path()])
         self.lines[:] = []
         self.assertTrue(pi.marketplace(self.export, self.lines.append, apply=True))   # current: no line
@@ -428,7 +500,7 @@ class RefreshTest(Base):
         self.assertFalse(os.path.isdir(os.path.join(self.k.root, 'b' * 12)), self.lines)
         self.assertIn('host plugin copy names it: aaaaaaaaaaaa', self.text())
         self.assertEqual(calls, [[os.path.realpath(exe), 'plugin', 'add', 'pm-kit@pm-kit']])
-        self.assertIn('codex: FAILED: codex plugin add exited 1: stand-in', self.text())
+        self.assertIn('codex: FAILED: codex plugin add pm-kit@pm-kit exited 1: stand-in', self.text())
         self.assertTrue(os.path.isfile(os.path.join(self.k.root, sha[:12], '.codex-plugin', 'plugin.json')))
 
 

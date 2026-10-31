@@ -57,8 +57,14 @@ PROCWATCH = (STARTS_NOTHING + 'a standalone process report (its own folder alone
              'run from a console or a scheduled task; its one start, Git\'s `ps -l` in '
              'winproc.py, passes CREATE_NO_WINDOW itself')
 
+CODEX_HOOK_STUB = (STARTS_NOTHING + 'the fixed-bytes stub of the Codex hooks plugin pm-kit-hooks: it '
+                   'finds the installed pm-kit beside it in the Codex cache and runs that boot/hook.py '
+                   'in its own interpreter (runpy); its bytes never change with the kit, so it imports '
+                   'nothing of it')
+
 ENTRY_EXEMPT = {
     'boot/hook.py': BOOT_HOOK,
+    'hosts/codex/shell/hooks-plugin/pm_kit_hook.py': CODEX_HOOK_STUB,
     'boot/kitboot.py': BOOT_KITBOOT,
     'kitlib/tooldeps/pool_worker.py': POOL_WORKER,
     'optional/comfy/compare_sheet.py': STARTS_NOTHING + COMFY,

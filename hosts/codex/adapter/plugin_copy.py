@@ -4,7 +4,8 @@ it out (host.py plugin_copy, tools/_host.py plugin_copies); kitlib.pluginsource 
 export folder and never names this host.
 
   Step(home, environ)              the step kitlib.pluginsource.refresh runs: step(export, out, apply);
-                                   an install from the export (plugin_install) when config.toml names
+                                   an install from the export (plugin_install: pm-kit, then the
+                                   hooks plugin pm-kit-hooks) when config.toml names
                                    the marketplace pm-kit; the owner's switch steps when it names only
                                    the old hand-made pm-kit-local copy, which is no longer refreshed
   codex_home(home, environ)        <home>\.codex when --home names one, else CODEX_HOME, else the
@@ -83,5 +84,5 @@ class Step(object):
                 out(line)
             return
         out('codex: config.toml names no pm-kit marketplace; to install the plugin from the export, run, '
-            'with CODEX_HOME=%s: codex plugin marketplace add "%s", then codex plugin add %s'
-            % (self.home, root, plugin_install.KEY))
+            'with CODEX_HOME=%s: codex plugin marketplace add "%s", then codex plugin add %s, then codex '
+            'plugin add %s' % (self.home, root, plugin_install.KEY, plugin_install.HOOKS_KEY))

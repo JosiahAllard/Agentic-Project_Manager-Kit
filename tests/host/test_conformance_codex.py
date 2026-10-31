@@ -57,17 +57,22 @@ class CodexConformance(conformance.HostConformance, bridge_conformance.mixin('co
         return json.loads(stdout)['hookSpecificOutput']['additionalContext']
 
     def hook_scripts(self, manifests):
-        """hooks.json's hooks: every command runs ${PLUGIN_ROOT}/boot/hook.py codex <event>, the
-        kit's one entry, in the export Codex installs."""
+        """The hooks plugin pm-kit-hooks' hooks (hosts/codex/shell/hooks-plugin, not rendered, so not
+        in `manifests`): every command runs ${PLUGIN_ROOT}/pm_kit_hook.py codex <event>, the fixed
+        stub that runs boot/hook.py, the kit's one entry, of the installed pm-kit export
+        (tests/pluginsource/test_codex_hooks.py runs it); so each maps to boot/hook.py itself."""
         from hosts.codex.adapter import content
+        self.assertNotIn(content.HOOKS_REL, manifests, 'the hooks plugin is not rendered')
+        with open(os.path.join(self.KIT_ROOT, *content.HOOKS_REL.split('/')), encoding='utf-8') as f:
+            hooks = json.load(f)['hooks']
         out = []
-        for event, groups in json.loads(manifests[content.HOOKS_REL])['hooks'].items():
+        for event, groups in hooks.items():
             for group in groups:
                 for hook in group['hooks']:
                     words = hook['command'].split(' ')
                     script = words[1].strip('"')
-                    self.assertTrue(script.startswith(PLUGIN_ROOT), script)
-                    out.append((event, SHELL + script[len(PLUGIN_ROOT):], words[2:]))
+                    self.assertEqual(script, PLUGIN_ROOT + content.STUB_ENTRY)
+                    out.append((event, SHELL + conformance.ENTRY, words[2:]))
         return out
 
     def session_host(self):
