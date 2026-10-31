@@ -610,24 +610,25 @@ def at_limit(u):
     return week is not None and (week >= 100 or (week >= 99 and bool(u.get("stale"))))
 
 
-def limit_events(names, records, alive, account_of, readings, fired, now):
+def limit_events(names, records, alive, folders, readings, fired, now):
     """(events, stalled now) of the usage-limit check (docs/pm-watch.md "Usage-limit stall").
 
-    records and alive as rc_events; a record's weekly_stop() gives the epoch time the weekly limit
-    that stopped the session resets, or None; a record without it (a host with no reader) is
-    skipped. account_of(rec) is its account, or None. readings: the Watcher's stored usage, by
-    account. fired: the entries already reported. A watched session with a live process, on an
-    account at_limit, whose stop lies ahead gives LIMIT once; the entry holds the process and the
-    reset, and one that recovers drops out, so only a new stall fires again."""
+    records and alive as rc_events; a record's weekly_stop(folders) gives (the config folder holding
+    the session's transcript, the epoch time the weekly limit that stopped the session resets), or
+    None; a record without it (a host with no reader) is skipped. folders: {config folder: account}
+    (account_folders). readings: the Watcher's stored usage, by account. fired: the entries already
+    reported. A watched session with a live process, on an account at_limit, whose stop lies ahead
+    gives LIMIT once; the entry holds the process and the reset, and one that recovers drops out,
+    so only a new stall fires again."""
     ev, cur = [], []
     newest = _newest_live(names, records, alive)
     for n in sorted(newest):
         r = newest[n]
-        account = account_of(r)
-        if r.get("weekly_stop") is None or not at_limit(readings.get(account) or {}):
+        stop = r["weekly_stop"](list(folders)) if r.get("weekly_stop") else None
+        if stop is None:
             continue
-        reset = r["weekly_stop"]()
-        if reset is None or reset <= now:
+        account, reset = folders.get(stop[0]), stop[1]
+        if reset <= now or not at_limit(readings.get(account) or {}):
             continue
         key = "%s %s" % (rc_key(r), reset)
         cur.append(key)
@@ -638,30 +639,22 @@ def limit_events(names, records, alive, account_of, readings, fired, now):
     return ev, sorted(cur)
 
 
-def _folder_key(p):
-    return os.path.normcase(os.path.realpath(p))
-
-
-def registry_accounts(settings):
-    """{registry folder key: account} of the launcher's accounts. A folder of no account (an org's,
-    or a default folder no account names) has no usage reading, so it gets no LIMIT."""
-    from kitlib.launcher import pipes
-    return {_folder_key(os.path.join(d, pipes.REGISTRY)): n
-            for n in settings.account_numbers() for d in settings.account_dirs(n)}
+def account_folders(settings):
+    """{config folder: account} of the launcher's accounts. The registry folder says nothing of the
+    account (the accounts share one real folder); the transcript's config folder does. An org's
+    folder is left out: it has no usage reading, so a session there gets no LIMIT."""
+    return {d: n for n in settings.account_numbers() for d in settings.account_dirs(n)}
 
 
 def limit_check(names, records, alive, accounts):
     """The LIMIT check for Watcher: check(fired, readings, now) -> (lines, fired), over limit_events.
-    names() the watched names, records() the host's session records, accounts() registry_accounts.
+    names() the watched names, records() the host's session records, accounts() account_folders.
     Those are read only while some account is at_limit, so the check costs nothing otherwise; a
     pass with none clears `fired`."""
     def check(fired, readings, now):
         if not any(at_limit(u) for u in readings.values()):
             return [], []
-        folders = accounts()
-        return limit_events(names(), records(), alive,
-                            lambda r: folders.get(_folder_key(r["registry"])) if r.get("registry") else None,
-                            readings, list(fired or []), now)
+        return limit_events(names(), records(), alive, accounts(), readings, list(fired or []), now)
     return check
 
 
@@ -674,7 +667,7 @@ def rc_check(sessions, reader, dirs=None, ctime=None, rc_pids=None, accounts=Non
     ctime(pid) the process creation time; rc_pids() the running sessions' --remote-control names.
     The imports happen here, when the watcher is built, so a landing cannot mix modules later.
     The check's `limit` attribute is the LIMIT check over the same sessions and records (limit_check;
-    accounts() default: registry_accounts of the launcher settings, read again on each call), which
+    accounts() default: account_folders of the launcher settings, read again on each call), which
     the Watcher picks up, so every builder of the REMOTE check gets LIMIT too."""
     from kitlib import pmstart
     from kitlib.launcher import pipes, settings as launcher_settings, stop
@@ -700,7 +693,7 @@ def rc_check(sessions, reader, dirs=None, ctime=None, rc_pids=None, accounts=Non
     def check(lost):
         return rc_events(names(), reader(dirs()), alive, rc_pids, list(lost or []), time.time())
     check.limit = limit_check(names, lambda: reader(dirs()), alive,
-                              accounts or (lambda: registry_accounts(launcher_settings.load())))
+                              accounts or (lambda: account_folders(launcher_settings.load())))
     return check
 
 

@@ -25,6 +25,7 @@ CONVERSATION = ("user", "assistant")
 # "seven_day" has been seen in a real entry; no real five-hour entry has been, so its value is not
 # known, and any other value, unknown ones too, reads as no stall.
 WEEKLY = "seven_day"
+UNREADABLE = object()               # newest_entry: the file's newest entry could not be told
 
 
 def default_alerts_dir():
@@ -103,15 +104,16 @@ def newest_transcript(name, roots):
 
 def newest_entry(path):
     """The newest conversation entry (CONVERSATION) of a transcript, reading only its last
-    TAIL_BYTES, or None: no such entry there, a file that cannot be read, or a line that does not
-    parse before one is found (one being written says nothing about the session yet)."""
+    TAIL_BYTES. None: the file holds no such entry. UNREADABLE: it cannot be read, a line does not
+    parse before one is found (one being written says nothing about the session yet), or the tail
+    ends before one is found, so a longer line above it can hide the newest entry."""
     try:
         with open(path, "rb") as f:
             size = f.seek(0, os.SEEK_END)
             f.seek(max(0, size - TAIL_BYTES))
             tail = f.read(TAIL_BYTES)
     except OSError:
-        return None
+        return UNREADABLE
     lines = tail.split(b"\n")
     for raw in reversed(lines[1:] if size > TAIL_BYTES else lines):     # the first was cut
         if not raw.strip():
@@ -119,10 +121,10 @@ def newest_entry(path):
         try:
             entry = json.loads(raw)
         except ValueError:
-            return None
+            return UNREADABLE
         if isinstance(entry, dict) and entry.get("type") in CONVERSATION:
             return entry
-    return None
+    return UNREADABLE if size > TAIL_BYTES else None
 
 
 def weekly_reset(entry):
@@ -147,42 +149,56 @@ def _when(entry):
     return stamp if isinstance(stamp, str) else ""
 
 
-def weekly_stop(registry, session_id):
-    """resets_at when the newest thing the session did is a weekly usage-limit error, else None.
-    `registry` is its <config folder>/sessions folder, `session_id` the record's sessionId. A
-    subagent's entries live in its own file under <id>/, not in the main transcript, so a main
-    session waiting on a stalled subagent shows nothing in its own file: the subagent file written
-    last is read too, and the later of the two newest entries (by their ISO timestamp, the same
-    form in both; the main one on a tie) decides. So a subagent's limit entry counts only while
-    neither the main session nor a later-written subagent has done anything since."""
+def weekly_stop(session_id, folders):
+    """(config folder, resets_at) when the newest thing the session did is a weekly usage-limit
+    error, else None. The registry is one folder shared by the accounts but transcripts are per
+    account, so `folders`, the config folders, are searched for <id>.jsonl; the copy written last
+    is the session's (a session moved to another account keeps its id), and its folder says the
+    account. A subagent's entries live in its own file under <id>/, not in the main transcript, so
+    a main session waiting on a stalled subagent shows nothing in its own file: the subagent file
+    written last is read too, and the later of the two newest entries (by their ISO timestamp, the
+    same form in both; the main one on a tie) decides. So a subagent's limit entry counts only
+    while neither the main session nor a later-written subagent has done anything since. Either
+    file UNREADABLE gives None: the other cannot decide alone."""
     if not isinstance(session_id, str) or not session_id:
         return None
-    mains = glob.glob(os.path.join(glob.escape(os.path.dirname(registry)), "projects", "*",
-                                   glob.escape(session_id) + ".jsonl"))
+    mains = []
+    for folder in folders:
+        for p in glob.glob(os.path.join(glob.escape(folder), "projects", "*",
+                                        glob.escape(session_id) + ".jsonl")):
+            try:
+                mains.append((os.path.getmtime(p), folder, p))
+            except OSError:
+                continue
     if not mains:
         return None
+    _, folder, main = max(mains)
     subs = []
-    for p in subagent_transcripts(mains[0]):
+    for p in subagent_transcripts(main):
         try:
             subs.append((os.path.getmtime(p), p))
         except OSError:
             continue
-    found = [e for e in (newest_entry(mains[0]), newest_entry(max(subs)[1]) if subs else None) if e]
-    return weekly_reset(max(found, key=_when)) if found else None
+    entries = [newest_entry(main)] + ([newest_entry(max(subs)[1])] if subs else [])
+    if any(e is UNREADABLE for e in entries):
+        return None
+    found = [e for e in entries if e]
+    reset = weekly_reset(max(found, key=_when)) if found else None
+    return None if reset is None else (folder, reset)
 
 
 def rc_records(dirs):
     """Claude's session registry records (<config folder>/sessions/<pid>.json, read by
     kitlib.launcher.pipes) in the form kitlib.pmwatch.rc_events and limit_events read: {name, pid,
-    proc_start, started_ms, linked, registry, weekly_stop}. linked is None when the record has no
-    bridgeSessionId key, else whether it holds a Remote Control bridge session id. registry is the
-    record's folder. weekly_stop() reads the transcript (weekly_stop), so only when asked."""
+    proc_start, started_ms, linked, weekly_stop}. linked is None when the record has no
+    bridgeSessionId key, else whether it holds a Remote Control bridge session id. weekly_stop(folders)
+    reads the transcript (weekly_stop), so only when asked."""
     from kitlib.launcher import pipes
     return [{"name": rec.get("name"), "pid": rec.get("pid"), "proc_start": pipes.proc_start(rec),
              "started_ms": rec.get("startedAt"),
              "linked": bool(rec["bridgeSessionId"]) if "bridgeSessionId" in rec else None,
-             "registry": d, "weekly_stop": functools.partial(weekly_stop, d, rec.get("sessionId"))}
-            for d, rec in pipes.records(dirs)]
+             "weekly_stop": functools.partial(weekly_stop, rec.get("sessionId"))}
+            for _d, rec in pipes.records(dirs)]
 
 
 def newest_finder(roots=None):

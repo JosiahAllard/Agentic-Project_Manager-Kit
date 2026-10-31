@@ -91,7 +91,7 @@ class Tail(unittest.TestCase):
 
     def test_a_half_written_line_says_nothing_yet(self):
         self.write(MAIN, '{"type":"assis')
-        self.assertIsNone(H.newest_entry(self.path))
+        self.assertIs(H.newest_entry(self.path), H.UNREADABLE)
 
     def test_only_the_tail_is_read(self):
         # a broken line far above the tail would give None if it were read
@@ -100,11 +100,17 @@ class Tail(unittest.TestCase):
 
     def test_a_newest_line_longer_than_the_tail_hides_the_older_entry(self):
         self.write(MAIN, {"type": "user", "pad": "x" * (2 * H.TAIL_BYTES)})
-        self.assertIsNone(H.newest_entry(self.path))
+        self.assertIs(H.newest_entry(self.path), H.UNREADABLE)
 
-    def test_a_missing_or_empty_file_is_none(self):
-        self.assertIsNone(H.newest_entry(self.path))
+    def test_a_tail_of_only_other_records_can_hide_the_newest_entry(self):
+        self.write(MAIN, *[{"type": "last-prompt", "pad": "x" * 1000}] * 80)
+        self.assertIs(H.newest_entry(self.path), H.UNREADABLE)
+
+    def test_a_missing_file_is_unreadable_and_one_with_no_entry_is_none(self):
+        self.assertIs(H.newest_entry(self.path), H.UNREADABLE)
         self.write()
+        self.assertIsNone(H.newest_entry(self.path))
+        self.write({"type": "custom-title", "customTitle": "n"})
         self.assertIsNone(H.newest_entry(self.path))
 
 
@@ -114,8 +120,9 @@ class Layout(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.registry = os.path.join(self.tmp.name, "sessions")
-        self.proj = os.path.join(self.tmp.name, "projects", "P--repo")
+        self.config = self.tmp.name
+        self.registry = os.path.join(self.config, "sessions")
+        self.proj = os.path.join(self.config, "projects", "P--repo")
         self.subs = os.path.join(self.proj, SID, "subagents")
         os.makedirs(self.registry)
         os.makedirs(self.subs)
@@ -134,7 +141,14 @@ class Layout(unittest.TestCase):
         os.utime(path, (self.tick, self.tick))
 
     def stop(self):
-        return H.weekly_stop(self.registry, SID)
+        found = H.weekly_stop(SID, [self.config])
+        return found and found[1]
+
+    def _half_line(self, name):
+        path = os.path.join(self.proj, SID + ".jsonl") if name == "main" \
+            else os.path.join(self.subs, "agent-%s.jsonl" % name)
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
+            f.write('{"type":"assis')
 
     def test_a_main_limit_entry_stalls_the_session(self):
         self.main(work("2026-10-16T09:00:00.000Z"), MAIN)
@@ -178,22 +192,86 @@ class Layout(unittest.TestCase):
         self.assertIsNone(self.stop())
         self.main(MAIN)
         for sid in (None, "", 7):
-            self.assertIsNone(H.weekly_stop(self.registry, sid))
+            self.assertIsNone(H.weekly_stop(sid, [self.config]))
 
-    def test_rc_records_gives_the_folder_and_a_lazy_reader(self):
+    def test_a_half_written_main_line_does_not_let_a_subagent_entry_decide(self):
+        self.main(work("2026-10-23T15:00:00.000Z"))
+        self.sub("a", SUB)
+        self._half_line("main")
+        self.assertIsNone(self.stop())
+
+    def test_an_over_long_main_line_does_not_let_a_subagent_entry_decide(self):
+        self.sub("a", SUB)
+        self.main({"type": "user", "timestamp": "2026-10-23T16:00:00.000Z",
+                   "pad": "x" * (2 * H.TAIL_BYTES)})
+        self.assertIsNone(self.stop())
+
+    def test_a_half_written_subagent_line_does_not_let_a_main_entry_decide(self):
+        self.main(MAIN)
+        self.sub("a", work("2026-10-16T09:00:00.000Z"))
+        self._half_line("a")
+        self.assertIsNone(self.stop())
+
+    def test_rc_records_gives_a_lazy_reader(self):
         self.main(MAIN)
         with open(os.path.join(self.registry, "5.json"), "w", encoding="utf-8") as f:
             json.dump({"pid": 5, "name": "n", "startedAt": 1, "procStart": "9", "sessionId": SID}, f)
         rec = H.rc_records([self.registry])[0]
-        self.assertEqual(rec["registry"], self.registry)
-        self.assertEqual(rec["weekly_stop"](), RESET_MAIN)
+        self.assertEqual(rec["weekly_stop"]([self.config]), (self.config, RESET_MAIN))
 
 
-def rec(name="kit-a1", pid=11, stop=RESET_MAIN, account="1", proc_start="900", started=1000):
-    r = {"name": name, "pid": pid, "proc_start": proc_start, "started_ms": started,
-         "registry": account}
+class SharedRegistry(unittest.TestCase):
+    """As on the machine: every account's sessions folder is one real folder, so a record says
+    nothing of its account; the transcripts sit in each account's own folder."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dirs = {n: os.path.join(self.tmp.name, "account" + n) for n in "12"}
+        self.folders = {d: n for n, d in self.dirs.items()}
+        self.shared = os.path.join(self.tmp.name, "default", "sessions")
+        os.makedirs(self.shared)
+        with open(os.path.join(self.shared, "5.json"), "w", encoding="utf-8") as f:
+            json.dump({"pid": 5, "name": "kit-a1", "startedAt": 1, "procStart": "9",
+                       "sessionId": SID}, f)
+
+    def transcript(self, n, entry, mtime=1_700_000_000):
+        proj = os.path.join(self.dirs[n], "projects", "P--repo")
+        os.makedirs(proj, exist_ok=True)
+        path = os.path.join(proj, SID + ".jsonl")
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(entry) + "\n")
+        os.utime(path, (mtime, mtime))
+
+    def events(self, readings):
+        return W.limit_events({"kit-a1"}, H.rc_records([self.shared]), lambda r: True, self.folders,
+                              readings, [], NOW)
+
+    def test_the_account_is_the_one_holding_the_transcript(self):
+        self.transcript("1", MAIN)
+        ev, _ = self.events({"1": {"week": 100}, "2": {"week": 10}})
+        self.assertEqual(len(ev), 1)
+        self.assertIn(" account 1 ", ev[0])
+
+    def test_the_reading_is_the_transcript_accounts_and_no_other(self):
+        self.transcript("1", MAIN)
+        self.assertEqual(self.events({"1": {"week": 10}, "2": {"week": 100}}), ([], []))
+
+    def test_a_session_moved_to_another_account_goes_by_the_copy_written_last(self):
+        self.transcript("1", MAIN, mtime=1_700_000_000)
+        self.transcript("2", work("2026-10-17T00:00:00.000Z"), mtime=1_700_000_100)
+        self.assertEqual(self.events({"1": {"week": 100}, "2": {"week": 100}}), ([], []))
+
+    def test_a_transcript_in_no_accounts_folder_gets_no_limit(self):
+        self.folders.pop(self.dirs["1"])
+        self.transcript("1", MAIN)
+        self.assertEqual(self.events({"1": {"week": 100}, "2": {"week": 100}}), ([], []))
+
+
+def rec(name="kit-a1", pid=11, stop=RESET_MAIN, folder="/one", proc_start="900", started=1000):
+    r = {"name": name, "pid": pid, "proc_start": proc_start, "started_ms": started}
     if stop is not False:
-        r["weekly_stop"] = lambda: stop
+        r["weekly_stop"] = lambda folders: None if stop is None else (folder, stop)
     return r
 
 
@@ -202,6 +280,7 @@ def live(r):
 
 
 FULL = {"1": {"week": 100, "stale": False}}
+FOLDERS = {"/one": "1", "/two": "2"}
 KEY = "kit-a1 11 900 %d" % RESET_MAIN
 
 
@@ -217,8 +296,7 @@ class AtLimit(unittest.TestCase):
 
 class LimitEvents(unittest.TestCase):
     def events(self, records, readings=FULL, fired=(), now=NOW, names=("kit-a1",)):
-        return W.limit_events(set(names), records, live, lambda r: r["registry"], readings,
-                              list(fired), now)
+        return W.limit_events(set(names), records, live, FOLDERS, readings, list(fired), now)
 
     def test_a_stalled_session_fires_once(self):
         ev, fired = self.events([rec()])
@@ -237,20 +315,16 @@ class LimitEvents(unittest.TestCase):
     def test_a_dead_process_is_no_stall(self):
         self.assertEqual(self.events([rec(pid=99)]), ([], []))
 
-    def test_an_account_under_the_limit_is_no_stall_and_no_transcript_read(self):
-        read = []
-        r = rec()
-        r["weekly_stop"] = lambda: read.append(1)
-        self.assertEqual(self.events([r], readings={"1": {"week": 99, "stale": False}}), ([], []))
-        self.assertEqual(read, [])
+    def test_an_account_under_the_limit_is_no_stall(self):
+        self.assertEqual(self.events([rec()], readings={"1": {"week": 99, "stale": False}}), ([], []))
 
     def test_a_reset_in_the_past_is_no_stall(self):
         self.assertEqual(self.events([rec(stop=NOW - 1)]), ([], []))
         self.assertEqual(self.events([rec(stop=NOW)]), ([], []))
 
     def test_a_session_on_another_account_or_none_is_no_stall(self):
-        self.assertEqual(self.events([rec(account="2")]), ([], []))
-        self.assertEqual(self.events([rec(account=None)]), ([], []))
+        self.assertEqual(self.events([rec(folder="/two")]), ([], []))
+        self.assertEqual(self.events([rec(folder="/org")]), ([], []))
 
     def test_a_record_with_no_reader_or_an_unwatched_name_is_skipped(self):
         self.assertEqual(self.events([rec(stop=False)]), ([], []))
@@ -271,11 +345,11 @@ class Check(unittest.TestCase):
     def check(self, readings, read):
         def records():
             read.append("records")
-            return [rec(account="/reg")]
+            return [rec()]
 
         def accounts():
             read.append("accounts")
-            return {W._folder_key("/reg"): "1"}
+            return FOLDERS
         return W.limit_check(lambda: {"kit-a1"}, records, live, accounts)(["old"], readings, NOW)
 
     def test_nothing_is_read_below_the_limit_and_fired_clears(self):
@@ -290,16 +364,14 @@ class Check(unittest.TestCase):
         self.assertTrue(ev[0].startswith("LIMIT kit-a1 account 1 "), ev)
         self.assertEqual(len(fired), 1)
 
-    def test_registry_accounts_maps_each_folder_of_each_account(self):
+    def test_account_folders_maps_each_folder_of_each_account(self):
         class Settings:
             def account_numbers(self):
                 return ["1", "2"]
 
             def account_dirs(self, n):
                 return {"1": ["/a", "/b"], "2": ["/c"]}[n]
-        got = W.registry_accounts(Settings())
-        self.assertEqual(got[W._folder_key(os.path.join("/b", "sessions"))], "1")
-        self.assertEqual(got[W._folder_key(os.path.join("/c", "sessions"))], "2")
+        self.assertEqual(W.account_folders(Settings()), {"/a": "1", "/b": "1", "/c": "2"})
 
 
 class InWatcher(unittest.TestCase):
@@ -310,12 +382,12 @@ class InWatcher(unittest.TestCase):
         with open(self.sessions, "w", encoding="utf-8") as f:
             json.dump({"k": {"name": "kit-a1"}}, f)
         self.usage = {"1": {"week": 100, "stale": False}}
-        self.records = [dict(rec(account="/reg"), proc_start="5")]
+        self.records = [rec(proc_start="5")]
 
     def watcher(self, **kw):
         rc = W.rc_check(self.sessions, lambda dirs: self.records, dirs=lambda: [],
                         ctime=lambda pid: 5, rc_pids=lambda: {},
-                        accounts=lambda: {W._folder_key("/reg"): "1"})
+                        accounts=lambda: FOLDERS)
         return W.Watcher({}, [], lambda: self.usage, os.path.join(self.tmp.name, "none"),
                          self.sessions, lambda n: NOW, idle_poll=300, rc=rc, **kw)
 
