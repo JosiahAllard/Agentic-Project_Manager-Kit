@@ -11,6 +11,7 @@
   launch.py usage
   launch.py after-reboot [--test] [--dry-run]
   launch.py pm-relaunch --name NEW [--wait SECONDS]
+  launch.py pm-crossover --account N [--name NEW] [--state FILE] [--wait SECONDS] [--what-if]
   launch.py install-autostart [--what-if]   retired: refuses (the hub restarts agents)
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.launcher, prints and exits.
@@ -150,6 +151,15 @@ def parser():
     f.add_argument('--wait', type=int, default=relaunch.WAIT_S,
                    help="seconds to wait for the fork's own session id (default %(default)s)")
 
+    x = sub.add_parser('pm-crossover',
+                       help='start a fresh PM on another account from its hand-off file and make it the PM')
+    x.add_argument('--account', required=True, help='the account the new PM starts on')
+    x.add_argument('--name', help='the new session and Remote Control name (default pm-a<N>)')
+    x.add_argument('--state', type=existing_file, help="the PM's hand-off file the new PM reads first")
+    x.add_argument('--wait', type=int, default=relaunch.WAIT_S,
+                   help="seconds to wait for the new PM's session id (default %(default)s)")
+    x.add_argument('--what-if', action='store_true')
+
     i = sub.add_parser('install-autostart', help='retired: refuses, registers nothing (the hub restarts agents)')
     i.add_argument('--what-if', action='store_true')
     return p
@@ -170,7 +180,7 @@ def session_conflicts(a):
 def push_delivery(settings):
     """The host adapter's hub push delivery over the launcher's settings (tools/hub.py
     _push_delivery), or None when the host has none (no adapter, or an adapter without push):
-    pm-relaunch then says the stand-down is the owner's to send. Any other fault surfaces."""
+    pm-relaunch and pm-crossover then say the stand-down is the owner's to send. Any other fault surfaces."""
     try:
         import _host
         make = getattr(_host.adapter_module().ADAPTER, 'push', None)
@@ -220,6 +230,11 @@ def run(a, settings, host):
         if a.wait < 1:
             raise S.LaunchError('--wait must be at least 1 second.')
         return relaunch.relaunch(settings, host, a.name, push_delivery(settings), a.wait)
+    if a.cmd == 'pm-crossover':
+        if a.wait < 1:
+            raise S.LaunchError('--wait must be at least 1 second.')
+        return relaunch.crossover(settings, host, a.account, a.name, a.state,
+                                  None if a.what_if else push_delivery(settings), a.wait, a.what_if)
     if a.cmd == 'install-autostart':
         return autostart.install(os.path.abspath(__file__), whatif=a.what_if)     # always refuses
     raise AssertionError(a.cmd)

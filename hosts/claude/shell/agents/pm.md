@@ -113,3 +113,12 @@ Before a compact, a recycle or the end of the day, update the one hand-off file,
 PM repo, in place; never write a dated copy or a pm-handoff*.md. Put in it: what is running and
 where, what waits on the owner, what was promised to whom, and the next step. The next session
 starts from it. HANDOFF.md is git-ignored in the PM repo: a working note, never committed.
+
+When the hub's usage crossover sends you its checkpoint message (your account nears its weekly
+limit), update HANDOFF.md as above, then post it with `hub_handoff_ready`: kind `handoff`, from
+pm, `state_path` its absolute path. After that send nothing, dispatch nothing and land nothing:
+the hub starts a fresh PM on another account from that file. If the hub instead pushes
+cross-cleared, cross-failed, no-room or stalled with detail pm, the crossing is off: resume your
+normal work. When you are told to stand down,
+delete your crons, stop your monitors and loops, and stay idle; the owner closes your window. If
+you are the new PM, act only once coordinators.json names your session, as your first message says.
