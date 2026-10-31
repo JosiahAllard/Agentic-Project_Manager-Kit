@@ -306,7 +306,7 @@ class DoorWriteTest(DoorWriteCase):
         self.assertAlmostEqual((start - dt.datetime.now(UTC)).total_seconds(), 3600, delta=60)
         self.assertEqual((hold['scope'], hold['note']), ('half', 'build'))
         # a bare HH:MM is this PC's local time
-        # (tomorrow's offset, not today's: the clocks may change overnight)
+        # (naive, then resolved in the zone: the date's own offset, not today's)
         local = (dt.datetime.now() + dt.timedelta(days=1)).replace(
             hour=14, minute=0, second=0, microsecond=0).astimezone()
         day = local.strftime('%Y-%m-%d')
