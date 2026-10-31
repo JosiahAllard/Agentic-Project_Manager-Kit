@@ -299,9 +299,10 @@ def crossover_prompt(name, account, coordinators_path, state_path=None):
 
 
 def crossover_command(name, prompt):
-    """The new PM's claude command line: a fresh session, no --resume and no --permission-mode."""
-    return ' '.join(['claude', '--agent', S.run_as(PM_AGENT), '--remote-control', window.q(name),
-                     '-n', window.q(name), window.q(prompt)])
+    """The new PM's claude command line: a fresh session, no --resume and no --permission-mode.
+    window.session_command gives a fresh start `--permission-mode auto`; its first occurrence is
+    that flag, ahead of the quoted prompt, so dropping it once leaves the prompt as it is."""
+    return window.session_command(name, prompt, S.run_as(PM_AGENT)).replace(' --permission-mode auto', '', 1)
 
 
 def crossover(settings, host, account, name=None, state_path=None, delivery=None, wait_s=WAIT_S,

@@ -120,7 +120,7 @@ starts from it. HANDOFF.md is git-ignored in the PM repo: a working note, never 
 
 When the hub's usage crossover sends you its checkpoint message (your account nears its weekly
 limit), update HANDOFF.md as above, then post it with `hub_handoff_ready`: kind `handoff`, from
-`pm`, `state_path` its absolute path. After that send nothing, dispatch nothing and land nothing:
+pm, `state_path` its absolute path. After that send nothing, dispatch nothing and land nothing:
 the hub starts a fresh PM on another account from that file. When you are told to stand down,
 delete your crons, stop your monitors and loops, and stay idle; the owner closes your window. If
 you are the new PM, act only once coordinators.json names your session, as your first message says.
