@@ -54,7 +54,8 @@ Before a start, an entry whose name differs from the one noted was moved by some
 A crossing clears on done, abort or failure, with a push; the file then holds no claim. One that
 clears with the session left where it was (ready to stop, its successor gone, its start's entry
 write with no successor, its stop refused, an unknown state) is remembered for its key as
-{account, reset}: the trigger asks it nothing more on that account until that week resets.
+{account, reset}: the trigger asks it nothing more on that account until that week resets. A
+stall on normal is still pushed (`stalled`); on full such a key is neither stopped nor pushed.
 
 Holds, nothing done: the PM session; no entry, stem or state note; several processes of the stem;
 the old process's pid or creation time changed; a stale reading with no stall read; a reset within
@@ -325,6 +326,8 @@ def _trigger(key, entry, live, stall, quiet_s, accounts, starts, running, landed
     reset = stall[1] if stalled else week_reset
     if reset - now < RESET_NEAR_S:
         return _hold('the week resets within %d min' % (RESET_NEAR_S // 60))
+    if stalled and mode not in (FULL, NOTIFY):     # before the cleared hold, which says nothing
+        return _hold('stalled, left to the PM (usage_crossover is not full)', 'stalled', key)
     if _cleared_now(cleared, acct, reset):
         return _hold('its crossing cleared on account %s this week: not asked again before the '
                      'week resets' % acct)
@@ -341,10 +344,8 @@ def _trigger(key, entry, live, stall, quiet_s, accounts, starts, running, landed
     if mode == NOTIFY:
         return Decision(WOULD, note, target, 'would-cross', detail,
                         'would-cross:%s:%s' % (target, 'stall' if stalled else 'week'))
-    if stalled:                 # stopped at the limit: it cannot reply to a checkpoint message
-        if mode == FULL:
-            return Decision(STOP_STALLED, note, target, 'stalled', detail)
-        return _hold('stalled, left to the PM (usage_crossover is not full)', 'stalled', key)
+    if stalled:                 # full (normal held above): it cannot reply to a checkpoint message
+        return Decision(STOP_STALLED, note, target, 'stalled', detail)
     n = len(recent(asks, now))
     if n >= ASK_CAP:
         return _hold('%d asks in %d h for it already' % (n, CAP_WINDOW_S // 3600), 'cross-failed',

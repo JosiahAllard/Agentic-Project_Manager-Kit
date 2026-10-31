@@ -139,9 +139,13 @@ class Trigger(unittest.TestCase):
         self.assertEqual((d.action, d.word), (U.HOLD, None))
         self.assertIn('cleared', d.note)
         d = decide(cleared={'account': '1', 'reset': week_reset}, mode='full', stall=STALL, quiet=600)
-        self.assertEqual(d.action, U.HOLD)
+        self.assertEqual((d.action, d.word), (U.HOLD, None))        # full: not stopped, no push
         self.assertEqual(decide(cleared={'account': '1', 'reset': week_reset - 7 * DAY}).action, U.ASK)
         self.assertEqual(decide(cleared={'account': '3', 'reset': week_reset}).action, U.ASK)
+
+    def test_a_cleared_key_that_stalls_on_normal_is_still_pushed_stalled(self):
+        d = decide(cleared={'account': '1', 'reset': NOW + 2 * DAY}, stall=STALL, quiet=600)
+        self.assertEqual((d.action, d.word, d.detail), (U.HOLD, 'stalled', 'kit'))
 
     def test_asks_have_a_cap_per_key(self):
         d = decide(asks=[NOW - 60, NOW - 120, NOW - 180])
