@@ -41,7 +41,9 @@ _BY_AGENT = {'coordinator': COORDINATOR, 'deep-worker': DEEP_WORKER, 'consultant
 MODEL = re.compile(r'^[A-Za-z0-9._-]+(\[1m\])?$')
 # an agent name, bare or with the kit plugin's prefix (kitlib.agentname); no other colon
 AGENT = re.compile(r'^(?:%s)?[A-Za-z0-9_-]+$' % re.escape(agentname.PREFIX))
-EFFORTS = ('low', 'medium', 'high', 'xhigh', 'max')
+# claude's permission modes (the list optional/bridge/hosts/claude/terminal.py MODES also holds)
+PERMISSION_MODES = ('default', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions')
+EFFORTS =('low', 'medium', 'high', 'xhigh', 'max')
 SHOW_MIN_NO_ACTIVE = 7
 
 USER_ENV = ("foreach ($k in [Environment]::GetEnvironmentVariables('User').Keys) { if (@('Path','TEMP','TMP') "
@@ -82,11 +84,15 @@ def q(text):
 
 
 def session_command(name, prompt, agent=None, model=None, effort=None, autocompact=None, resume=None,
-                    add_dir=None, remote_control=True, fork=False):
-    """`add_dir`: a folder the session's file tools may also use (`--add-dir`; a home worktree's
+                    add_dir=None, remote_control=True, fork=False, permission_mode=None):
+    """`permission_mode` None: today's mode for the session (`auto` for a fresh start, none for a
+    resume); a value from PERMISSION_MODES replaces it (ValueError otherwise). `add_dir`: a folder the session's file tools may also use (`--add-dir`; a home worktree's
     main checkout, docs/launcher.md "The home worktree"). `remote_control` False drops only the
     `--remote-control <name>` pair (a measurement; lookup finds the session by `-n`). `fork` with
     `resume`: `--fork-session`, the resumed conversation under a new session id (pm-relaunch)."""
+    if permission_mode is not None and permission_mode not in PERMISSION_MODES:
+        raise ValueError('unknown permission mode %r (known: %s)'
+                         % (permission_mode, ', '.join(PERMISSION_MODES)))
     parts = ['claude']
     if resume:
         parts += ['--resume', q(resume)]
@@ -101,7 +107,10 @@ def session_command(name, prompt, agent=None, model=None, effort=None, autocompa
         parts += ['--autocompact', str(int(autocompact))]
     if add_dir:
         parts += ['--add-dir', q(add_dir)]
-    parts += ['--permission-mode', 'auto'] if not resume else []
+    if permission_mode is not None:
+        parts += ['--permission-mode', permission_mode]
+    elif not resume:
+        parts += ['--permission-mode', 'auto']
     parts += ['--remote-control', q(name)] if remote_control else []
     parts += ['-n', q(name), q(prompt)]
     return ' '.join(parts)

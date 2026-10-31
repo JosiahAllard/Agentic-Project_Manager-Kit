@@ -14,6 +14,27 @@ class ClaudeCommand(unittest.TestCase):
         self.assertEqual(window.claude_command('n', 'p', remote_control=True),
                          "claude --permission-mode auto --remote-control 'n' -n 'n' 'p'")
 
+    def test_none_keeps_every_session_kind_byte_identical(self):
+        c = window.claude_command
+        self.assertEqual(c('n', 'p', 'a', permission_mode=None),
+                         "claude --agent a --permission-mode auto --remote-control 'n' -n 'n' 'p'")
+        self.assertEqual(c('n', 'p', resume='sid', permission_mode=None),
+                         "claude --resume 'sid' --remote-control 'n' -n 'n' 'p'")
+        self.assertEqual(c('n', 'p', 'a', resume='sid', fork=True),
+                         "claude --resume 'sid' --fork-session --agent a --remote-control 'n' -n 'n' 'p'")
+
+    def test_a_given_mode_replaces_the_default(self):
+        got = window.claude_command('n', "it's", 'a', 'm', 'high', 5, add_dir='d', permission_mode='acceptEdits')
+        self.assertEqual(got, self.DEFAULT.replace('--permission-mode auto', '--permission-mode acceptEdits'))
+        self.assertEqual(got.count('--permission-mode'), 1)
+        self.assertEqual(window.claude_command('n', 'p', resume='sid', permission_mode='default'),
+                         "claude --resume 'sid' --permission-mode default --remote-control 'n' -n 'n' 'p'")
+
+    def test_an_unknown_mode_raises(self):
+        for bad in ('', 'yolo', 'AUTO'):
+            with self.assertRaises(ValueError):
+                window.claude_command('n', 'p', permission_mode=bad)
+
     def test_no_remote_control_drops_only_that_pair(self):
         got = window.claude_command('n', "it's", 'a', 'm', 'high', 5, add_dir='d', remote_control=False)
         self.assertEqual(got, self.DEFAULT.replace(" --remote-control 'n'", ''))
