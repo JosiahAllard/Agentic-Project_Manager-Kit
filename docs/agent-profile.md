@@ -46,10 +46,10 @@ RUN:`, `USAGE:`, `GATE FAILED:`, `RERUN VOID:`) is reported as is, with the doc'
 branch changing a strict path (docs/gate.md "Batch").
 
 ## Review
-A coordinator reviews a branch itself when it is small and low or medium risk: read every hunk; skim
+A coordinator reviews a branch itself when it is small and low risk: read every hunk; skim
 docs and additive content. "Small" is the `.kit.json` key `landing.self_review_max_lines`
 (docs/kit-json.md): `tools/verdict.py add` refuses a coordinator's own review of a larger diff, so a
-larger diff needs an analyst review. Larger or High: a fresh reviewer.
+larger diff needs an analyst review. Larger, Medium or High: a fresh reviewer.
 Continue an agent 2-3 rounds per artefact, then reseed from a short written summary. Reseed a
 strong- or deep-tier coder whose context is above about 150k tokens.
 
