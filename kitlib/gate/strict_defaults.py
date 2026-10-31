@@ -23,7 +23,7 @@ STRICT_DEFAULTS = (
     'tools/gate.py',
     'boot/**',
     'hosts/*/adapter/**',
-    'hosts/*/shell/hooks/**',
+    'hosts/*/shell/hooks/**', 'hosts/*/shell/hooks-plugin/**',
     'hosts/*/shell/agents/**',
     'content/roles/**',
     'content/skills/**',

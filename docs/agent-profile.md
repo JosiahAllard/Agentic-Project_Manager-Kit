@@ -61,7 +61,7 @@ hardcode a temp path.
 ## Risk map
 High: `boot/`, `kitlib/host/hookmain.py`, `kitlib/guard/`, `kitlib/gate/`, `kitlib/lock/`, `kitlib/lockmcp/`,
 `kitlib/hubmcp/`, `kitlib/mcpwire/`, `kitlib/commit/`, `kitlib/records/`, `kitlib/proc/`, `kitlib/git/`,
-`kitlib/backlog/`, `tools/land.py`, `tools/gate.py`, `hosts/*/adapter/`, `hosts/*/shell/hooks/`,
+`kitlib/backlog/`, `tools/land.py`, `tools/gate.py`, `hosts/*/adapter/`, `hosts/*/shell/hooks/`, `hosts/*/shell/hooks-plugin/`,
 `hosts/*/shell/agents/`, `content/roles/`, `content/skills/`. A High change gets a fresh reviewer before landing. Low: docs.
 
 ## Moves and renames
