@@ -75,6 +75,7 @@ NO_STEP_FULL = ('REFUSED: no gate step selected: every step in the "gate".steps 
 NO_CHECKS = ('GATE OK (auto-detected: no stack found, so NO checks ran; give the gate steps with a '
              '"gate" section in .kit.json or tools/gate.json)')
 PROBE_TIMEOUT = 60      # seconds a `requires` probe argv may take
+CANCELLED_WAITING = 'was cancelled by stop while it waited'     # kitlib.lock.run's LockError text
 # A console window the gate's run opened (window_results): False, it warns; True, it fails the
 # gate as a `windows` result. The one switch.
 WINDOWS_FAIL = False
@@ -373,13 +374,16 @@ def _read(path):
         return ''
 
 
-def run_steps(launcher, chosen, gate, ctx, log_dir, say=None, checks=None):
+def run_steps(launcher, chosen, gate, ctx, log_dir, say=None, checks=None, halted=None):
     """[{name, status, reasons, seconds, log}] for `chosen` run in order with `launcher`. status:
     PASS, WARN, SKIP (a requirement missing), FAIL, or NOT RUN (after a failure of a step that
-    does not `continue`)."""
+    does not `continue`). `halted`, asked before each step: once true no other step starts, not
+    even a `continue` one, and the results so far are returned (a stop: gated, kitlib.gate.rerun)."""
     say = say or _quiet
     results, stopped = [], None
     for step in chosen:
+        if halted is not None and halted():
+            break
         log_path = os.path.join(log_dir, step.name + '.log')
         if stopped:
             results.append({'name': step.name, 'status': 'NOT RUN', 'seconds': None, 'log': None,
@@ -540,7 +544,11 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
     `budget_branch`: with `capped`, the branch whose gate budget (kitlib.gate.budget) is asked
     first, before the cap is waited for or anything is booked: `(None, REFUSED Outcome)` when it
     is spent. None: not asked (a detached HEAD). The run is booked with it as book's `branch`,
-    which its history line keeps, so the budget counts the run by its branch, not its slug."""
+    which its history line keeps, so the budget counts the run by its branch, not its slug.
+    A stop of the booked run (kitlib.gate.stop, machine_lock.py stop), whether it comes while the
+    run waits, in a step (Slot.wait ends that step's tree) or after the last one, gives
+    `(None, stopped_outcome)`: no other step starts and the run is released `cancelled`. A held
+    `slot` is the landing's, which keeps its own way of ending."""
     checks, options = {}, {}
     if any(s.check for s in chosen):
         try:
@@ -588,12 +596,15 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
         mine = {'branch': budget_branch} if capped and budget_branch else {}
         slot = lockrun.book(kind, name, slug, **dict(book_kw or {}, gate=True, tree=tree, **mine))
     except LockError as e:
-        return None, lock_refusal(e)
+        return None, book_refusal(e, log_dir, base)
     with slot:
         say(slot.held_text())
         results = run_steps(slot.launcher, chosen, gate or cfg.section('gate'), ctx, log_dir, say,
-                            checks)
+                            checks, halted=slot.stop_asked)
         results += window_results(slot, say, seen)
+        if slot.stop_asked():
+            slot.release(1, 'cancelled')
+            return None, stopped_outcome('gate run %s was stopped' % slot.id, log_dir, base)
         slot.release(0 if verdict(results)[0] and not nothing_ran(results) else 1, 'done')
     return results, None
 
@@ -650,6 +661,27 @@ def lock_refusal(e):
         msg = re.sub(r'^usage:\s*', '', e.message or '')
         return G.Outcome(G.USAGE, ['USAGE: the machine lock: %s (check .kit.json "gate".kind)' % msg])
     return G.Outcome(e.code, ['NOT RUN: the machine lock refused the gate: %s' % e.message])
+
+
+def stopped_outcome(what, log_dir=None, base=None):
+    """A gate a stop ended: `STOPPED: <what>; ...`, exit G.STOPPED, no gate-OK record: nothing was
+    judged, so its result record's verdict is `stopped`, neither a pass nor a fail."""
+    lines = ['STOPPED: %s; no verdict and no gate-OK record' % what]
+    if log_dir:
+        lines.append('logs: %s' % log_dir)
+    return G.Outcome(G.STOPPED, lines, base=base, log_dir=log_dir, record=None,
+                     no_record='the gate was stopped')
+
+
+def book_refusal(e, log_dir=None, base=None):
+    """The Outcome of a LockError from a gate's own booking: lock_refusal's, but a stop of the run
+    while it waited is STOPPED. The lock's code for that is 1, the same as for a command it could
+    not start, so its words tell them apart (CANCELLED_WAITING). A landing's booking stays with
+    lock_refusal."""
+    if CANCELLED_WAITING in (e.message or ''):
+        return stopped_outcome('the gate was stopped while it waited for the machine lock',
+                               log_dir, base)
+    return lock_refusal(e)
 
 
 # ---------------------------------------------------------------- the branch gate

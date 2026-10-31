@@ -35,11 +35,16 @@
   gate.py allow BRANCH --runs N --why TEXT [-C DIR]
       allow BRANCH N gate runs in all, past the branch gate budget (kitlib.gate.budget; a branch
       gate is refused (4) before booking one more): the coordinator's call, never the builder's
+  gate.py stop RUN [-C DIR]
+      end gate run RUN (the r-... id on its held line and in machine_lock.py status): only its
+      own process tree and lock; 0 stopped or already gone, 1 could not end it, 4 refused: not a
+      gate run, another session's, or a landing's, which it never touches (kitlib.gate.stop;
+      docs/gate.md "Stopping a gate"). The gate it stops exits 13 with a `stopped` result record
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.gate, prints and exits.
-Exit codes (kitlib.gate): 0 OK, 1 FAILED, 2 USAGE, 3 STUCK, 4 REFUSED, 5 BUSY; 9 LANDED_UNGATED
-is retired (no landing gives it); a machine lock refusal passes its own code through
-(6, 8, 10, 11, 12); 130 Ctrl+C.
+Exit codes (kitlib.gate): 0 OK, 1 FAILED, 2 USAGE, 3 STUCK, 4 REFUSED, 5 BUSY, 13 STOPPED; 9
+LANDED_UNGATED is retired (no landing gives it); a machine lock refusal passes its own code
+through (6, 8, 10, 11, 12); 130 Ctrl+C.
 """
 import argparse
 import json
@@ -79,6 +84,7 @@ from kitlib.coordstate import log as coordlog                       # noqa: E402
 from kitlib.gate import land as landmod                            # noqa: E402
 from kitlib.gate import budget, caller, measure, outfile, rerun, runner  # noqa: E402
 from kitlib.gate import result as resultmod                       # noqa: E402
+from kitlib.gate import stop as stopmod                            # noqa: E402
 from kitlib.gate import submit as submitmod                        # noqa: E402
 from kitlib.lock import layout as lay                              # noqa: E402
 from kitlib.lock.store import LockError, Store                     # noqa: E402
@@ -288,6 +294,24 @@ def do_allow(argv):
     return G.OK
 
 
+def stop_parser():
+    p = Parser(prog='gate.py stop',
+               description='End one gate run: only its own process tree and lock, never a '
+                           'landing (docs/gate.md "Stopping a gate").')
+    p.add_argument('run', metavar='RUN',
+                   help='the lock run id: the r-... on the gate\'s held line and in '
+                        'machine_lock.py status')
+    p.add_argument('-C', dest='root', default='.',
+                   help='a checkout whose repository\'s landing lock is read too (default: here)')
+    return p
+
+
+def do_stop(argv):
+    a = stop_parser().parse_args(argv)
+    return emit(stopmod.stop_run(a.run, Store(say=say), root=os.path.abspath(a.root),
+                                 actor={'name': 'gate.py stop'}, say=say))
+
+
 def emit(outcome):
     for line in outcome.lines:
         print(line, flush=True)
@@ -361,6 +385,8 @@ def main(argv):
             return do_land(argv[1:])
         if argv[:1] == ['allow']:
             return do_allow(argv[1:])
+        if argv[:1] == ['stop']:
+            return do_stop(argv[1:])
         a = gate_parser().parse_args(argv)
         if a.measure:
             if a.only or a.full or a.rerun or a.plan or a.base:

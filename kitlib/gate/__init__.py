@@ -4,6 +4,7 @@
   detect   with no "gate" section, the steps detected from the checkout (source auto)
   runner   the steps run in a machine-lock slot; the branch gate and the merged-tree gate
   land     one branch landed: landing lock, expected refs, merge, merged gate, push, verify
+  stop     one gate run ended by its lock run id: its own tree and lock, never a landing
   stash    the stash guard: no gate and no landing while the repository's stash stack has an entry
   measure  a proposed kinds table from the lock's run history (never written in place)
 
@@ -23,9 +24,11 @@ REFUSED = 4     # a precondition does not hold (config, checkout, expected refs)
 BUSY = 5        # another landing holds the repository's landing lock
 LANDED_UNGATED = 9  # retired: no landing produces it (it was a landing finished on commits made
                     # on main while its merged gate ran); kept so old result records still read
+STOPPED = 13    # a stop (gate.py stop, machine_lock.py stop) ended the gate before its verdict: no
+                # pass and no gate-OK record. `gate.py stop` itself exits OK, FAILED or REFUSED
 
 NAMES = {OK: 'OK', FAILED: 'FAILED', USAGE: 'USAGE', STUCK: 'STUCK', REFUSED: 'REFUSED',
-         BUSY: 'BUSY', LANDED_UNGATED: 'LANDED_UNGATED'}
+         BUSY: 'BUSY', LANDED_UNGATED: 'LANDED_UNGATED', STOPPED: 'STOPPED'}
 
 
 class Outcome(object):
