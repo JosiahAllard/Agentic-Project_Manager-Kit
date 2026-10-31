@@ -47,7 +47,7 @@ ENG_LINE = ("ENG rulings: an engineering question (API shape, class versus recor
             "classifier, credentials, hooks that guard owner files); Money and accounts (purchases, cloud credit, "
             "game accounts, bans); Priority and pre-empts (one owner entry per change); Go-live and live-client "
             "runs, and removals of owner files; anything the owner flagged for review (eng_review).")
-# When a coordinator prices a record (hosts/claude/shell/agents/coordinator.md, On start step 6 and Work sets,
+# When a coordinator prices a record (hosts/claude/shell/agents/coordinator.md, On start step 6 and Slots,
 # Follow-ups): the start-up pricing pass leaves follow-up records unpriced.
 # Emitted only when coordinator_start.pricing_pass is true.
 PRICING_LINE = ("Pricing pass and backlog audit before your first dispatch, follow-up records excepted: run "
@@ -56,10 +56,10 @@ PRICING_LINE = ("Pricing pass and backlog audit before your first dispatch, foll
                 "you or the PM promote it. Check "
                 "every other unpriced open record (an owner story, a record from the PM's brief) for duplicates, "
                 "size and fit, then price it 2-5 (`set <ID> --priority <n> "
-                "--priority-by agent`). Promote a follow-up at any time it enters a work set: price it 2-5; "
-                "price before pull. When `next --all` lists fewer startable records than the set needs, pick the "
-                "follow-ups worth doing now, check each for duplicates, size and fit, and price only those going "
-                "into this set; never a sweep. `next` never offers an unpriced record; its banner counts it "
+                "--priority-by agent`). Promote a follow-up at any time: price it 2-5; "
+                "price before pull. When `next --all` lists fewer startable records than you have free slots, pick the "
+                "follow-ups worth doing now, check each for duplicates, size and fit, and price only those you "
+                "pull now; never a sweep. `next` never offers an unpriced record; its banner counts it "
                 "under `unprioritised+open`, not under `held` (`held` = blocked). "
                 "A record that needs the owner (priority 1, a pre-emption, an owner-held area, a question only "
                 "the owner can answer) goes to the PM as one question; never ask the owner directly.")
@@ -278,7 +278,7 @@ def others(entry, procs, env, pid):
     names = sorted({n for _, n in cand if n != me})
     if not names:
         return []
-    return ["also running: %s; if one is your winding-down predecessor that is expected, "
+    return ["also running: %s; if one is your predecessor handing off that is expected, "
             "otherwise stop and tell the PM" % ", ".join(names)]
 
 
